@@ -49,6 +49,8 @@
 - [任务调度与代码集成](docs/design/task-orchestration.md)：实现协议适配、MCP 和开发闭环时使用。
 - [实施路线与验收标准](docs/design/validation-roadmap.md)：按阶段验证与推进。
 
+文件与账号的存放规则、当前运行目录整理见 [存储目录说明](docs/storage-layout.md)。
+
 ## 目录说明
 
 ```text
