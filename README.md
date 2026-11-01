@@ -22,6 +22,10 @@
 
 [安装、运行与当前限制](docs/development.md) · [主会话调度约定](docs/codex-workflow.md) · [上下文输出策略](docs/context-policy.md) · [首版实测记录](docs/validation/2026-11-01.md) · [恢复与上下文验证](docs/validation/2026-11-01-recovery-context.md) · [续跑验证（136 项测试）](docs/validation/2026-11-01-busy-continuation.md) · `npm run typecheck` · `npm test`
 
+## 可视化设计
+
+推荐采用 VS Code 原生侧栏与编辑区详情面板，继续连接独立 daemon。当前交付为 [可点击交互原型与方案](docs/ui/README.md)，所有数据均为演示，尚未实现或安装扩展。
+
 ## 阅读入口
 
 - [方案总览](docs/design/README.md)：先了解目标与架构。
