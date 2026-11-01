@@ -1,0 +1,17 @@
+{
+  "source": "Installed official ZCode Server 3.16.3, isolated worker, unregistered project createSession",
+  "capturedAt": "2026-11-01",
+  "messages": [
+    {
+      "direction": "receive",
+      "header": [
+        202,
+        4
+      ],
+      "body": {
+        "name": "Error",
+        "message": "project.remote-project-required"
+      }
+    }
+  ]
+}

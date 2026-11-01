@@ -1,0 +1,69 @@
+{
+  "interactionId": "<approval-id>",
+  "kind": "permission",
+  "anchorRowId": 12,
+  "createdAt": 0,
+  "payload": {
+    "kind": "permission",
+    "toolCallId": "<tool-call-id>",
+    "toolName": "Edit",
+    "summary": "Tool has side effects and requires approval",
+    "detail": {
+      "file_path": "<workspace>/arithmetic.mjs",
+      "old_string": "export function add(a, b) { return a - b; }",
+      "new_string": "export function add(a, b) { return a + b; }",
+      "replace_all": false
+    },
+    "freeText": true,
+    "fullAccessOption": {
+      "optionId": "fullAccess",
+      "label": "Full access",
+      "kind": "custom",
+      "response": {
+        "decision": "deny",
+        "reason": "Full access requires V4 approval"
+      }
+    },
+    "options": [
+      {
+        "optionId": "allowOnce",
+        "label": "Allow once",
+        "kind": "allowOnce",
+        "response": {
+          "decision": "allow",
+          "reason": "Approved once"
+        }
+      },
+      {
+        "optionId": "allowAlways",
+        "label": "Always allow in this project",
+        "kind": "allowAlways",
+        "response": {
+          "decision": "allow",
+          "reason": "Approved for this project",
+          "permissionUpdates": [
+            {
+              "type": "addRules",
+              "behavior": "allow",
+              "rules": [
+                {
+                  "toolName": "Edit",
+                  "ruleContent": "<workspace>/arithmetic.mjs"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "optionId": "deny",
+        "label": "Deny",
+        "kind": "deny",
+        "response": {
+          "decision": "deny",
+          "reason": "The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file). STOP what you are doing and wait for the user to tell you how to proceed."
+        }
+      }
+    ]
+  }
+}

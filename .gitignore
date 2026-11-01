@@ -1,0 +1,27 @@
+# Local account exports and credentials
+/data/accounts/
+
+# Local runtime artifacts and worktrees
+/runtime/
+/.worktrees/
+
+# Node dependencies and build output
+/node_modules/
+/dist/
+/coverage/
+
+# Independent reference checkout (not a runtime dependency)
+/references/
+
+# Local historical conversation archive
+/docs/research/
+
+# Local environment secrets
+.env
+.env.*
+!.env.example
+
+# Editor and OS temporary files
+*.swp
+*.swo
+.DS_Store

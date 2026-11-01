@@ -1,0 +1,15 @@
+{
+  "source": "Installed official ZCode Server 3.16.3 preparation error; no model request",
+  "error": {
+    "code": "invalid_model_request",
+    "message": "Reasoning level is required for account:zai-start-plan/GLM-5.3-Flash",
+    "recoverable": true,
+    "at": 0,
+    "source": "runtime",
+    "detail": "Model creation failed",
+    "underlyingErrorMessage": "Reasoning level is required for account:zai-start-plan/GLM-5.3-Flash",
+    "attribution": {
+      "highspeedCardId": null
+    }
+  }
+}

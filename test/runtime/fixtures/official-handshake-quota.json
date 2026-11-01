@@ -1,0 +1,175 @@
+{
+  "source": "Installed official ZCode Server 3.16.3, isolated worker, remote /ws",
+  "capturedAt": "2026-11-01",
+  "messages": [
+    {
+      "direction": "receive",
+      "header": [
+        200
+      ]
+    },
+    {
+      "direction": "send",
+      "header": [
+        100,
+        0,
+        "zcode-agent",
+        "helloConversationV4"
+      ],
+      "body": []
+    },
+    {
+      "direction": "receive",
+      "header": [
+        201,
+        0
+      ],
+      "body": {
+        "kind": "hello",
+        "protocolVersion": 3,
+        "connectionId": "<connection-id>",
+        "clientMode": "web-remote-replayable",
+        "deliveryProfile": "replayable",
+        "serverTime": 0,
+        "capabilities": {
+          "nativeDialogs": false,
+          "localTerminal": false,
+          "binaryFrames": false,
+          "compression": "none",
+          "workspaceHookReview": true,
+          "independentPlanState": true,
+          "workflowRunDeltas": true,
+          "historyFirst": true
+        },
+        "auth": {}
+      }
+    },
+    {
+      "direction": "send",
+      "header": [
+        100,
+        1,
+        "zcode-agent",
+        "initializeConversationV4"
+      ],
+      "body": [
+        {
+          "kind": "clientHello",
+          "protocolVersion": 3,
+          "clientId": "<client-id>",
+          "clientKind": "web",
+          "appVersion": "zcode-pool/0.1.0",
+          "capabilities": {
+            "workspaceHookReviewUi": false
+          }
+        }
+      ]
+    },
+    {
+      "direction": "receive",
+      "header": [
+        201,
+        1
+      ]
+    },
+    {
+      "direction": "send",
+      "header": [
+        100,
+        2,
+        "usage-stats",
+        "getEntitlementSnapshot"
+      ],
+      "body": [
+        {
+          "preferredProviderId": "account:zai-start-plan",
+          "accountAccess": {
+            "type": "zhipu-account",
+            "accountType": "zai",
+            "mode": "start-plan"
+          },
+          "requirePreferredProvider": true,
+          "allowEnvApiKey": false,
+          "invalidateBalanceCache": true
+        }
+      ]
+    },
+    {
+      "direction": "receive",
+      "header": [
+        201,
+        2
+      ],
+      "body": {
+        "generatedAt": 1793520610261,
+        "authenticated": true,
+        "context": {
+          "scope": "personal"
+        },
+        "provider": {
+          "id": "account:zai-start-plan",
+          "name": "Z.ai - Coding Plan"
+        },
+        "serverTime": 0,
+        "remaining": {
+          "count": 500000000,
+          "isShow": true,
+          "percentage": 1,
+          "nextResetTime": 1793581200000
+        },
+        "subscription": {
+          "identityType": "unknown",
+          "identityMasked": null,
+          "details": [
+            {
+              "productId": "zcode-v3-start-plan-1030-wk",
+              "productName": "ZCODE WEEKEND BUILD",
+              "purchaseTime": null,
+              "beginTime": "2026-10-30T14:53:47.000Z",
+              "billingCycle": "one_time",
+              "renewTime": null,
+              "expireTime": "2026-11-02T01:00:00.000Z",
+              "entitlements": [
+                {
+                  "entitlementId": "ent-zcode-v3-start-plan-1030-wk-1",
+                  "showName": "GLM-5.3-Flash",
+                  "effectiveTime": "2026-10-30T15:00:00.000Z"
+                }
+              ]
+            }
+          ]
+        },
+        "quota": {
+          "level": "Start",
+          "limits": [
+            {
+              "bucketId": "<bucket-id>",
+              "userPlanId": "<user-plan-id>",
+              "periodStart": 1793372027000,
+              "periodEnd": 1793581200000,
+              "period": "one_time",
+              "meter": "model_usage",
+              "unitType": "token",
+              "type": "ent-zcode-v3-start-plan-1030-wk-1",
+              "planId": "zcode-v3-start-plan-1030-wk",
+              "unit": 500000000,
+              "number": 500000000,
+              "usage": 0,
+              "currentValue": 0,
+              "remaining": 500000000,
+              "percentage": 1,
+              "nextResetTime": 1793581200000,
+              "usageDetails": [
+                {
+                  "modelCode": "glm-5.3-flash",
+                  "displayName": "GLM-5.3-Flash",
+                  "usage": 0
+                }
+              ]
+            }
+          ]
+        }
+      }
+    }
+  ]
+}
