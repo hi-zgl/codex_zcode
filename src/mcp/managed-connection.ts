@@ -9,14 +9,16 @@ export function createManagedDaemonCall(options:{env?:NodeJS.ProcessEnv;call?:ty
   const starts=new Map<string,Promise<void>>();
   return async(method:string,params:Record<string,unknown>):Promise<unknown>=>{
     const root=await connectionPoolRoot(env);
-    try{return await call(method,params,{root});}catch(error){
-      const code=(error as NodeJS.ErrnoException).code;
+    // Reads and task controls never resurrect a deliberately stopped pool.
+    if(method!=='daemon_start')return call(method,params,{root});
+    try{await call('overview',{}, {root});return {ready:true};}catch(error){
+      if(!['ENOENT','ECONNREFUSED'].includes((error as NodeJS.ErrnoException).code??''))throw error;
       const cli=env.ZCODE_POOL_RUNTIME_CLI_PATH;
-      if(!['ENOENT','ECONNREFUSED'].includes(code??'')||!cli||!isAbsolute(cli)||cli.includes('\0'))throw error;
+      if(!cli||!isAbsolute(cli)||cli.includes('\0'))throw error;
       let pending=starts.get(root);
       if(!pending){pending=(options.start??startInstalled)(root,cli).finally(()=>starts.delete(root));starts.set(root,pending);}
       await pending;
-      return call(method,params,{root});
+      await call('overview',{}, {root});return {ready:true};
     }
   };
 }

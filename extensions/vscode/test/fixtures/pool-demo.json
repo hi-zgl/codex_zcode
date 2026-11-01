@@ -61,6 +61,9 @@
       },
       "poolPolicy": {
         "version": 1
+      },
+      "poolLifecycle": {
+        "version": 1
       }
     },
     "limits": {

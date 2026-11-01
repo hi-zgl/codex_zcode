@@ -11,7 +11,9 @@ let coordinator:Coordinator|undefined;
 const rpc=await serveRpc(root,async(method,params)=>{
  if(method==='daemon_stop') {setTimeout(()=>{void shutdown();},100);return {stopping:true,workersStopped:false};}
  if(!coordinator) throw new Error('Daemon is initializing');
- return coordinator.call(method,params);
+ const result=await coordinator.call(method,params);
+ if(method==='shutdown_pool')setTimeout(()=>{void shutdown();},100);
+ return result;
 });
 const store=new DurableTaskStore(join(root,'scheduler','state.db'));
 store.recoverInterruptedTasks();

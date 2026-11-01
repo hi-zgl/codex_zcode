@@ -37,3 +37,5 @@ From the repository root, run `npm --prefix extensions/vscode ci` and `npm --pre
 Use `test:unit`, `test:integration`, `test:smoke` and `test:browser` for the separate checks. Electron smoke requires a desktop/Xvfb session and downloads official VS Code test binaries. `package:vsix` builds the bundle; `package:check` inspects the allowlisted archive. These default tests send no real model request.
 
 `test:real-model` is a separate opt-in acceptance runner and skips before any connection unless `ZCODE_POOL_RUN_REAL_MODEL=1`. An enabled run also requires explicit `--pool-home`, `--worker-id`, `--workspace-id`, `--prompt-file`, `--verify-commands-file`, `--model-id`, `--mode`, `--session`, `--busy-retry-limit` and a new `--receipt-file` path. The verification file is a JSON array of `{command,args,timeoutMs}` objects. It dispatches once and observes the original task; approvals remain a manual UI action. It never automatically approves, probes, resumes, cancels or retries. Default build, F5, smoke and CI paths do not enable it.
+
+日常收工可用“收工：停止实例与后台”，有任务占用时拒绝，数据保留。“断开面板”仅停止观察。MCP 通过 `zcode_daemon_start` 明确启动，通过 `zcode_shutdown_pool` 收工；查询不会重启后台。旧后台需在空闲时升级后提供收工能力。

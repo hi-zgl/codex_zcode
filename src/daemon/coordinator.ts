@@ -131,6 +131,7 @@ export class Coordinator {
  private readonly approvalRefreshes = new Map<string,Promise<void>>();
  private readonly approvalOperations = new Map<string,Promise<unknown>>();
  private closing = false;
+ private finishing = false;
  private workerChanges: Promise<unknown> = Promise.resolve();
  readonly ui: UiService;
  constructor(readonly root: string, readonly store: DurableTaskStore) {
@@ -183,18 +184,35 @@ export class Coordinator {
   this.approvalOperations.set(taskId,operation);return operation;
  }
  async call(method: string, input: Record<string,unknown>): Promise<unknown> {
+  if(this.finishing)throw new Error('Pool shutdown in progress');
   if(method.startsWith('ui_')){if(this.closing)throw new UiRpcError('NATIVE_UNAVAILABLE');return this.ui.call(method,input);}
   const {name,params:p} = validateMethod(method,input);
   if (this.closing) throw new Error('Daemon is shutting down');
+  if(name==='shutdown_pool')return this.finishWork();
   if (name === 'respond_approval') {
    return this.serialApproval(p.task_id,()=>this.handle(name,p));
   }
   if (name === 'start_worker' || name === 'stop_worker' || name === 'dispatch_task') {
-   const operation = this.workerChanges.then(() => this.handle(name,p));
+   const operation = this.workerChanges.then(() => {if(this.finishing||this.closing)throw new Error('Pool shutdown in progress');return this.handle(name,p);});
    this.workerChanges = operation.catch(() => {});
    return operation;
   }
   return this.handle(name,p);
+ }
+ private async finishWork():Promise<{stopping:true;workersStopped:true;stoppedWorkers:number}>{
+  this.finishing=true;
+  try{
+   await this.workerChanges;
+   if(this.store.listTasks().some(task=>task.leaseHeld))throw new Error('Pool has active or uncertain tasks; finish or reconcile before shutdown');
+   // No new dispatch/start is admitted while the Worker list is being stopped.
+   let stoppedWorkers=0;
+   for(const worker of await this.supervisor.list()){
+    if(worker.state==='stopped')continue;
+    try{const result=await this.supervisor.stop(worker.workerId);if(!result.stopped)throw new Error();stoppedWorkers++;}
+    catch{throw new Error('Pool shutdown incomplete; inspect Workers before retrying');}
+   }
+   return {stopping:true,workersStopped:true,stoppedWorkers};
+  }catch(error){this.finishing=false;throw error;}
  }
  private async handle(name: MethodName, p: any): Promise<unknown> {
   switch (name) {

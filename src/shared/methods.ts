@@ -5,6 +5,8 @@ const id = z.string().min(1).max(150);
 const poolLimit = z.number().int().min(0).max(MAX_POOL_CONCURRENT_TASKS).nullable();
 export const poolPolicySchema = z.object({maxConcurrentTasks:poolLimit,occupiedSlots:z.number().int().nonnegative().safe(),availableSlots:z.number().int().nonnegative().safe().nullable()});
 export const methods = {
+  daemon_start: {description:'Explicitly start the selected pool daemon without starting Workers. Status reads never start a stopped daemon.',schema:z.object({})},
+  shutdown_pool: {description:'Finish work: refuse if any task still holds a lease, stop Workers, then shut down the daemon. Keeps accounts and task data; never cancels tasks.',schema:z.object({})},
   daemon_stop: {description:'Stop this daemon gracefully without stopping official workers.',schema:z.object({})},
   overview: {description:'List local account aliases, worker states and compact task summaries.', schema:z.object({})},
   get_pool_policy: {description:'Read the persisted pool concurrency policy and held task slots. Occupancy includes approvals, verification and uncertain execution.',schema:z.object({}).strict()},

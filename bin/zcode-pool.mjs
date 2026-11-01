@@ -11,7 +11,7 @@ if (Number(process.versions.node.split('.')[0]) < 24) {
     '--import', import.meta.resolve('tsx'),
     fileURLToPath(new URL('../src/cli/main.ts', import.meta.url)),
     ...process.argv.slice(2),
-  ], { stdio: 'inherit', env: process.env });
+  ], { stdio: 'inherit', env: { ...process.env, ZCODE_POOL_RUNTIME_CLI_PATH: fileURLToPath(import.meta.url) } });
   const signals = ['SIGINT', 'SIGTERM', 'SIGHUP'];
   const forward = new Map(signals.map(signal => [signal, () => child.kill(signal)]));
   for (const [signal, handler] of forward) process.on(signal, handler);

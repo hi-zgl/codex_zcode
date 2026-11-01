@@ -185,6 +185,10 @@
         "title": "连接 Codex / 生成 MCP 配置",
         "category": "ZCode Pool",
         "icon": "$(plug)"
+      },
+      {
+        "command": "zcodePool.shutdownPool",
+        "title": "ZCode Pool: 收工（停止空闲实例与后台）"
       }
     ],
     "menus": {

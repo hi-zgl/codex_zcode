@@ -7,7 +7,7 @@ export const MCP_COMPACT_TARGET_BYTES = 6 * 1024;
 const MAX_CONTROL_BYTES = 2048;
 
 export const MCP_PRESENTED_METHODS = new Set([
-  'overview', 'get_pool_policy', 'set_pool_policy', 'start_worker', 'stop_worker', 'probe_worker', 'create_workspace',
+  'daemon_start', 'shutdown_pool', 'overview', 'get_pool_policy', 'set_pool_policy', 'start_worker', 'stop_worker', 'probe_worker', 'create_workspace',
   'dispatch_task', 'wait', 'get_result', 'get_logs', 'get_diff',
   'reconcile_task', 'resume_task', 'cancel_task', 'respond_approval',
 ]);
@@ -391,6 +391,8 @@ function diff(value: unknown, args: Row): Row {
 function project(method: string, value: unknown, args: Row): Row {
   const source = object(value);
   switch (method) {
+    case 'daemon_start': return {ready:source.ready===true};
+    case 'shutdown_pool': return {stopping:source.stopping===true,workersStopped:source.workersStopped===true,stoppedWorkers:integer(source.stoppedWorkers)};
     case 'overview': return overview(value);
     case 'get_pool_policy': case 'set_pool_policy': return poolPolicy(value);
     case 'probe_worker': return probe(value);
@@ -481,12 +483,13 @@ function safeReturnedControls(value: unknown): Row {
 }
 
 export type McpErrorKind = 'INVALID_ARGUMENT' | 'UNSUPPORTED_METHOD' | 'DAEMON_UNAVAILABLE' | 'REQUEST_FAILED' | 'PRESENTATION_FAILED'
-  | 'WORKSPACE_BUSY' | 'WORKER_BUSY' | 'POOL_CAPACITY_REACHED' | 'REQUEST_CONFLICT' | 'NOT_FOUND' | 'WORKER_UNAVAILABLE' | 'APPROVAL_UNAVAILABLE'
+  | 'SHUTDOWN_INCOMPLETE' | 'WORKSPACE_BUSY' | 'WORKER_BUSY' | 'POOL_CAPACITY_REACHED' | 'REQUEST_CONFLICT' | 'NOT_FOUND' | 'WORKER_UNAVAILABLE' | 'APPROVAL_UNAVAILABLE'
   | 'RECOVERY_REQUIRED' | 'MODEL_BUSY' | 'RATE_LIMITED' | 'AUTH_INVALID' | 'RISK_BLOCKED' | 'NATIVE_SERVER_ERROR' | 'MODEL_SELECTION_MISMATCH';
 const ERROR_MESSAGES: Record<McpErrorKind, string> = {
   INVALID_ARGUMENT: 'Invalid tool parameters. Check the tool input schema and retry.',
   UNSUPPORTED_METHOD: 'This tool has no supported safe MCP view; no daemon request was made.',
-  DAEMON_UNAVAILABLE: 'The local daemon is unavailable. Start it through the local CLI and inspect task state before retrying a mutation.',
+  SHUTDOWN_INCOMPLETE: 'Some Workers may have stopped. The daemon remains available; inspect remaining Workers. No force-stop was requested.',
+  DAEMON_UNAVAILABLE: 'The local daemon is unavailable. Explicitly use daemon_start (or the local CLI) before inspecting task state. Reads never restart it.',
   REQUEST_FAILED: 'The daemon request failed. Inspect local state; a timeout or connection loss does not prove that a task stopped.',
   PRESENTATION_FAILED: 'The daemon replied but its safe view could not be produced. Inspect local state before repeating a mutation.',
   WORKSPACE_BUSY: 'The workspace is held by an active or uncertain task. Inspect overview and wait/reconcile that task before dispatching.',
@@ -513,6 +516,9 @@ export function classifyMcpError(value: unknown): McpErrorKind {
   const message = value instanceof Error ? value.message.slice(0, 1024)
     : typeof source.message === 'string' ? source.message.slice(0, 1024)
     : typeof source.error === 'string' ? source.error.slice(0, 1024) : '';
+  if (/^Pool has active or uncertain tasks/.test(message)) return 'WORKER_BUSY';
+  if (/^Pool shutdown incomplete;/.test(message)) return 'SHUTDOWN_INCOMPLETE';
+  if (/^Pool shutdown in progress/.test(message)) return 'RECOVERY_REQUIRED';
   if (code === 'ENOENT' || code === 'ECONNREFUSED') return 'DAEMON_UNAVAILABLE';
   if (code === 'WORKSPACE_BUSY' || /^Workspace is held by task |^Cannot change workspace lifecycle while a task/.test(message)) return 'WORKSPACE_BUSY';
   if (code === 'WORKER_BUSY' || /^Worker .+ is held by task |^Worker has an active or uncertain task|^Account is already (?:assigned|bound)|^Worker or account startup is already in progress/.test(message)) return 'WORKER_BUSY';

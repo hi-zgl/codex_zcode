@@ -106,7 +106,7 @@ function renderConnection(ctx: RenderContext, snapshot: UiSnapshot): HTMLElement
   const indicator = el('span', `connection-indicator ${connection.state === 'connected' ? 'online' : ''}`); indicator.setAttribute('aria-hidden', 'true');
   const scope = el('div', 'execution-context', el('div', 'connection-status', indicator, el('strong', '', connection.supported === false ? '不受支持' : connection.stale && connection.state !== 'disconnected' ? '连接状态待确认' : names[connection.state]), !connection.trusted && badge('受限模式', 'attention')), el('span', 'host-label', `运行环境：${connection.host}`), el('code', 'pool-path', connection.poolHome));
   const actions = el('div', 'inline-actions');
-  if (['connected', 'legacy-readonly'].includes(connection.state) || (connection.state === 'error' && snapshot.tasks.length)) actions.append(button(ctx, '刷新', 'refresh', {}, { busy: ctx.state.pending.has('refresh') }), button(ctx, '断开连接', 'disconnect'));
+  if (['connected', 'legacy-readonly'].includes(connection.state) || (connection.state === 'error' && snapshot.tasks.length)) actions.append(button(ctx, '刷新', 'refresh', {}, { busy: ctx.state.pending.has('refresh') }), button(ctx, '断开面板', 'disconnect'), actionWithReason(ctx, '收工：停止实例与后台', 'pool.shutdown', {}, mutationReason(snapshot, 'poolLifecycle'), false));
   else actions.append(button(ctx, connection.state === 'error' ? '重新连接' : '连接', 'connect', {}, { primary: true, busy: connectionBusy(ctx, snapshot), reason: connectReason(snapshot) }));
   const node = el('section', 'connection-banner', scope, el('div', 'connection-trailing', el('span', 'sync-time', connection.stale ? `缓存 · 最后同步 ${date(connection.lastReceivedAtMs)}` : connection.lastReceivedAtMs ? `同步于 ${date(connection.lastReceivedAtMs)}` : '尚未同步'), actions));
   if (connection.stale && connection.state !== 'disconnected') actions.prepend(button(ctx, '重新连接', 'connect', {}, { busy: ctx.state.pending.has('connect') }));
@@ -114,6 +114,7 @@ function renderConnection(ctx: RenderContext, snapshot: UiSnapshot): HTMLElement
   if (connection.error) node.append(notice(`${connection.error.code} · ${connection.error.message}`, 'warning'));
   else if (connectReason(snapshot)) node.append(notice(connectReason(snapshot)!, 'warning'));
   if (connection.state === 'legacy-readonly') node.append(notice('当前后台服务版本仅支持查看，暂不能审批、提交任务或管理资源。', 'warning'));
+  const shutdownMessage=messageFor(ctx,'pool.shutdown');if(shutdownMessage)node.append(shutdownMessage);
   return node;
 }
 function renderNavigation(ctx: RenderContext): HTMLElement {
@@ -447,6 +448,6 @@ function renderSettings(ctx: RenderContext, snapshot: UiSnapshot): HTMLElement {
     section('并发任务', policy && kv([['当前上限', policy.maxConcurrentTasks === null ? '不限制' : policy.maxConcurrentTasks === 0 ? '0 · 暂停新派发' : policy.maxConcurrentTasks], ['占用槽位', policy.occupiedSlots], ['可用槽位', policy.availableSlots === null ? '不限制' : policy.availableSlots]]),
       field('并发任务上限', concurrency, '0–64；留空不限制。设为 0 暂停新派发，降低上限不会停止已有任务。', ctx.state.validation.settingsConcurrency),
       actionWithReason(ctx, '保存并发上限', 'pool.policy.set', {}, policyReason, true), messageFor(ctx, 'pool.policy.set')),
-    section('后台连接', kv([['运行环境', connection.host], ['连接目录', connection.poolHome], ['连接模式', connection.mode === 'mock' ? '演示（模拟数据）' : '后台服务'], ['工作区信任', connection.trusted ? '已信任' : '受限模式']]), el('div', 'inline-actions', button(ctx, '选择连接目录', 'connection.configure', {}, { busy: ctx.state.pending.has('connection.configure') }), button(ctx, '更多 VS Code 设置', 'settings.open'), button(ctx, '连接帮助', 'guidance.open', { topic: 'connection' })), el('p', 'field-hint', '切换目录后面板需重新连接；Codex 后续调用使用新目录，原目录任务保留。切换远程计算环境请使用 VS Code Remote 窗口。'), messageFor(ctx, 'connection.configure')),
+    section('后台连接', el('p','field-hint','断开面板只停止观察。收工会检查整个池，无任务占用才停止所有执行器与后台；账号和任务数据保留。下次使用需明确启动后台。'), kv([['运行环境', connection.host], ['连接目录', connection.poolHome], ['连接模式', connection.mode === 'mock' ? '演示（模拟数据）' : '后台服务'], ['工作区信任', connection.trusted ? '已信任' : '受限模式']]), el('div', 'inline-actions', button(ctx, '选择连接目录', 'connection.configure', {}, { busy: ctx.state.pending.has('connection.configure') }), button(ctx, '更多 VS Code 设置', 'settings.open'), button(ctx, '连接帮助', 'guidance.open', { topic: 'connection' })), el('p', 'field-hint', '切换目录后面板需重新连接；Codex 后续调用使用新目录，原目录任务保留。切换远程计算环境请使用 VS Code Remote 窗口。'), messageFor(ctx, 'connection.configure')),
     section('自动刷新', field('刷新间隔（秒）', interval, '默认 30 秒，范围 15–300 秒；工作台可见时自动发现新任务。', ctx.state.validation.settingsInterval), actionWithReason(ctx, '保存刷新间隔', 'settings.save', {}, valid ? null : '请输入 15–300 的整数。', true), messageFor(ctx, 'settings.save')), diagnostics);
 }

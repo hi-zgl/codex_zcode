@@ -45,6 +45,8 @@ export class SocketTransport implements Transport {
           const response = z.object({jsonrpc:z.literal('2.0'),id:z.string(),result:z.unknown().optional(),error:z.object({code:z.number(),message:z.string(),data:z.unknown().optional()}).optional()}).parse(JSON.parse(buffer.subarray(0,newline).toString('utf8')));
           if (response.id !== id || (!!response.error === Object.hasOwn(response,'result'))) throw new Error();
           if (response.error) {
+            if(response.error.message==='Pool has active or uncertain tasks; finish or reconcile before shutdown')return finish(new HostError('POOL_BUSY','仍有执行中或状态未确认的任务。请先完成、取消并确认停止，或核对执行状态；本次未停止任何实例。'));
+            if(response.error.message==='Pool shutdown incomplete; inspect Workers before retrying')return finish(new HostError('SHUTDOWN_INCOMPLETE','部分实例可能已停止，后台保留运行。请刷新检查剩余实例；不会强制终止未知执行。',true));
             const parsed = uiErrorDataSchema.safeParse(response.error.data);
             if (parsed.success) return finish(new HostError(parsed.data.kind,fixedMessage(parsed.data.kind),parsed.data.outcome === 'may_have_applied',response.error.code));
             if (response.error.code === -32601 || response.error.code === -32000 && response.error.message === 'Unknown method') return finish(new HostError('METHOD_NOT_FOUND','This daemon does not implement the requested interface.',false,response.error.code));
@@ -79,6 +81,7 @@ const result = z.object({summary:z.string(),changedFiles:z.array(z.string()).opt
 const action = z.object({task:task.optional(),taskId:id.optional(),cancelRequested:z.boolean().optional(),terminationConfirmed:z.boolean().optional(),attached:z.boolean().optional(),alreadyStopped:z.boolean().optional(),requiresInspection:z.boolean().optional(),executionStopped:z.boolean().optional(),operationInProgress:z.boolean().optional(),finalizing:z.boolean().optional(),canResume:z.boolean().optional()});
 const legacy = {
   overview:z.object({tasks:z.array(task),accounts:z.array(account),workers:z.array(worker),workspaces:z.array(workspace),poolPolicy:poolPolicySchema.optional()}),
+  shutdown_pool:z.object({stopping:z.literal(true),workersStopped:z.literal(true),stoppedWorkers:z.number().int().nonnegative()}),
   get_pool_policy:poolPolicySchema,set_pool_policy:poolPolicySchema,
   wait:z.object({tasks:z.array(task),changedTaskIds:z.array(id),timedOut:z.boolean(),revision:z.number().int().nonnegative()}),
   get_result:z.object({task,result}),
@@ -106,7 +109,7 @@ export class TypedClient {
   async legacy<K extends LegacyMethod>(method: K, params: LegacyParams<K>, signal?: AbortSignal): Promise<LegacyResult<K>> {
     const mutation = !['overview','wait','get_result','get_logs','get_diff','get_pool_policy'].includes(method);
     const parsed = methods[method].schema.parse(params);
-    const raw = await this.invoke(method,parsed,signal,method === 'wait' ? 30_000 : 10_000,mutation);
+    const raw = await this.invoke(method,parsed,signal,method === 'shutdown_pool' ? 55_000 : method === 'wait' ? 30_000 : 10_000,mutation);
     const value = legacy[method].safeParse(raw);
     if (!value.success) throw new HostError('INVALID_RESPONSE','The daemon response failed its view schema.',mutation);
     return value.data as LegacyResult<K>;

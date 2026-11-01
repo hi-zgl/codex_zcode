@@ -461,3 +461,13 @@ test('same-store restored filters override Host preference, while M1 uses the de
   assert.ok(filterTasks(legacy, state.filters).every(task => task.workspaceId === 'workspace-unknown'));
   const invalid = createState(); s.preferredRepositoryId = '/arbitrary/unregistered/path'; assert.equal(applySnapshot(invalid, s), false); assert.equal(invalid.filters.project, '');
 });
+
+test('finish-work stays separate from disconnect and accepts the Host generation change',async()=>{
+ const initial=snapshot();const h=harness(initial);h.push();
+ const finish=choose(h.root as unknown as ParentNode,'pool.shutdown');assert.equal(finish.disabled,false);
+ assert.match(h.root.textContent??'',/断开面板/);
+ h.reply(request=>{if(request.type==='pool.shutdown'){const next=structuredClone(initial);next.connection.state='disconnected';next.connection.generation++;h.push(next);return {stopping:true,workersStopped:true,stoppedWorkers:1};}return {};});
+ finish.click();await new Promise(resolve=>setTimeout(resolve,20));
+ assert.equal(h.sent.filter(r=>r.type==='pool.shutdown').length,1);assert.equal(h.sent.some(r=>r.type==='cancel'||r.type==='daemon.start'),false);
+ assert.match(h.root.textContent??'',/实例已停止，后台正在退出/);
+});

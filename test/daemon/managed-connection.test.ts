@@ -168,106 +168,51 @@ test('an unconfigured profile uses only the explicitly supplied legacy pool root
   assert.equal(await managed('overview',{}),poolA);
 });
 
-test('ENOENT and ECONNREFUSED allow one start and one retry of the exact original request',async t=>{
-  for(const code of ['ENOENT','ECONNREFUSED'])await t.test(code,async t=>{
-    const {profile,poolA,cli,env}=await fixture(t);await writeConnectionProfile(profile,poolA);
-    const params={workspace_id:'workspace',worker_id:'worker',request_id:'unchanged-request',prompt:'Fixture only'};
-    const requests:Request[]=[],starts:{root:string;cli:string}[]=[];
-    const managed=createManagedDaemonCall({env,call:injectedCall(request=>{
-      requests.push(request);if(requests.length===1)throw unavailable(code);return {accepted:true};
-    }),start:async(root,entry)=>{starts.push({root,cli:entry});}});
-    assert.deepEqual(await managed('dispatch_task',params),{accepted:true});
-    assert.deepEqual(starts,[{root:poolA,cli}]);assert.equal(requests.length,2);
-    for(const request of requests){assert.equal(request.root,poolA);assert.equal(request.method,'dispatch_task');assert.equal(request.params,params);}
-  });
+test('reads and mutations never start a stopped pool',async t=>{
+ const {profile,poolA,env}=await fixture(t);await writeConnectionProfile(profile,poolA);
+ for(const method of ['overview','dispatch_task','shutdown_pool'])for(const code of ['ENOENT','ECONNREFUSED','ETIMEDOUT']){
+  let calls=0,starts=0;const failure=unavailable(code);
+  const managed=createManagedDaemonCall({env,call:injectedCall(()=>{calls++;throw failure;}),start:async()=>{starts++;}});
+  await assert.rejects(managed(method,{}),error=>error===failure);assert.equal(calls,1);assert.equal(starts,0);
+ }
 });
 
-test('timeouts, lost acknowledgements and every other transport or RPC error are never retried',async t=>{
-  const {profile,poolA,env}=await fixture(t);await writeConnectionProfile(profile,poolA);
-  const failures=[
-    new Error('Daemon RPC timed out; task execution state is unchanged'),
-    new Error('Daemon connection closed before response'),
-    new Error('Malformed daemon response'),
-    unavailable('ETIMEDOUT'),unavailable('ECONNRESET'),unavailable('EPIPE'),unavailable('EACCES'),unavailable('ENOTDIR'),
-    new RpcCallError('Daemon applied the request before the reply was lost',-32000),
-  ];
-  for(const failure of failures){
-    let calls=0,starts=0;
-    const managed=createManagedDaemonCall({env,call:injectedCall(()=>{calls++;throw failure;}),start:async()=>{starts++;}});
-    await assert.rejects(managed('dispatch_task',{request_id:'possibly-applied'}),error=>error===failure);
-    assert.equal(calls,1,failure.message);assert.equal(starts,0,failure.message);
-  }
+test('explicit start is deduplicated and only retries overview after proven connection failure',async t=>{
+ const {profile,poolA,env}=await fixture(t);await writeConnectionProfile(profile,poolA);
+ let ready=false,starts=0,calls=0;const entered=signal(),release=signal();t.after(release.release);
+ const managed=createManagedDaemonCall({env,call:injectedCall(request=>{assert.equal(request.method,'overview');assert.equal(request.root,poolA);calls++;if(!ready)throw unavailable();return {};}),start:async()=>{starts++;entered.release();await release.promise;ready=true;}});
+ const first=managed('daemon_start',{});await entered.promise;const second=managed('daemon_start',{});
+ await new Promise(r=>setTimeout(r,20));release.release();
+ assert.deepEqual(await Promise.all([first,second]),[{ready:true},{ready:true}]);assert.equal(starts,1);assert.equal(calls,4);
+ assert.deepEqual(await managed('daemon_start',{}),{ready:true});assert.equal(starts,1);
 });
 
-test('a missing or invalid runtime CLI disables automatic startup even after a definite connect failure',async t=>{
-  const {profile,poolA,cli,env}=await fixture(t);await writeConnectionProfile(profile,poolA);
-  for(const entry of [undefined,'','relative/cli.mjs',cli+'\0other']){
-    const failure=unavailable();let calls=0,starts=0;
-    const managed=createManagedDaemonCall({env:{...env,ZCODE_POOL_RUNTIME_CLI_PATH:entry},call:injectedCall(()=>{calls++;throw failure;}),start:async()=>{starts++;}});
-    await assert.rejects(managed('overview',{}),error=>error===failure);
-    assert.equal(calls,1);assert.equal(starts,0);
-  }
-});
-
-test('a failed retry is propagated without a second startup or third dispatch',async t=>{
-  const {profile,poolA,env}=await fixture(t);await writeConnectionProfile(profile,poolA);
-  const secondFailure=unavailable('ECONNREFUSED');let calls=0,starts=0;
-  const managed=createManagedDaemonCall({env,call:injectedCall(()=>{calls++;throw calls===1?unavailable():secondFailure;}),start:async()=>{starts++;}});
-  await assert.rejects(managed('dispatch_task',{request_id:'one-retry-only'}),error=>error===secondFailure);
-  assert.equal(calls,2);assert.equal(starts,1);
-});
-
-test('startup failure never dispatches a retry and a later explicit call may start again',async t=>{
-  const {profile,poolA,env}=await fixture(t);await writeConnectionProfile(profile,poolA);
-  const startupFailure=new Error('Fixture startup failed');let calls=0,starts=0;
-  const managed=createManagedDaemonCall({env,call:injectedCall(()=>{calls++;if(calls<=2)throw unavailable();return {accepted:true};}),start:async()=>{starts++;if(starts===1)throw startupFailure;}});
-  await assert.rejects(managed('dispatch_task',{request_id:'not-sent'}),error=>error===startupFailure);
-  assert.equal(calls,1);assert.equal(starts,1);
-  assert.deepEqual(await managed('dispatch_task',{request_id:'not-sent'}),{accepted:true});
-  assert.equal(calls,3);assert.equal(starts,2);
-});
-
-test('concurrent requests to one pool share one in-progress daemon startup', {timeout:5000}, async t=>{
-  const {profile,poolA,cli,env}=await fixture(t);await writeConnectionProfile(profile,poolA);
-  const count=12,attempts=new Map<string,number>(),requests:Request[]=[];
-  const allAttempted=signal(),startEntered=signal(),releaseStartup=signal();t.after(releaseStartup.release);
+test('explicit start never retries uncertain RPC errors or invalid runtime configuration',async t=>{
+ const {profile,poolA,env}=await fixture(t);await writeConnectionProfile(profile,poolA);
+ for(const code of ['ETIMEDOUT','ECONNRESET','EACCES']){
+  let starts=0,calls=0;const failure=unavailable(code);
+  const managed=createManagedDaemonCall({env,call:injectedCall(()=>{calls++;throw failure;}),start:async()=>{starts++;}});
+  await assert.rejects(managed('daemon_start',{}),error=>error===failure);assert.equal(starts,0);assert.equal(calls,1);
+ }
+ for(const entry of [undefined,'relative','/bad\0path']){
   let starts=0;
-  const managed=createManagedDaemonCall({env,call:injectedCall(request=>{
-    requests.push(request);const id=request.params.request_id as string;
-    const attempt=(attempts.get(id)??0)+1;attempts.set(id,attempt);
-    if(attempt===1){if(attempts.size===count)allAttempted.release();throw unavailable();}
-    return {requestId:id};
-  }),start:async(root,entry)=>{starts++;assert.equal(root,poolA);assert.equal(entry,cli);startEntered.release();await releaseStartup.promise;}});
-  const operations=Array.from({length:count},(_,index)=>managed('dispatch_task',{request_id:`request-${index}`}));
-  await Promise.all([allAttempted.promise,startEntered.promise]);
-  assert.equal(starts,1);assert.equal(requests.length,count);
-  releaseStartup.release();
-  assert.deepEqual(await Promise.all(operations),Array.from({length:count},(_,index)=>({requestId:`request-${index}`})));
-  assert.equal(starts,1);assert.equal(requests.length,count*2);
-  assert.equal(requests.every(request=>request.root===poolA),true);
-  assert.equal([...attempts.values()].every(attempt=>attempt===2),true);
+  const managed=createManagedDaemonCall({env:{...env,ZCODE_POOL_RUNTIME_CLI_PATH:entry},call:injectedCall(()=>{throw unavailable();}),start:async()=>{starts++;}});
+  await assert.rejects(managed('daemon_start',{}));assert.equal(starts,0);
+ }
 });
 
-test('switching profiles during startup starts the new pool separately and keeps each retry bound to its original pool', {timeout:5000}, async t=>{
-  const {profile,poolA,poolB,env}=await fixture(t);await writeConnectionProfile(profile,poolA);
-  const enteredA=signal(),enteredB=signal(),releaseA=signal(),releaseB=signal();
-  t.after(()=>{releaseA.release();releaseB.release();});
-  const requests:Request[]=[],starts:string[]=[],attempts=new Map<string|undefined,number>();
-  const managed=createManagedDaemonCall({env,call:injectedCall(request=>{
-    requests.push(request);const attempt=(attempts.get(request.root)??0)+1;attempts.set(request.root,attempt);
-    if(attempt===1)throw unavailable();return {root:request.root};
-  }),start:async(root)=>{
-    starts.push(root);
-    if(root===poolA){enteredA.release();await releaseA.promise;}
-    else {assert.equal(root,poolB);enteredB.release();await releaseB.promise;}
-  }});
-  const first=managed('dispatch_task',{request_id:'pool-a-request'});await enteredA.promise;
-  await writeConnectionProfile(profile,poolB);
-  const second=managed('overview',{});await enteredB.promise;
-  assert.deepEqual(starts,[poolA,poolB]);releaseA.release();releaseB.release();
-  assert.deepEqual(await first,{root:poolA});assert.deepEqual(await second,{root:poolB});
-  assert.deepEqual(requests.filter(request=>request.method==='dispatch_task').map(request=>request.root),[poolA,poolA]);
-  assert.deepEqual(requests.filter(request=>request.method==='overview').map(request=>request.root),[poolB,poolB]);
+test('failed explicit startup leaves a later explicit retry possible, never sends tasks',async t=>{
+ const {profile,poolA,env}=await fixture(t);await writeConnectionProfile(profile,poolA);let ready=false,starts=0;
+ const managed=createManagedDaemonCall({env,call:injectedCall(request=>{assert.equal(request.method,'overview');if(!ready)throw unavailable();return {};}),start:async()=>{if(++starts===1)throw new Error('start failed');ready=true;}});
+ await assert.rejects(managed('daemon_start',{}),/start failed/);assert.deepEqual(await managed('daemon_start',{}),{ready:true});assert.equal(starts,2);
+});
+
+test('switching profile during explicit startup keeps each operation bound to its original pool',async t=>{
+ const {profile,poolA,poolB,env}=await fixture(t);await writeConnectionProfile(profile,poolA);
+ const entered=signal(),release=signal();t.after(release.release);const ready=new Set<string>();const starts:string[]=[];
+ const managed=createManagedDaemonCall({env,call:injectedCall(request=>{if(!ready.has(request.root!))throw unavailable();return {};}),start:async root=>{starts.push(root);if(root===poolA){entered.release();await release.promise;}ready.add(root);}});
+ const first=managed('daemon_start',{});await entered.promise;await writeConnectionProfile(profile,poolB);
+ assert.deepEqual(await managed('daemon_start',{}),{ready:true});release.release();assert.deepEqual(await first,{ready:true});assert.deepEqual(starts,[poolA,poolB]);
 });
 
 test('a profile switch cannot change the destination or result of an already-started RPC', {timeout:5000}, async t=>{

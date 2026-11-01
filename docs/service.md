@@ -4,6 +4,14 @@
 
 本项目提供 systemd `--user` unit 生成和安装命令，适用于 Linux、Node.js 24 及已执行 `npm ci` 的固定项目目录。安装命令只写 unit 文件，不调用 `systemctl`，不启用服务，不修改 Codex 配置、linger 或 logind 策略。下面的启用和停止操作由操作者按需执行。
 
+## 普通使用的启动与收工
+
+使用 VS Code 扩展时，点击“启动后台并连接”启动管理后台；在资源页单独启动 Worker。Codex 使用 `zcode_daemon_start`、`zcode_start_worker` 完成相同操作。状态查询不会启动后台。
+
+结束工作时用“收工：停止实例与后台”或 `zcode_shutdown_pool`：有任务占用会拒绝，不自动取消；无占用才依次停止 Worker，全部成功后关闭后台。账号、任务及工作区保留。部分实例无法停止时后台继续运行，应刷新检查。旧 daemon 未提供 `poolLifecycle` 能力时，需先在空闲时升级后台。
+
+CLI 的 `shutdown-pool` 对应同一收工操作；`daemon-stop` 是高级的“仅停止调度后台”，仍保留 Worker，二者不可混淆。以下 systemd 方式仍是可选高级部署，不需要为了普通启动/收工额外安装服务。
+
 ## 生成并检查
 
 在项目根目录执行：

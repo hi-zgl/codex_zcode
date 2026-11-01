@@ -103,3 +103,9 @@ xvfb-run -a npm --prefix extensions/vscode run test:installed
 `test:smoke` 下载所选 VS Code 版本并使用隔离用户配置。`test:installed` 使用已构建 VSIX，在 checkout 外安装并验证捆绑后台、生产模式和真实空池连接；独立 daemon tgz 由 `test:daemon-package` 单独检查。Xvfb 仅为无图形会话的自动化宿主测试提供显示器，运行 daemon/Worker 不需要它。这些默认测试不发真实模型请求。
 
 具体执行版本、结果及未验证环境见[实现验收记录](../validation/2026-11-01-vscode.md)。设计基线保留在本目录，其“阶段”表示原实施划分；实际运行入口以本文和代码为准。
+
+## 启动、断开与收工
+
+“启动后台并连接”只启动管理后台，Worker 在额度与资源中单独启动。“断开面板”只停止观察，不影响任务。“收工：停止实例与后台”检查整个 pool：存在任何任务占用则拒绝；无占用时依次停止 Worker，全部成功后后台退出。数据不会删除，操作不会强制取消任务。部分实例停止失败时后台保留运行，应刷新检查。
+
+Codex 可使用 `zcode_daemon_start` 和 `zcode_shutdown_pool` 执行同样的管理。MCP 查询不会自动重启后台；再次使用需明确启动。旧后台若未提供 `poolLifecycle` 能力，收工入口禁用，需在处理完当前任务后升级后台。

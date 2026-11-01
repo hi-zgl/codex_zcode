@@ -156,9 +156,9 @@ export class WorkbenchApp {
       if (this.draftTimer) { clearTimeout(this.draftTimer); this.draftTimer = null; }
       await this.run(name, async () => { const response = await this.bridge.request<typeof name, UiSnapshot>(name, {}); if (response?.connection) this.receiveSnapshot(response); }); return;
     }
-    if (name === 'connection.configure' || name === 'daemon.start') {
+    if (name === 'connection.configure' || name === 'daemon.start' || name === 'pool.shutdown') {
       if (this.draftTimer) { clearTimeout(this.draftTimer); this.draftTimer = null; }
-      await this.run(name, () => this.bridge.request(name, {})); return;
+      await this.run(name, async () => {await this.bridge.request(name, {});if(name==='pool.shutdown')this.state.message='实例已停止，后台正在退出。账号与任务数据已保留；下次使用请启动后台。';}); return;
     }
     if (name === 'connection.codexSetup') {
       await this.run(name, async () => {

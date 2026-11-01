@@ -186,6 +186,7 @@ export async function activate(context:vscode.ExtensionContext):Promise<unknown>
   register('configureConnection',()=>execute('connection.configure'));
   register('setupCodex',()=>execute('connection.codexSetup'));
   register('startDaemon',()=>execute('daemon.start'));
+  register('shutdownPool',()=>execute('pool.shutdown'));
   register('disconnect',()=>{diff.clear();return execute('disconnect');});
   register('refresh',()=>execute('refresh'));
   register('openTask',async arg=>{const id=await taskId(arg);if(id){workbench.show();return execute('task.select',{taskId:id});}});

@@ -17,7 +17,7 @@ npm --prefix extensions/vscode run package:check
 
 打开 **ZCode Pool: Open Workbench**，确认运行环境及连接目录。默认 `~/.zcode_pool`；可点击“选择连接目录”修改。需要监控时点击“启动后台并连接”：先连接已有服务，只有服务不可达时才启动后台。它不启动执行器或模型；关闭 VS Code 不停止后台或正在运行的任务。
 
-点击“连接 Codex / 生成 MCP 配置”，将生成的 STDIO 配置**一次添加**到同一执行侧的 Codex，再重新连接 Codex。扩展只打开配置说明，不自动写入 Codex 设置，也不能据此断言 Codex 已连接。生成的配置引用共享连接资料文件；面板切换连接目录后，后续 MCP 工具调用会读取新目录，无需重复添加服务器。原目录中的已有任务仍在那里运行，切目录不会迁移任务。通过捆绑入口首次调用 MCP 工具时，后台不可达则按需启动。
+点击“连接 Codex / 生成 MCP 配置”，将生成的 STDIO 配置**一次添加**到同一执行侧的 Codex，再重新连接 Codex。扩展只打开配置说明，不自动写入 Codex 设置，也不能据此断言 Codex 已连接。生成的配置引用共享连接资料文件；面板切换连接目录后，后续 MCP 工具调用会读取新目录，无需重复添加服务器。原目录中的已有任务仍在那里运行，切目录不会迁移任务。通过捆绑入口调用 `zcode_daemon_start` 才会明确启动后台。状态查询和任务操作不会自动启动已关闭的后台。
 
 `zcodePool.daemonNodePath` 可指定 Node 24+ 的绝对路径；留空从执行侧 PATH 的绝对目录查找。`zcodePool.daemonCliPath` 留空使用捆绑后台，高级用户可选择已有独立安装的 CLI。完整普通流程见 [VS Code 使用指南](ui/implementation.md)。
 

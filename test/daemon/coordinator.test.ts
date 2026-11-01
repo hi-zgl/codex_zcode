@@ -622,3 +622,34 @@ test('multiple approvals preserve the next pending item, wait for native removal
   assert.deepEqual(fake.replies.map(value=>[value.approvalId,value.decision]),[['first','accept'],['second','decline']]);
   await coordinator.close();const revision=store.getTask(task.taskId).revision;await delay(150);assert.equal(store.getTask(task.taskId).revision,revision);
 });
+
+
+test('finish work rejects every held task before stopping any Worker',async t=>{
+ const {store,coordinator}=await fixture(t);let stops=0;
+ Object.defineProperty(coordinator.supervisor,'stop',{value:async()=>{stops++;return {stopped:true};}});
+ store.dispatch({requestId:'held',workspaceId:'workspace',workerId:'worker',prompt:'fixture'});
+ await assert.rejects(coordinator.call('shutdown_pool',{}),/active or uncertain/);assert.equal(stops,0);
+ assert.ok(await coordinator.call('get_pool_policy',{}),'failed shutdown keeps daemon available');
+});
+
+test('finish work gates concurrent dispatch and Worker starts, preserves data, then remains draining',async t=>{
+ const {store,coordinator}=await fixture(t);let release!:()=>void,entered!:()=>void;
+ const gate=new Promise<void>(r=>release=r),started=new Promise<void>(r=>entered=r);t.after(()=>release());
+ Object.defineProperty(coordinator.supervisor,'list',{value:async()=>[{workerId:'worker',state:'ready'},{workerId:'old',state:'stopped'}]});
+ const stopped:string[]=[];
+ Object.defineProperty(coordinator.supervisor,'stop',{value:async(id:string)=>{stopped.push(id);entered();await gate;return {workerId:id,stopped:true};}});
+ const finishing=coordinator.call('shutdown_pool',{});await started;
+ await assert.rejects(coordinator.call('start_worker',{worker_id:'new',account_id:'account'}),/shutdown in progress/);
+ await assert.rejects(coordinator.call('dispatch_task',{request_id:'late',workspace_id:'workspace',prompt:'late'}),/shutdown in progress/);
+ release();assert.deepEqual(await finishing,{stopping:true,workersStopped:true,stoppedWorkers:1});
+ assert.deepEqual(stopped,['worker']);assert.equal(store.listWorkspaces().length,1);assert.equal(store.listTasks().length,0);
+ await assert.rejects(coordinator.call('shutdown_pool',{}),/shutdown in progress/);
+});
+
+test('partial Worker stop failure keeps daemon available and never forces termination',async t=>{
+ const {coordinator}=await fixture(t);const stopped:string[]=[];
+ Object.defineProperty(coordinator.supervisor,'list',{value:async()=>[{workerId:'a',state:'ready'},{workerId:'b',state:'unknown'}]});
+ Object.defineProperty(coordinator.supervisor,'stop',{value:async(id:string,options:unknown)=>{assert.equal(options,undefined);stopped.push(id);if(id==='b')throw new Error('native unknown');return {workerId:id,stopped:true};}});
+ await assert.rejects(coordinator.call('shutdown_pool',{}),/shutdown incomplete/);assert.deepEqual(stopped,['a','b']);
+ assert.ok(await coordinator.call('get_pool_policy',{}));
+});

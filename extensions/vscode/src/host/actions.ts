@@ -357,6 +357,16 @@ export class ActionService implements RouterTarget {
         if(!this.options.native.codexSetup)throw new HostError('ACTION_UNAVAILABLE','Codex setup is unavailable in this Host.');
         return this.options.native.codexSetup();
       }
+      case 'pool.shutdown':{
+        this.requireCapability('poolLifecycle',true);
+        const generation=this.generation();
+        return this.serialize(`${generation}:pool.shutdown`,async()=>{
+          try{
+            const result=await this.requireConnection().legacy('shutdown_pool',{},this.connectionAbort.signal);
+            this.assertCurrent(generation);this.disconnect();return result;
+          }catch(error){const safe=safeError(error);if(generation===this.generation())this.action({key:'pool.shutdown',phase:safe.unknownOutcome?'unknown':'failed',message:safe.message,error:safe});throw error;}
+        });
+      }
       case 'pool.policy.set':{
         this.requireCapability('poolPolicy',true);
         return this.mutate('pool.policy.set',()=>this.requireConnection().legacy('set_pool_policy',{max_concurrent_tasks:request.payload.maxConcurrentTasks},this.connectionAbort.signal));

@@ -176,3 +176,24 @@ test('reconnecting to a new store discards the old history chain and loads its f
   const h=await harness();let connects=0;const service=new ActionService({mode:'mock',poolHome:'/mock/pool',host:'mock-host',authority:'local',createTransport:async()=>new MockTransport(connects++?next:old),native:h.native,onSnapshot:()=>{}});let id=0;const exec=(type:RequestType,payload:unknown={})=>service.execute(parseRequest({v:1,id:String(++id),generation:service.generation(),type,payload}));
   await exec('connect');assert.equal(service.state.tasks.length,50);assert.ok(service.state.listNextCursor);await exec('tasks.list',{cursor:service.state.listNextCursor});assert.equal(service.state.tasks.length,60);service.disconnect();await exec('connect');assert.equal(service.state.connection.storeId,'new-store');assert.equal(service.state.total,1);assert.deepEqual(service.state.tasks.map(task=>task.taskId),['new-only']);assert.equal(service.state.listNextCursor,null);service.dispose();h.service.dispose();
 });
+
+test('finish-work is a separate guarded operation: busy refusal retains connection, idle shutdown disconnects once',async()=>{
+ const h=await harness();try{
+  await h.execute('connect');await assert.rejects(h.execute('pool.shutdown'),{code:'POOL_BUSY'});
+  assert.equal(h.service.snapshot().connection.state,'connected');
+  h.setTrusted(false);await assert.rejects(h.execute('pool.shutdown'),{code:'WORKSPACE_UNTRUSTED'});h.setTrusted(true);
+  for(const detail of Object.values(h.transport.fixture.details))detail.leaseHeld=false;
+  const before=h.transport.calls.filter(c=>c.method==='shutdown_pool').length;
+  const results=await Promise.all([h.execute('pool.shutdown'),h.execute('pool.shutdown')]);
+  assert.deepEqual(results[0],results[1]);assert.equal(h.transport.calls.filter(c=>c.method==='shutdown_pool').length,before+1);
+  assert.equal(h.service.snapshot().connection.state,'disconnected');
+  assert.ok(h.transport.fixture.overview.accounts.length,'accounts retained');
+ }finally{h.service.dispose();}
+});
+
+test('finish-work is unavailable against older daemons without lifecycle capability',async()=>{
+ const h=await harness();try{
+  h.transport.fixture.capabilities.capabilities.poolLifecycle={version:0};await h.execute('connect');
+  await assert.rejects(h.execute('pool.shutdown'));assert.equal(h.transport.calls.some(c=>c.method==='shutdown_pool'),false);
+ }finally{h.service.dispose();}
+});

@@ -42,6 +42,7 @@ export class MockTransport implements Transport {
     switch(method){
       case 'ui_capabilities':return f.capabilities;
       case 'overview':return {...f.overview,poolPolicy:this.policy(),tasks:Object.values(f.details).map(d=>this.compact(d))};
+      case 'shutdown_pool':{if(Object.values(f.details).some(d=>d.leaseHeld))throw new HostError('POOL_BUSY','仍有任务占用，无法收工。');const workers=f.overview.workers.filter(w=>w.state!=='stopped');for(const worker of workers){worker.state='stopped';worker.processOwned=false;}return {stopping:true,workersStopped:true,stoppedWorkers:workers.length};}
       case 'get_pool_policy':return this.policy();
       case 'set_pool_policy':{if(p.max_concurrent_tasks!==null&&(!Number.isInteger(p.max_concurrent_tasks)||p.max_concurrent_tasks<0||p.max_concurrent_tasks>64))throw new HostError('INVALID_ARGUMENT','Invalid concurrency limit');this.maxConcurrentTasks=p.max_concurrent_tasks;return this.policy();}
       case 'ui_get_task_detail':{const detail=task??Object.values(f.details).find(d=>d.requestId===p.request_id);if(!detail)throw new HostError('NOT_FOUND','The original task was not found; no dispatch was resent.');this.advance(detail);return this.envelope(detail);}
