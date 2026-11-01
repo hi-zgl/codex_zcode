@@ -1,10 +1,10 @@
 # ZCode Pool for VS Code
 
-A workspace extension for a separately running ZCode Pool daemon. Open **ZCode Pool: Open Workbench**, check the displayed host and pool, then explicitly **Connect**. Activation, opening a view, F5 and closing VS Code never launch or stop a daemon, worker or model task.
+A workspace extension for a separately running ZCode Pool daemon. Open **ZCode Pool: Open Workbench**, check the displayed host and pool, then explicitly **Connect**. Activation, opening a view, F5 and closing VS Code never launch or stop a daemon, worker or model task. The explicit **启动后台并连接** action can start a separately installed daemon; it does not start workers or models.
 
 ## Install and connect
 
-Install the locally built VSIX with **Extensions: Install from VSIX**. This package is a bundled UI client: it contains no daemon, Node runtime, accounts or pool. Install/start the standalone daemon separately on the same Linux host. Source installation and standalone distribution instructions are in the project's `docs/distribution.md`. Set `zcodePool.poolHome` to an absolute path in that host's User/Remote Settings; an empty value uses `~/.zcode_pool`. Connect only reads capabilities and snapshots. The extension never calls a workspace npm script or searches for a source checkout.
+Install the locally built VSIX with **Extensions: Install from VSIX**. This package is a bundled UI client: it contains no daemon, Node runtime, accounts or pool. Install/start the standalone daemon separately on the same Linux host. Source installation and standalone distribution instructions are in the project's `docs/distribution.md`. Set `zcodePool.poolHome` to an absolute path in that host's User/Remote Settings; an empty value uses `~/.zcode_pool`. Use **选择连接目录** to enter the host-side absolute pool path directly. Connect only reads capabilities and snapshots. The extension never calls a workspace npm script or searches for a source checkout. To start an installed daemon from the workbench, use **启动后台并连接** in a trusted Linux workspace. The default CLI is `~/.local/share/zcode-pool-app/node_modules/zcode-pool/bin/zcode-pool.mjs`; override it with host User/Remote `zcodePool.daemonCliPath`. Set `zcodePool.daemonNodePath` to Node 24+ or leave it empty to discover `node` in absolute host PATH directories. No automatic downloads or installation are performed.
 
 Real connections require a Linux workspace extension host. Local Linux is exercised by automated tests; Remote SSH Linux and WSL use the same host-side socket/file picker design but require environment acceptance testing. Windows/macOS can run mock development; pure browser VS Code is unsupported. Codespaces/containers remain unverified. VS Code 1.95 or later is required; the daemon requires its own Node 24 installation, independently of the extension host's Node version.
 
@@ -20,7 +20,7 @@ Historical file Diff reads registered immutable artifacts and verifies all bytes
 
 ## Development
 
-From the repository root, run `npm --prefix extensions/vscode ci` and `npm --prefix extensions/vscode run build`. F5 defaults to **Mock UI (no daemon)**. Development-only environment variables select an in-memory validated fixture; mock failures never fall back to real connections. The second F5 profile merely preselects a real pool; Connect remains explicit. Production ignores all debug environment variables and excludes fixtures.
+From the repository root, run `npm --prefix extensions/vscode ci` and `npm --prefix extensions/vscode run build`. F5 defaults to **Mock UI (no daemon)**. Development-only environment variables select an in-memory validated fixture; mock failures never fall back to real connections. The second F5 profile merely preselects a real pool; Connect remains explicit. Choosing a new connection directory or changing host Settings overrides the initial F5 directory without a restart. Production ignores all debug environment variables and excludes fixtures.
 
 Use `test:unit`, `test:integration`, `test:smoke` and `test:browser` for the separate checks. Electron smoke requires a desktop/Xvfb session and downloads official VS Code test binaries. `package:vsix` builds the bundle; `package:check` inspects the allowlisted archive. These default tests send no real model request.
 

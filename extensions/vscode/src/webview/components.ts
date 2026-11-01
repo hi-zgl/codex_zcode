@@ -62,12 +62,21 @@ function heading(kicker: string, title: string, description: string, actions?: H
 function connectReason(snapshot: UiSnapshot): string | null {
   return snapshot.connection.supported === false || ['UNSUPPORTED_ENVIRONMENT', 'UNSUPPORTED_PLATFORM'].includes(snapshot.connection.error?.code ?? '') ? snapshot.connection.environmentReason ?? '此执行环境不受支持，请使用 Linux、Remote SSH 到 Linux 或 WSL。' : null;
 }
+function connectionBusy(ctx: RenderContext, snapshot: UiSnapshot): boolean {
+  return snapshot.connection.state === 'connecting' || ['connect', 'daemon.start', 'connection.configure'].some(action => ctx.state.pending.has(action));
+}
+function startDaemonReason(snapshot: UiSnapshot): string | null {
+  return connectReason(snapshot) ?? (!snapshot.connection.trusted ? '请先在 VS Code 中信任此工作区。' : null);
+}
+function resourceState(value: string): string {
+  return ({ ready: '就绪', starting: '启动中', stopped: '已停止', active: '可用', archived: '已归档', available: '可用', unknown: '未确认', blocked: '受阻', invalid: '无效', cooling: '冷却中', error: '异常' } as Record<string, string>)[value] ?? value;
+}
 
 export function renderApp(ctx: RenderContext): HTMLElement {
   const snapshot = ctx.state.snapshot;
   const root = el('div', 'workbench');
   root.append(renderHeader(ctx));
-  if (!snapshot) { root.append(empty('正在读取工作台状态', '初始化不会启动或连接 daemon。')); return root; }
+  if (!snapshot) { root.append(empty('正在打开工作台', '正在读取连接状态。')); return root; }
   root.append(renderConnection(ctx, snapshot), renderNavigation(ctx));
   if (snapshot.notice) root.append(notice(snapshot.notice, 'warning'));
   const feedback = renderActionFeedback(ctx); if (feedback) root.append(feedback);
@@ -83,33 +92,35 @@ export function renderApp(ctx: RenderContext): HTMLElement {
 }
 function renderHeader(ctx: RenderContext): HTMLElement {
   const skip = el('a', 'skip-link', '跳到主要内容'); skip.href = '#main-content';
-  return el('header', 'app-header', skip, el('div', 'brand', el('span', 'brand-mark', 'Z'), el('strong', '', 'ZCODE'), el('span', 'brand-divider', '/'), el('span', '', 'POOL')), el('span', 'header-description', '任务与资源工作台'), ctx.state.snapshot?.connection.mode === 'mock' ? badge('演示模式 · 模拟数据', 'demo') : badge('真实连接', 'quiet'));
+  return el('header', 'app-header', skip, el('div', 'brand', el('span', 'brand-mark', 'Z'), el('strong', '', 'ZCODE')), el('span', 'header-description', '任务工作台'), ctx.state.snapshot?.connection.mode === 'mock' ? badge('演示模式 · 模拟数据', 'demo') : badge('本地 / 远程服务', 'quiet'));
 }
 function renderConnection(ctx: RenderContext, snapshot: UiSnapshot): HTMLElement {
   const connection = snapshot.connection;
   const names = { disconnected: '未连接', connecting: '连接中', connected: '已连接', 'legacy-readonly': '只读连接', error: '连接中断' };
   const indicator = el('span', `connection-indicator ${connection.state === 'connected' ? 'online' : ''}`); indicator.setAttribute('aria-hidden', 'true');
-  const scope = el('div', 'execution-context', el('div', 'connection-status', indicator, el('strong', '', connection.supported === false ? '不受支持' : connection.stale && connection.state !== 'disconnected' ? '连接状态待确认' : names[connection.state]), !connection.trusted && badge('受限模式', 'attention')), el('span', 'host-label', `执行侧：${connection.host}`), el('code', 'pool-path', connection.poolHome));
+  const scope = el('div', 'execution-context', el('div', 'connection-status', indicator, el('strong', '', connection.supported === false ? '不受支持' : connection.stale && connection.state !== 'disconnected' ? '连接状态待确认' : names[connection.state]), !connection.trusted && badge('受限模式', 'attention')), el('span', 'host-label', `运行环境：${connection.host}`), el('code', 'pool-path', connection.poolHome));
   const actions = el('div', 'inline-actions');
-  if (['connected', 'legacy-readonly'].includes(connection.state) || (connection.state === 'error' && snapshot.tasks.length)) actions.append(button(ctx, '刷新', 'refresh', {}, { busy: ctx.state.pending.has('refresh') }), button(ctx, '断开客户端', 'disconnect'));
-  else actions.append(button(ctx, connection.state === 'error' ? '重新连接' : '连接已有 daemon', 'connect', {}, { primary: true, busy: connection.state === 'connecting' || ctx.state.pending.has('connect'), reason: connectReason(snapshot) }));
+  if (['connected', 'legacy-readonly'].includes(connection.state) || (connection.state === 'error' && snapshot.tasks.length)) actions.append(button(ctx, '刷新', 'refresh', {}, { busy: ctx.state.pending.has('refresh') }), button(ctx, '断开连接', 'disconnect'));
+  else actions.append(button(ctx, connection.state === 'error' ? '重新连接' : '连接', 'connect', {}, { primary: true, busy: connectionBusy(ctx, snapshot), reason: connectReason(snapshot) }));
   const node = el('section', 'connection-banner', scope, el('div', 'connection-trailing', el('span', 'sync-time', connection.stale ? `缓存 · 最后同步 ${date(connection.lastReceivedAtMs)}` : connection.lastReceivedAtMs ? `同步于 ${date(connection.lastReceivedAtMs)}` : '尚未同步'), actions));
   if (connection.stale && connection.state !== 'disconnected') actions.prepend(button(ctx, '重新连接', 'connect', {}, { busy: ctx.state.pending.has('connect') }));
-  node.setAttribute('aria-label', '连接与执行侧');
+  node.setAttribute('aria-label', '连接与运行环境');
   if (connection.error) node.append(notice(`${connection.error.code} · ${connection.error.message}`, 'warning'));
   else if (connectReason(snapshot)) node.append(notice(connectReason(snapshot)!, 'warning'));
-  if (connection.state === 'legacy-readonly') node.append(notice('旧 daemon 已进入只读兼容模式。审批、派发、资源变更和本地审阅均不可用。', 'warning'));
+  if (connection.state === 'legacy-readonly') node.append(notice('当前后台服务版本仅支持查看，暂不能审批、提交任务或管理资源。', 'warning'));
   return node;
 }
 function renderNavigation(ctx: RenderContext): HTMLElement {
   const node = el('nav', 'page-nav'); node.setAttribute('aria-label', '工作台页面');
-  for (const [id, label] of [['tasks', '任务'], ['resources', '资源'], ['settings', '设置与诊断']]) {
+  for (const [id, label] of [['tasks', '任务'], ['resources', '资源'], ['settings', '设置']]) {
     const b = button(ctx, label, 'page', { page: id }); if (ctx.state.page === id || (id === 'tasks' && ctx.state.page === 'compose')) b.setAttribute('aria-current', 'page'); node.append(b);
   }
   return node;
 }
 function renderWelcome(ctx: RenderContext, snapshot: UiSnapshot): HTMLElement {
-  return el('div', 'welcome', heading('CONNECT / WORKSPACE HOST', '连接你的执行侧', 'daemon 独立运行；首次连接由你明确发起。'), el('div', 'welcome-card', el('span', 'welcome-symbol', '⌁'), el('h2', '', snapshot.connection.error ? '无法连接此 pool' : '让每个任务都有明确的归属'), el('p', '', '查看任务、逐项审阅审批、核验固定交付快照。关闭此面板或断开客户端不会取消后台任务。'), kv([['执行侧', snapshot.connection.host], ['pool（执行侧路径）', snapshot.connection.poolHome], ['支持环境', '原生 Linux、Remote SSH 到 Linux、WSL'], ['Workspace Trust', snapshot.connection.trusted ? '已信任' : '受限模式 · 仅可查看']]), el('div', 'inline-actions', button(ctx, '连接已有 daemon', 'connect', {}, { primary: true, busy: ctx.state.pending.has('connect'), reason: connectReason(snapshot) }), button(ctx, '修改连接设置', 'settings.open'), button(ctx, '查看运行指引', 'guidance.open', { topic: 'connection' })), el('p', 'field-hint', '连接仅读取此 Host 的已有服务，不会启动 daemon、Worker、模型或系统服务。')), messageFor(ctx, 'connect'));
+  const actions = el('div', 'inline-actions', button(ctx, '连接', 'connect', {}, { primary: true, busy: connectionBusy(ctx, snapshot), reason: connectReason(snapshot) }), button(ctx, '选择连接目录', 'connection.configure', {}, { busy: ctx.state.pending.has('connection.configure'), reason: connectionBusy(ctx, snapshot) ? '请等待当前连接操作完成。' : null }));
+  if (snapshot.connection.mode === 'real' && !['connected', 'legacy-readonly'].includes(snapshot.connection.state)) actions.append(actionWithReason(ctx, '启动后台并连接', 'daemon.start', {}, startDaemonReason(snapshot) ?? (connectionBusy(ctx, snapshot) ? '请等待当前连接操作完成。' : null), false));
+  return el('div', 'welcome', heading('ZCODE / 开始', '连接任务工作台', '查看任务进度、处理审批、检查交付。'), el('div', 'welcome-card', el('span', 'welcome-symbol', '⌁'), el('h2', '', snapshot.connection.error ? '暂时无法连接' : '选择目录，连接后台服务'), el('p', '', '连接目录保存任务、账号与执行器状态。后台服务运行任务，关闭工作台后任务会继续。'), kv([['运行环境', snapshot.connection.host], ['连接目录', snapshot.connection.poolHome], ['工作区信任', snapshot.connection.trusted ? '已信任' : '受限模式 · 仅可查看']]), actions, el('p', 'field-hint', snapshot.connection.mode === 'mock' ? '演示模式使用模拟数据。' : '后台尚未运行时，可启动已安装的服务并连接。执行器在“资源”页单独启动。'), button(ctx, '连接帮助', 'guidance.open', { topic: 'connection' })), messageFor(ctx, 'connect'), messageFor(ctx, 'connection.configure'), messageFor(ctx, 'daemon.start'));
 }
 function renderActionFeedback(ctx: RenderContext): HTMLElement | null {
   const items = ctx.state.snapshot?.actions.filter(action => action.phase !== 'succeeded' || action.requestId) ?? [];
@@ -120,19 +131,19 @@ function renderTasks(ctx: RenderContext, snapshot: UiSnapshot): HTMLElement {
   const filtered = filterTasks(snapshot, ctx.state.filters);
   const attention = snapshot.tasks.filter(task => needsAttention(task, snapshot)).length;
   const active = snapshot.tasks.filter(isActive).length;
-  const page = el('div', 'task-page', heading('TASKS / LOADED SNAPSHOT', '任务工作台', '按项目与任务跟踪执行，审阅每一个需要你决定的操作。', actionWithReason(ctx, '新任务', 'compose.open', {}, mutationReason(snapshot, 'dispatchTask'), true)));
+  const page = el('div', 'task-page', heading('ZCODE / 任务', '任务工作台', '查看进度、处理审批、检查交付。', actionWithReason(ctx, '新任务', 'compose.open', {}, mutationReason(snapshot, 'dispatchTask'), true)));
   page.append(el('div', 'metrics', metric(ctx, '需要处理', attention, 'attention', '审批、阻塞、失败及待审阅交付'), metric(ctx, '执行中', active, 'active', '包括派发、执行与核验'), el('div', 'metric', el('span', 'metric-number', String(snapshot.tasks.length).padStart(2, '0')), el('div', '', el('strong', '', '已载入任务'), el('p', '', snapshot.scope === 'recent_50_loaded' ? '最近创建 50 条窗口 · 历史总数未知' : `当前匹配范围 · 总数 ${snapshot.total ?? '未知'}`)))));
   page.append(renderFilters(ctx, snapshot));
   const task = selectedTask(ctx.state);
   const taskList = el('section', 'task-list-panel'); taskList.setAttribute('aria-label', '任务列表');
   taskList.append(el('div', 'panel-title', el('h2', '', '已载入任务'), el('span', 'muted', '最近创建优先')));
   const list = el('div', 'task-list'); list.dataset.scroll = 'task-list';
-  if (!filtered.length) list.append(empty('当前已载入范围中没有匹配任务', snapshot.scope === 'recent_50_loaded' ? '最近 50 条中无此筛选结果；这不代表项目没有历史任务。' : '此快照中没有匹配项。', button(ctx, '清除筛选 · 查看整个池', 'filters.clear')));
+  if (!filtered.length) list.append(empty('当前列表没有匹配任务', snapshot.scope === 'recent_50_loaded' ? '最近 50 条中没有匹配项，可继续加载历史任务。' : '可清除筛选后查看其他任务。', button(ctx, '清除筛选 · 全部项目', 'filters.clear')));
   for (const item of filtered) {
     const workspace = snapshot.resources.workspaces.find(ws => ws.workspaceId === item.workspaceId);
     const row = button(ctx, '', 'task.select', { taskId: item.taskId }, { className: `task-row ${item.taskId === snapshot.selectedTaskId ? 'selected' : ''}` });
-    row.setAttribute('aria-pressed', String(item.taskId === snapshot.selectedTaskId)); row.setAttribute('aria-label', `${item.taskId}，${statusLabel(item)}，${item.workspaceId}，${item.workerId ?? '未绑定 Worker'}`);
-    row.append(el('div', 'task-row-top', el('code', 'task-id', item.taskId), status(item, snapshot.connection.stale)), el('strong', 'task-row-title', workspace?.branch ?? item.workspaceId), el('span', 'task-project', workspace?.repositoryPath ?? '项目路径当前未提供'), el('div', 'task-row-bottom', el('span', '', item.workerId ?? '未绑定 Worker'), item.retry ? el('span', '', `原会话续跑 ${item.retry.used}/${item.retry.max}`) : el('span', '', '续跑信息未提供')), el('span', 'task-time', item.createdAtMs ? date(item.createdAtMs) : '创建时间 —'));
+    row.setAttribute('aria-pressed', String(item.taskId === snapshot.selectedTaskId)); row.setAttribute('aria-label', `${item.taskId}，${statusLabel(item)}，${item.workspaceId}，${item.workerId ?? '未绑定执行器'}`);
+    row.append(el('div', 'task-row-top', el('code', 'task-id', item.taskId), status(item, snapshot.connection.stale)), el('strong', 'task-row-title', workspace?.branch ?? item.workspaceId), el('span', 'task-project', workspace?.repositoryPath ?? '项目路径当前未提供'), el('div', 'task-row-bottom', el('span', '', item.workerId ?? '未绑定执行器'), item.retry ? el('span', '', `原会话续跑 ${item.retry.used}/${item.retry.max}`) : el('span', '', '续跑信息未提供')), el('span', 'task-time', item.createdAtMs ? date(item.createdAtMs) : '创建时间 —'));
     if (item.leaseHeld && item.executionStopped !== true && !isActive(item)) row.append(badge('! 占用未知', 'attention'));
     if (item.status === 'succeeded') row.append(el('span', 'task-review', item.deliveryReview === 'reviewed' || (snapshot.selectedTaskId === item.taskId && snapshot.delivery.reviewed) ? '✓ 本客户端已审阅' : item.deliveryReview === 'pending' ? '待人工审阅' : '审阅状态待加载'));
     list.append(row);
@@ -141,7 +152,7 @@ function renderTasks(ctx: RenderContext, snapshot: UiSnapshot): HTMLElement {
   if (snapshot.listNextCursor) taskList.append(button(ctx, '继续加载历史任务', 'tasks.more', {}, { busy: ctx.state.pending.has('tasks.list') }));
   if (ctx.state.errors.has('tasks.list')) taskList.append(notice(ctx.state.errors.get('tasks.list')!, 'warning'), button(ctx, '重新加载列表', 'tasks.reload'));
   const lookup = input(ctx.state.taskLookup, 'taskLookup'); lookup.placeholder = '已知任务完整 ID';
-  taskList.append(el('div', 'task-lookup', field('打开窗口之外的已知任务', lookup), button(ctx, '按 ID 打开', 'task.lookup', {}, { reason: !ctx.state.taskLookup.trim() ? '请输入完整任务 ID。' : null })));
+  taskList.append(el('div', 'task-lookup', field('通过任务 ID 查找', lookup), button(ctx, '打开任务', 'task.lookup', {}, { reason: !ctx.state.taskLookup.trim() ? '请输入完整任务 ID。' : null })));
   const detail = el('section', 'detail-container', button(ctx, '← 返回任务列表', 'detail.back', {}, { className: 'mobile-back' }), task ? renderTaskDetail(ctx, snapshot, task, filtered.some(item => item.taskId === task.taskId)) : empty('选择一个任务', '选中任务仅加载详情，不会恢复或执行任务。'));
   page.append(el('div', `task-workspace ${ctx.state.detailOpen ? 'detail-open' : ''}`, taskList, detail));
   return page;
@@ -152,18 +163,18 @@ function metric(ctx: RenderContext, label: string, count: number, filter: string
 function renderFilters(ctx: RenderContext, snapshot: UiSnapshot): HTMLElement {
   const projects = [...new Set(snapshot.resources.workspaces.map(workspace => workspace.repositoryPath))].filter(Boolean);
   const filters = ctx.state.filters;
-  const search = input(filters.query, 'query'); delete search.dataset.field; search.dataset.filter = 'query'; search.dataset.focus = 'filter:query'; search.type = 'search'; search.maxLength = 200; search.placeholder = 'ID、仓库、分支、Worker';
-  const node = el('section', 'task-filters', field('项目', select(filters.project, 'project', [['', '整个池'], ...projects.map(project => [project, project] as [string, string])], true)), field('状态', select(filters.status, 'status', [['all', '全部状态'], ['attention', '需要处理'], ['active', '执行中（含核验）'], ['finished', '最近结束'], ...Object.entries(statusNames)], true)), field('Worker', select(filters.worker, 'worker', [['', '全部 Worker'], ...snapshot.resources.workers.map(worker => [worker.workerId, worker.workerId] as [string, string])], true)), field('任务 workspace', select(filters.workspace, 'workspace', [['', '全部 workspace'], ...snapshot.resources.workspaces.map(workspace => [workspace.workspaceId, workspace.workspaceId] as [string, string])], true)), field('搜索已载入任务', search));
+  const search = input(filters.query, 'query'); delete search.dataset.field; search.dataset.filter = 'query'; search.dataset.focus = 'filter:query'; search.type = 'search'; search.maxLength = 200; search.placeholder = 'ID、仓库、分支、执行器';
+  const node = el('section', 'task-filters', field('项目', select(filters.project, 'project', [['', '全部项目'], ...projects.map(project => [project, project] as [string, string])], true)), field('状态', select(filters.status, 'status', [['all', '全部状态'], ['attention', '需要处理'], ['active', '执行中（含核验）'], ['finished', '最近结束'], ...Object.entries(statusNames)], true)), field('执行器', select(filters.worker, 'worker', [['', '全部执行器'], ...snapshot.resources.workers.map(worker => [worker.workerId, worker.workerId] as [string, string])], true)), field('任务目录', select(filters.workspace, 'workspace', [['', '全部任务目录'], ...snapshot.resources.workspaces.map(workspace => [workspace.workspaceId, workspace.workspaceId] as [string, string])], true)), field('搜索任务', search));
   node.setAttribute('aria-label', '筛选已载入任务'); return node;
 }
 function renderTaskDetail(ctx: RenderContext, snapshot: UiSnapshot, task: UiTask, inFilter: boolean): HTMLElement {
   const detail = safeDetail(snapshot);
   const title = el('h2', '', task.taskId); title.id = 'task-detail-title'; title.tabIndex = -1;
-  const node = el('div', 'task-detail', el('div', 'detail-heading', el('div', '', el('p', 'eyebrow', 'TASK / DETAIL'), title), status(task, snapshot.connection.stale)));
+  const node = el('div', 'task-detail', el('div', 'detail-heading', el('div', '', el('p', 'eyebrow', '任务详情'), title), status(task, snapshot.connection.stale)));
   if (!inFilter) node.append(notice('此任务不在当前筛选中；详情保持打开。'));
-  node.append(kv([['任务 workspace', task.workspaceId], ['Worker', task.workerId], ['revision', task.revision], ['本地审阅', snapshot.delivery.reviewed || task.deliveryReview === 'reviewed' ? '本客户端已审阅' : task.status === 'succeeded' && detail?.result.available ? '待人工审阅' : '—']]));
-  if (task.leaseHeld) node.append(notice(task.executionStopped === true ? '原执行已确认停止，但调度占用仍保留；可能正在核验或保存交付。' : task.executionStopped === undefined ? '接口未提供停止证明；不能据此认定 Worker 或 workspace 可复用。' : isActive(task) ? 'Worker 与任务 workspace 已占用；执行状态与调度占用分别跟踪。' : '占用未知：原执行尚未证实停止，Worker 与 workspace 继续保留占用。', 'warning'));
-  else if (task.executionStopped === true) node.append(el('p', 'occupancy-proof', '✓ 原执行已确认停止 · 当前任务 lease 已释放'));
+  node.append(kv([['任务目录', task.workspaceId], ['执行器', task.workerId], ['状态版本', task.revision], ['本地审阅', snapshot.delivery.reviewed || task.deliveryReview === 'reviewed' ? '本客户端已审阅' : task.status === 'succeeded' && detail?.result.available ? '待人工审阅' : '—']]));
+  if (task.leaseHeld) node.append(notice(task.executionStopped === true ? '执行已停止，资源占用仍保留；可能正在核验或保存交付。' : task.executionStopped === undefined ? '尚未确认执行是否停止，执行器和任务目录暂不可复用。' : isActive(task) ? '任务正在占用执行器和任务目录。' : '尚未确认执行是否停止，执行器和任务目录继续保留占用。', 'warning'));
+  else if (task.executionStopped === true) node.append(el('p', 'occupancy-proof', '✓ 执行已确认停止 · 资源占用已释放'));
   if (task.cancelRequestedAtMs != null) node.append(notice(`已记录取消请求（${date(task.cancelRequestedAtMs)}），等待实际停止确认；不会再触发后续自动续跑。`, 'warning'));
   if (task.retry) node.append(el('div', 'retry-strip', el('strong', '', `原会话立即继续 · 已使用 ${task.retry.used}/${task.retry.max} 次`), el('span', '', task.retry.max === 0 ? '已关闭模型繁忙续跑' : '仅明确的 model_busy，沿用账号、模型与会话；初次派发不计入')));
   if (!detail) node.append(notice('当前接口未提供可信安全详情；已有结果可读，写动作不可用。', 'warning'));
@@ -187,10 +198,10 @@ function renderOverview(ctx: RenderContext, snapshot: UiSnapshot, task: UiTask):
     return el('div', '', section('安全概况', el('p', '', '旧接口仅提供有限只读投影。'), legacy?.summary && el('p', '', String(legacy.summary)), kv([['任务状态', task.status], ['停止证明', task.executionStopped === undefined ? '当前接口未提供' : task.executionStopped ? '已确认' : '尚未确认']])));
   }
   const binding = detail.selection.binding;
-  const node = el('div', '', detail.diagnostic && notice(`${detail.diagnostic.code} · ${detail.diagnostic.message}`, 'warning'), section('执行与绑定', kv([['源仓库', detail.workspace.repositoryPath], ['实际 worktree', detail.workspace.worktreePath], ['分支', detail.workspace.branch], ['base commit', detail.workspace.baseCommit], ['账号 / provider', binding ? `${binding.accountAlias} / ${binding.providerId}` : '尚未绑定'], ['请求模型', detail.selection.requestedModelId], ['已绑定模型', binding?.modelId], ['session', detail.execution.sessionId], ['command', detail.execution.currentCommandId], ['运行 mode', detail.selection.mode], ['会话策略', detail.selection.requestedSession === 'continue' ? '继续最近可复用会话；否则新建' : '新会话'], ['观察附着', detail.execution.attachment], ['request ID', detail.requestId]])), section('停止依据', detail.execution.stopProof ? kv([['证明类型', detail.execution.stopProof.kind], ['观察时间', date(detail.execution.stopProof.observedAtMs)], ['说明', detail.execution.stopProof.evidenceSummary]]) : el('p', 'muted', '尚无精确归属的停止证明。没有事件、取消 ACK 或结果对象都不能替代停止证明。')), section('核验策略', detail.verificationPolicy.complete ? detail.verificationPolicy.defaultDiffCheck ? code('git diff --check', '默认核验命令') : el('div', '', ...detail.verificationPolicy.commands.map(command => code(`${command.command} ${command.args.map(arg => JSON.stringify(arg)).join(' ')}\n超时 ${command.timeoutMs}ms`, '核验命令与参数'))) : notice(detail.verificationPolicy.unavailableReason ?? '策略无法完整安全显示，恢复观察不可用。', 'warning')));
+  const node = el('div', '', detail.diagnostic && notice(`${detail.diagnostic.code} · ${detail.diagnostic.message}`, 'warning'), section('执行与绑定', kv([['源仓库', detail.workspace.repositoryPath], ['执行目录', detail.workspace.worktreePath], ['分支', detail.workspace.branch], ['起始提交', detail.workspace.baseCommit], ['账号 / 服务商', binding ? `${binding.accountAlias} / ${binding.providerId}` : '尚未绑定'], ['请求模型', detail.selection.requestedModelId], ['已绑定模型', binding?.modelId], ['会话 ID', detail.execution.sessionId], ['操作 ID', detail.execution.currentCommandId], ['运行模式', detail.selection.mode], ['会话策略', detail.selection.requestedSession === 'continue' ? '继续最近可复用会话；否则新建' : '新会话'], ['观察连接', detail.execution.attachment], ['请求 ID', detail.requestId]])), section('停止依据', detail.execution.stopProof ? kv([['证明类型', detail.execution.stopProof.kind], ['观察时间', date(detail.execution.stopProof.observedAtMs)], ['说明', detail.execution.stopProof.evidenceSummary]]) : el('p', 'muted', '尚未取得本次执行的停止证明。请求已收到或结果已返回，都不代表执行已停止。')), section('核验策略', detail.verificationPolicy.complete ? detail.verificationPolicy.defaultDiffCheck ? code('git diff --check', '默认核验命令') : el('div', '', ...detail.verificationPolicy.commands.map(command => code(`${command.command} ${command.args.map(arg => JSON.stringify(arg)).join(' ')}\n超时 ${command.timeoutMs}ms`, '核验命令与参数'))) : notice(detail.verificationPolicy.unavailableReason ?? '策略无法完整安全显示，恢复观察不可用。', 'warning')));
   const attempts = el('ol', 'attempt-list');
-  for (const attempt of detail.attempts) attempts.append(el('li', '', el('strong', '', `Attempt ${attempt.index}${detail.currentAttemptIndex === attempt.index ? ' · 当前' : ''}`), kv([['command', attempt.commandId], ['发送意图', date(attempt.intentAtMs)], ['原生 ACK', attempt.acknowledgedAtMs === null ? '尚未确认；不能推断未发送' : date(attempt.acknowledgedAtMs)], ['终态', attempt.terminalState], ['失败类别', attempt.failureCategory], ['停止证明', attempt.stopProofKind]])));
-  node.append(section('原生执行尝试', attempts)); return node;
+  for (const attempt of detail.attempts) attempts.append(el('li', '', el('strong', '', `执行 ${attempt.index}${detail.currentAttemptIndex === attempt.index ? ' · 当前' : ''}`), kv([['操作 ID', attempt.commandId], ['请求记录时间', date(attempt.intentAtMs)], ['后台回执', attempt.acknowledgedAtMs === null ? '尚未确认；可能已发送' : date(attempt.acknowledgedAtMs)], ['结束状态', attempt.terminalState], ['失败类别', attempt.failureCategory], ['停止证明', attempt.stopProofKind]])));
+  node.append(section('执行记录', attempts)); return node;
 }
 function renderTaskControls(ctx: RenderContext, snapshot: UiSnapshot, task: UiTask): HTMLElement {
   const detail = safeDetail(snapshot)!;
@@ -212,10 +223,10 @@ function renderTaskControls(ctx: RenderContext, snapshot: UiSnapshot, task: UiTa
 }
 function renderApprovals(ctx: RenderContext, snapshot: UiSnapshot, task: UiTask): HTMLElement {
   const data = snapshot.approvals;
-  const node = el('div', '', el('div', 'section-toolbar', el('h3', '', '逐项审批'), button(ctx, '读取当前审批', 'approvals.list', { taskId: task.taskId }, { busy: ctx.state.pending.has(`task:${task.taskId}:approvals`) })));
-  node.append(el('p', 'field-hint', '摘要预览不是完整内容。只批准本次操作；拒绝本项不会取消整个任务。'));
+  const node = el('div', '', el('div', 'section-toolbar', el('h3', '', '待你决定的操作'), button(ctx, '刷新审批', 'approvals.list', { taskId: task.taskId }, { busy: ctx.state.pending.has(`task:${task.taskId}:approvals`) })));
+  node.append(el('p', 'field-hint', '先查看完整操作，再选择批准或拒绝。批准仅限本次；拒绝本项不会取消整个任务。'));
   if (mutationReason(snapshot, 'approvalRead')) node.append(notice(mutationReason(snapshot, 'approvalRead')!, 'warning'));
-  if (!data) node.append(empty('尚未读取审批列表', '按需读取当前原生 pending，不会恢复任务或执行模型回合。'));
+  if (!data) node.append(empty('正在等待审批列表', '点击“刷新审批”查看当前需要决定的操作。'));
   else {
     node.append(el('p', 'scope-note', `已载入 ${data.items?.length ?? 0} 项 / 总数 ${data.total === null ? '未知' : data.total} · ${data.stateKnown ? '当前归属已核对' : '原生状态未知'}`));
     if (data.unattributedCount) node.append(notice(`${data.unattributedCount} 项原生交互无法归属到当前任务，未加入可操作清单。`, 'warning'));
@@ -223,27 +234,28 @@ function renderApprovals(ctx: RenderContext, snapshot: UiSnapshot, task: UiTask)
     const known = new Set<string>();
     for (const item of (data.items ?? []) as UiApprovalPreview[]) { known.add(item.approvalId); node.append(renderApprovalCard(ctx, task, item, ctx.state.reviews.get(item.approvalId))); }
     // Keep ACK cards visible after disappearance: disappearance alone cannot confirm our decision.
-    for (const [approvalId, review] of ctx.state.reviews) if (!known.has(approvalId) && review.locked) node.append(renderApprovalCard(ctx, task, { approvalId, kind: 'permission', toolName: null, summary: '已不再出现在当前 pending 清单；答复采用情况仍以回执证据为准。', truncated: false, sourceComplete: true, responseState: review.review.response.state, readOnlyReason: null }, review));
-    if (!data.items?.length && !ctx.state.reviews.size) node.append(empty('当前没有可归属的待处理审批', '此刻没有 pending 不表示任务已完成。'));
+    for (const [approvalId, review] of ctx.state.reviews) if (!known.has(approvalId) && review.locked) node.append(renderApprovalCard(ctx, task, { approvalId, kind: 'permission', toolName: null, summary: '此操作已不在待审批列表中，答复采用情况仍以后台回执为准。', truncated: false, sourceComplete: true, responseState: review.review.response.state, readOnlyReason: null }, review));
+    if (!data.items?.length && !ctx.state.reviews.size) node.append(empty('当前没有待处理审批', '任务是否完成，请查看任务状态。'));
     if (data.nextCursor) node.append(button(ctx, '继续读取审批列表', 'approvals.list', { taskId: task.taskId, cursor: data.nextCursor }, { busy: ctx.state.pending.has(`task:${task.taskId}:approvals`) }));
   }
   node.append(messageFor(ctx, `task:${task.taskId}:approvals`) ?? ''); return node;
 }
-function responseLabel(state: string): string { return ({ none: '待处理', intent_recorded: '答复意图已记录 · 结果待确认', awaiting_native: '答复已发送 · 等待原生确认', confirmed: '原生已确认本次答复', resolved_unattributed: '已不再待处理 · 无法确认采用了哪次答复', unknown: '答复结果待确认' } as Record<string, string>)[state] ?? state; }
+function responseLabel(state: string): string { return ({ none: '待处理', intent_recorded: '答复已记录 · 等待确认', awaiting_native: '答复已发送 · 等待确认', confirmed: '已确认本次答复', resolved_unattributed: '已结束 · 采用的答复待确认', unknown: '答复结果待确认' } as Record<string, string>)[state] ?? state; }
 function renderApprovalCard(ctx: RenderContext, task: UiTask, item: UiApprovalPreview, content: ReviewContent | undefined): HTMLElement {
   const data = { taskId: task.taskId, approvalId: item.approvalId };
   const descriptor = content?.review;
   const card = el('article', 'approval-card', el('div', 'section-toolbar', el('h4', '', item.toolName ?? item.kind), badge(responseLabel(descriptor?.response.state ?? item.responseState), 'attention')), el('code', 'identity-code', item.approvalId), el('p', '', item.summary), item.truncated && badge('摘要已截断', 'attention'));
-  card.append(kv([['来源完整性', descriptor?.content?.sourceComplete ?? item.sourceComplete ? '完整来源已保存' : '缺少完整可信来源'], ['当前读取', content?.loadedComplete ? '全文已加载并经 Host 校验' : '摘要预览，尚未读全']]));
-  if (!content) card.append(button(ctx, '打开审阅描述', 'approval.open', data, { busy: ctx.state.pending.has(`approval:${item.approvalId}`) }));
+  const loading = ctx.state.pending.has(`approval:${item.approvalId}`);
+  const completeSource = descriptor?.content?.sourceComplete ?? item.sourceComplete;
+  const progress = el('p', `approval-read-status ${content?.loadedComplete ? 'complete' : ''}`, loading ? '正在加载并校验完整操作…' : content?.loadedComplete ? '✓ 完整操作已加载并校验' : completeSource ? '当前仅显示摘要。' : '完整来源不可用，此操作仅可查看。');
+  progress.setAttribute('role', 'status'); card.append(progress);
+  if (!content) card.append(button(ctx, '查看完整操作', 'approval.open', data, { primary: true, busy: loading }));
   else {
-    card.append(kv([['任务 / attempt', `${descriptor!.taskId} / ${descriptor!.owner.attemptIndex}`], ['command 归属', descriptor!.owner.commandId]]));
-    const identity = el('details', 'review-identity', el('summary', '', '审批归属、版本与内容指纹'), kv([['session', descriptor!.owner.sessionId], ['review ID', descriptor!.reviewId], ['approval revision', descriptor!.approvalRevision], ['native revision', descriptor!.nativeRevision], ['内容范围', descriptor!.content ? `${bytes(descriptor!.content.totalBytes)} · ${descriptor!.content.schema}` : '无可用来源'], ['SHA-256', descriptor!.content?.sha256], ['审阅令牌有效至', date(descriptor!.expiresAtMs)]]));
+    const identity = el('details', 'review-identity', el('summary', '', '审批归属与校验详情'), kv([['任务 / 执行轮次', `${descriptor!.taskId} / ${descriptor!.owner.attemptIndex}`], ['操作 ID', descriptor!.owner.commandId], ['会话 ID', descriptor!.owner.sessionId], ['审阅 ID', descriptor!.reviewId], ['审批版本', descriptor!.approvalRevision], ['后台版本', descriptor!.nativeRevision], ['内容范围', descriptor!.content ? `${bytes(descriptor!.content.totalBytes)} · ${descriptor!.content.schema}` : '无可用来源'], ['SHA-256', descriptor!.content?.sha256], ['本次审阅有效至', date(descriptor!.expiresAtMs)]]));
     identity.dataset.details = `identity:${item.approvalId}`; card.append(identity);
     if (descriptor!.redactions.length) card.append(el('p', 'field-hint', `脱敏：${descriptor!.redactions.map(redaction => `${redaction.category}${redaction.decisionRelevant ? '（影响决策，整体只读）' : ''}`).join('、')}`));
     if (content.text) card.append(renderPermissionContent(content.text, item.approvalId));
-    if (!content.loadedComplete && descriptor!.content?.sourceComplete) card.append(button(ctx, `加载并校验完整内容（${bytes(descriptor!.content.totalBytes)}）`, 'approval.read', { ...data, reviewId: descriptor!.reviewId }, { busy: content.loading }));
-    card.append(button(ctx, '重新读取当前审阅', 'approval.open', data, { busy: ctx.state.pending.has(`approval:${item.approvalId}`) }));
+    card.append(button(ctx, content.locked || !completeSource || descriptor!.readOnlyReason ? '刷新审批状态' : content.loadedComplete ? '重新加载操作' : '查看完整操作', 'approval.open', data, { primary: !content.loadedComplete && !content.locked && completeSource && !descriptor!.readOnlyReason, busy: loading, reason: ctx.state.pending.has(`approval:${item.approvalId}:respond`) ? '正在提交答复，请稍候。' : null }));
     if (descriptor!.decisions.length) {
       const decisions = el('div', 'approval-decisions');
       for (const option of descriptor!.decisions) {
@@ -253,12 +265,12 @@ function renderApprovalCard(ctx: RenderContext, task: UiTask, item: UiApprovalPr
         decisions.append(actionWithReason(ctx, option.decision === 'accept' ? '只批准本次操作' : '拒绝本次操作', 'approval.respond', { ...data, decision: option.decision }, reason, option.decision === 'accept', `approval:${item.approvalId}:respond`));
       }
       card.append(decisions);
-    } else card.append(notice('不支持此交互的答复形式，请在执行侧原生会话处理。', 'warning'));
+    } else card.append(notice('此操作暂不能在工作台答复，请在后台原始会话中处理。', 'warning'));
     if (descriptor!.response.actionId) card.append(el('code', 'identity-code', `action: ${descriptor!.response.actionId}`));
     if (content.error) card.append(notice(content.error, 'warning'));
   }
   const readOnly = descriptor?.readOnlyReason ?? item.readOnlyReason;
-  if (readOnly) card.append(notice(`只读：${readOnly}`, 'warning'), button(ctx, '原生处理指引', 'guidance.open', { topic: 'approval' }));
+  if (readOnly) card.append(notice(`只读：${readOnly}`, 'warning'), button(ctx, '查看处理方法', 'guidance.open', { topic: 'approval' }));
   card.append(messageFor(ctx, `approval:${item.approvalId}`) ?? ''); return card;
 }
 function renderPermissionContent(raw: string, approvalId: string): HTMLElement {
@@ -296,7 +308,7 @@ function renderDelivery(ctx: RenderContext, snapshot: UiSnapshot, task: UiTask):
   const manifest = snapshot.delivery.manifest;
   node.append(section('不可变交付快照', el('div', 'inline-actions', button(ctx, manifest ? '刷新文件清单' : '加载快照与文件清单', 'artifacts.list', { taskId: task.taskId }, { busy: ctx.state.pending.has(`task:${task.taskId}:artifacts`) }), button(ctx, ctx.state.patchLoaded ? '重新读取 patch' : '读取 patch 文字', 'patch.read', { taskId: task.taskId, offset: '0' }, { busy: ctx.state.pending.has(`task:${task.taskId}:patch`) }))));
   if (manifest) {
-    node.append(kv([['快照状态', manifest.state], ['base commit', manifest.baseCommit], ['比较范围', '相对 workspace base commit 的累计变化，可能包含先前任务'], ['文件范围', 'Git tracked + 未忽略的 untracked'], ['捕获开始', date(manifest.captureStartedAtMs)], ['捕获结束', date(manifest.captureCompletedAtMs)], ['一致性', manifest.consistency === 'lease_held_non_atomic' ? '持有调度 lease，逐文件捕获；不是原子目录快照' : '旧数据一致性未知'], ['manifest SHA-256', manifest.manifestSha256], ['文件计数', manifest.fileCount === null ? '未知' : `${manifest.fileCount} 项（可用 ${manifest.availableFileCount}，缺口 ${manifest.unavailableFileCount}）`]]));
+    node.append(kv([['快照状态', manifest.state], ['起始提交', manifest.baseCommit], ['比较范围', '相对任务目录起始提交的累计变化，可能包含先前任务'], ['文件范围', 'Git 已跟踪文件与未忽略的未跟踪文件'], ['捕获开始', date(manifest.captureStartedAtMs)], ['捕获结束', date(manifest.captureCompletedAtMs)], ['一致性', manifest.consistency === 'lease_held_non_atomic' ? '保存期间保留资源占用，逐文件捕获；各文件的保存时间可能不同' : '旧数据一致性未知'], ['交付清单 SHA-256', manifest.manifestSha256], ['文件计数', manifest.fileCount === null ? '未知' : `${manifest.fileCount} 项（可用 ${manifest.availableFileCount}，缺口 ${manifest.unavailableFileCount}）`]]));
     if (manifest.unavailableReason || manifest.state !== 'available') node.append(notice(manifest.unavailableReason ?? '此任务没有完整历史文件快照；不能使用当前 worktree 冒充历史 Diff。', 'warning'));
     const files = el('div', 'artifact-files');
     for (const file of snapshot.delivery.files as UiArtifactFile[]) files.append(renderArtifactFile(ctx, task, file, manifest.manifestSha256));
@@ -304,8 +316,8 @@ function renderDelivery(ctx: RenderContext, snapshot: UiSnapshot, task: UiTask):
     if (snapshot.delivery.nextCursor) node.append(button(ctx, '继续读取文件清单', 'artifacts.list', { taskId: task.taskId, cursor: snapshot.delivery.nextCursor }, { busy: ctx.state.pending.has(`task:${task.taskId}:artifacts`) }));
     const canReview = manifest.state === 'available' && !!manifest.manifestSha256 && manifest.fileListComplete && !snapshot.delivery.nextCursor && snapshot.delivery.files.length === manifest.fileCount && ctx.state.deliveryVisited;
     const unopenedFiles = snapshot.delivery.files.filter(file => file.nativeDiff.available && !ctx.state.inspectedFiles.has(file.fileId));
-    const reason = mutationReason(snapshot, 'artifactSnapshots') ?? (!canReview ? '需要完整的 manifest、文件范围及已查看的交付与核验信息。' : task.status === 'verifying' ? '核验尚未结束。' : !snapshot.delivery.reviewed && unopenedFiles.length ? `请先打开 ${unopenedFiles.length} 个尚未查看的不可变文件 Diff。` : null);
-    node.append(section('本客户端审阅', el('p', '', snapshot.delivery.reviewed ? '✓ 本客户端已标记审阅此 manifest。' : '完成所需变更检查与功能验收后，可记录本窗口的审阅结果。'), actionWithReason(ctx, snapshot.delivery.reviewed ? '撤销本客户端审阅标记' : '标记本客户端已审阅', 'review.set', { taskId: task.taskId, manifestSha256: manifest.manifestSha256 ?? '', reviewed: String(!snapshot.delivery.reviewed) }, reason, true), el('p', 'field-hint', '标记绑定 task + manifest hash，仅保存在此 Host 窗口；不改变后台任务、不合并代码、不表示其他客户端已验收。')));
+    const reason = mutationReason(snapshot, 'artifactSnapshots') ?? (!canReview ? '需要完整交付清单、文件列表，以及已查看的交付与核验信息。' : task.status === 'verifying' ? '核验尚未结束。' : !snapshot.delivery.reviewed && unopenedFiles.length ? `请先打开 ${unopenedFiles.length} 个尚未查看的不可变文件 Diff。` : null);
+    node.append(section('本窗口审阅', el('p', '', snapshot.delivery.reviewed ? '✓ 本窗口已标记审阅这份交付。' : '完成变更检查与功能验收后，可记录本窗口的审阅结果。'), actionWithReason(ctx, snapshot.delivery.reviewed ? '撤销已审阅标记' : '标记已审阅', 'review.set', { taskId: task.taskId, manifestSha256: manifest.manifestSha256 ?? '', reviewed: String(!snapshot.delivery.reviewed) }, reason, true), el('p', 'field-hint', '标记仅用于当前窗口，绑定本任务的这份交付。代码合并与其他客户端的验收需分别进行。')));
   }
   if (ctx.state.patchLoaded) node.append(section(ctx.state.patchNextOffset === null ? '完整 patch 文字' : '部分 patch · 尚未完整载入', code(ctx.state.patch || '此可用 patch 为空。', '累计 patch 文字'), ctx.state.patchNextOffset !== null && button(ctx, '继续读取 patch（UTF-16 offset）', 'patch.read', { taskId: task.taskId, offset: String(ctx.state.patchNextOffset) }, { busy: ctx.state.pending.has(`task:${task.taskId}:patch`) }), el('p', 'field-hint', 'patch 不包含未跟踪文件内容；分页 offset 单位为 UTF-16 code units。')));
   const artifact = ctx.state.artifact;
@@ -336,33 +348,33 @@ function renderEvents(ctx: RenderContext, task: UiTask): HTMLElement {
   node.append(messageFor(ctx, `task:${task.taskId}:events`) ?? ''); return node;
 }
 function renderResources(ctx: RenderContext, snapshot: UiSnapshot): HTMLElement {
-  const node = el('div', 'resources-page', heading('RESOURCES / POOL SCOPE', '资源管理', '账号、Worker 与任务 workspace 属于整个 pool；项目筛选不会改变资源绑定。', button(ctx, '刷新资源', 'resources.refresh', {}, { busy: ctx.state.pending.has('resources.refresh') })));
-  node.append(section('账号', el('p', 'field-hint', `从执行侧 ${snapshot.connection.host} 的原生文件选择器导入 1–100 个 OAuth JSON 文件。同 alias 可能覆盖池内记录；Webview 不接收凭据或源路径。`), actionWithReason(ctx, '从执行侧文件导入账号', 'accounts.import', {}, mutationReason(snapshot, 'importAccounts'), true), ctx.state.importSummary && notice(ctx.state.importSummary), !snapshot.resources.accounts.length && empty('此池尚无账号', '已有历史任务仍可查看。导入不会自动创建或启动 Worker。'), ...snapshot.resources.accounts.map(account => renderAccount(ctx, snapshot, account.alias))));
+  const node = el('div', 'resources-page', heading('ZCODE / 资源', '资源管理', '管理当前连接目录中的账号、执行器与任务目录。这里显示全部项目的资源。', button(ctx, '刷新资源', 'resources.refresh', {}, { busy: ctx.state.pending.has('resources.refresh') })));
+  node.append(section('账号', el('p', 'field-hint', `从 ${snapshot.connection.host} 选择 1–100 个 OAuth JSON 文件。同名账号可能覆盖已有记录。`), actionWithReason(ctx, '导入账号文件', 'accounts.import', {}, mutationReason(snapshot, 'importAccounts'), true), ctx.state.importSummary && notice(ctx.state.importSummary), !snapshot.resources.accounts.length && empty('尚无账号', '导入账号后，可为它启动执行器。已有历史任务仍可查看。'), ...snapshot.resources.accounts.map(account => renderAccount(ctx, snapshot, account.alias))));
   const workerId = input(ctx.state.workerId, 'workerId'); workerId.placeholder = '例如 wrk-01';
-  const accountSelect = select(ctx.state.workerAccount, 'workerAccount', [['', '请选择明确账号'], ...snapshot.resources.accounts.map(account => [account.alias, `${account.alias} · ${account.provider} · ${account.health}`] as [string, string])]);
+  const accountSelect = select(ctx.state.workerAccount, 'workerAccount', [['', '请选择账号'], ...snapshot.resources.accounts.map(account => [account.alias, `${account.alias} · ${account.provider} · ${resourceState(account.health)}`] as [string, string])]);
   const selectedAccount = snapshot.resources.accounts.find(account => account.alias === ctx.state.workerAccount);
-  const startReason = mutationReason(snapshot, 'startWorker') ?? (!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/.test(ctx.state.workerId) ? 'Worker ID 须为 1–64 个字母、数字、下划线或连字符。' : !selectedAccount ? '请选择账号。' : snapshot.resources.workers.some(worker => worker.accountAlias === selectedAccount.alias && worker.state !== 'stopped') ? '此账号已有未停止的 Worker，请先检查其状态。' : ['blocked', 'invalid', 'cooling'].includes(selectedAccount.health) ? '此账号当前健康状态不允许启动。' : null);
-  node.append(section('Workers', el('div', 'worker-start-form', field('Worker ID', workerId), field('绑定账号', accountSelect), actionWithReason(ctx, '启动此绑定的 Worker', 'worker.start', {}, startReason, true)), messageFor(ctx, 'worker.start'), !snapshot.resources.workers.length && empty('尚无 Worker', '选择明确账号与 Worker ID 后启动；ready 仅表示可连接。'), ...snapshot.resources.workers.map(worker => {
+  const startReason = mutationReason(snapshot, 'startWorker') ?? (!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/.test(ctx.state.workerId) ? '名称须为 1–64 个字母、数字、下划线或连字符。' : !selectedAccount ? '请选择账号。' : snapshot.resources.workers.some(worker => worker.accountAlias === selectedAccount.alias && worker.state !== 'stopped') ? '此账号已有未停止的执行器，请先检查其状态。' : ['blocked', 'invalid', 'cooling'].includes(selectedAccount.health) ? '此账号当前状态不允许启动。' : null);
+  node.append(section('执行器', el('p', 'field-hint', '执行器使用绑定账号运行任务；每个账号同时使用一个执行器。'), el('div', 'worker-start-form', field('执行器名称', workerId), field('绑定账号', accountSelect), actionWithReason(ctx, '启动执行器', 'worker.start', {}, startReason, true)), messageFor(ctx, 'worker.start'), !snapshot.resources.workers.length && empty('尚无执行器', '填写名称并选择账号后启动。'), ...snapshot.resources.workers.map(worker => {
     const occupied = worker.leaseTaskIds.length > 0 || worker.runningTaskCount === undefined || worker.runningTaskCount !== 0;
-    const stopReason = mutationReason(snapshot, 'stopWorker') ?? (!worker.processOwned ? '当前 Worker 未确认由本池拥有。' : worker.state !== 'ready' ? '仅可停止归属确认且 ready 的 Worker。' : occupied ? '存在原生活动、未知活动计数或调度占用，不能停止。' : null);
-    const probeReason = mutationReason(snapshot, 'quotaProbe') ?? (worker.state !== 'ready' ? '查询额度需要 ready Worker。' : null);
-    return el('article', 'resource-card', el('div', 'section-toolbar', el('h4', '', worker.workerId), badge(worker.state, worker.state === 'ready' ? 'success' : 'attention')), kv([['绑定账号', worker.accountAlias], ['runtime 版本', worker.version], ['原生活动 runningTaskCount', worker.runningTaskCount === undefined ? '未知' : worker.runningTaskCount], ['调度 lease', worker.leaseTaskIds.length ? worker.leaseTaskIds.join('、') : '无已知 lease'], ['本池进程归属', worker.processOwned ? '已确认' : '尚未确认']]), ...worker.leaseTaskIds.map(taskId => button(ctx, `查看占用任务 ${taskId}`, 'task.select', { taskId })), el('div', 'resource-actions', actionWithReason(ctx, '查询认证与当前额度', 'worker.probe', { workerId: worker.workerId }, probeReason, false, `worker:${worker.workerId}:probe`), actionWithReason(ctx, '停止空闲 Worker', 'worker.stop', { workerId: worker.workerId }, stopReason, false, `worker:${worker.workerId}:stop`)), el('p', 'field-hint', '查询会连接官方服务读取认证与额度，可能更新 unknown health；不发送模型回合。ready 不保证空闲。'), messageFor(ctx, `worker:${worker.workerId}`));
+    const stopReason = mutationReason(snapshot, 'stopWorker') ?? (!worker.processOwned ? '尚未确认此执行器属于当前连接目录。' : worker.state !== 'ready' ? '执行器尚未就绪，暂不能从这里停止。' : occupied ? '执行器仍在运行、状态未知或有任务占用，暂不能停止。' : null);
+    const probeReason = mutationReason(snapshot, 'quotaProbe') ?? (worker.state !== 'ready' ? '执行器就绪后可查询额度。' : null);
+    return el('article', 'resource-card', el('div', 'section-toolbar', el('h4', '', worker.workerId), badge(resourceState(worker.state), worker.state === 'ready' ? 'success' : 'attention')), kv([['绑定账号', worker.accountAlias], ['运行版本', worker.version], ['正在运行的操作数', worker.runningTaskCount === undefined ? '未知' : worker.runningTaskCount], ['占用任务', worker.leaseTaskIds.length ? worker.leaseTaskIds.join('、') : '无已知占用'], ['管理归属', worker.processOwned ? '属于当前连接目录' : '尚未确认']]), ...worker.leaseTaskIds.map(taskId => button(ctx, `查看占用任务 ${taskId}`, 'task.select', { taskId })), el('div', 'resource-actions', actionWithReason(ctx, '查询认证与额度', 'worker.probe', { workerId: worker.workerId }, probeReason, false, `worker:${worker.workerId}:probe`), actionWithReason(ctx, '停止空闲执行器', 'worker.stop', { workerId: worker.workerId }, stopReason, false, `worker:${worker.workerId}:stop`)), el('p', 'field-hint', '查询会连接官方服务，更新账号认证与额度。执行器就绪后仍可能被任务占用。'), messageFor(ctx, `worker:${worker.workerId}`));
   })));
   const baseRef = input(ctx.state.baseRef, 'baseRef');
-  node.append(section('任务 workspaces', el('p', 'field-hint', '从干净源仓库创建新分支和隔离 git worktree；不会自动 stash、commit、合并或清理。目录由执行侧原生选择器确认。'), el('div', 'workspace-create-form', field('Base ref', baseRef, '如 HEAD、main 或明确提交；源仓库由 Host 选择。', ctx.state.validation.baseRef), actionWithReason(ctx, '选择源仓库并创建 workspace', 'workspace.create', {}, mutationReason(snapshot, 'createWorkspace') ?? (!ctx.state.baseRef.trim() ? '请输入 base ref。' : null), true)), messageFor(ctx, 'workspace.create'), !snapshot.resources.workspaces.length && empty('尚无任务 workspace', '先选择源仓库并创建隔离 worktree，然后再派发任务。'), ...snapshot.resources.workspaces.map(workspace => el('article', 'resource-card', el('div', 'section-toolbar', el('h4', '', workspace.workspaceId), badge(workspace.state)), kv([['源仓库', workspace.repositoryPath], ['实际 worktree', workspace.worktreePath], ['分支', workspace.branch], ['base commit', workspace.baseCommit], ['占用任务', workspace.activeTaskId ?? '无已知占用']]), workspace.activeTaskId && button(ctx, '查看关联任务', 'task.select', { taskId: workspace.activeTaskId })))));
+  node.append(section('任务目录', el('p', 'field-hint', '从干净的 Git 仓库创建独立任务目录与新分支，供任务在其中修改和核验代码。'), el('div', 'workspace-create-form', field('起始分支或提交', baseRef, '如 HEAD、main 或提交 ID；点击按钮后选择源仓库。', ctx.state.validation.baseRef), actionWithReason(ctx, '选择仓库并创建任务目录', 'workspace.create', {}, mutationReason(snapshot, 'createWorkspace') ?? (!ctx.state.baseRef.trim() ? '请输入起始分支或提交。' : null), true)), messageFor(ctx, 'workspace.create'), !snapshot.resources.workspaces.length && empty('尚无任务目录', '从源仓库创建任务目录后，即可提交任务。'), ...snapshot.resources.workspaces.map(workspace => el('article', 'resource-card', el('div', 'section-toolbar', el('h4', '', workspace.workspaceId), badge(resourceState(workspace.state))), kv([['源仓库', workspace.repositoryPath], ['执行目录', workspace.worktreePath], ['分支', workspace.branch], ['起始提交', workspace.baseCommit], ['占用任务', workspace.activeTaskId ?? '无已知占用']]), workspace.activeTaskId && button(ctx, '查看关联任务', 'task.select', { taskId: workspace.activeTaskId })))));
   return node;
 }
 function renderAccount(ctx: RenderContext, snapshot: UiSnapshot, alias: string): HTMLElement {
   const account = snapshot.resources.accounts.find(item => item.alias === alias)!;
   const expanded = ctx.state.expandedAccounts.has(alias); const quota = snapshot.resources.quotas[alias] as UiQuota | undefined;
   const toggle = button(ctx, expanded ? '收起额度来源' : '展开额度来源', 'account.toggle', { alias }); toggle.setAttribute('aria-expanded', String(expanded)); toggle.setAttribute('aria-controls', `quota-${alias}`);
-  const node = el('article', 'resource-card account-card', el('div', 'section-toolbar', el('div', '', el('h4', '', alias), el('span', 'muted', `${account.provider}${account.plan ? ` · ${account.plan}` : ''}`)), badge(account.health, ['blocked', 'invalid', 'cooling'].includes(account.health) ? 'attention' : account.health === 'available' ? 'success' : '')), toggle);
+  const node = el('article', 'resource-card account-card', el('div', 'section-toolbar', el('div', '', el('h4', '', alias), el('span', 'muted', `${account.provider}${account.plan ? ` · ${account.plan}` : ''}`)), badge(resourceState(account.health), ['blocked', 'invalid', 'cooling'].includes(account.health) ? 'attention' : account.health === 'available' ? 'success' : '')), toggle);
   if (expanded) {
     const content = el('div', 'quota-detail'); content.id = `quota-${alias}`;
     content.append(button(ctx, '读取已有额度快照（无网络）', 'quota.read', { accountAlias: alias }, { busy: ctx.state.pending.has(`quota:${alias}`) }));
     if (!quota) content.append(el('p', 'muted', '尚未读取额度记录。账号健康与额度分别判断，不使用旧额度自动派发。'));
     else {
-      content.append(el('div', 'quota-sources', renderQuota('Live 查询快照', quota.live, quota.displayFreshnessWindowMs), renderQuota('导入快照', quota.imported, quota.displayFreshnessWindowMs)));
+      content.append(el('div', 'quota-sources', renderQuota('在线查询快照', quota.live, quota.displayFreshnessWindowMs), renderQuota('导入快照', quota.imported, quota.displayFreshnessWindowMs)));
       content.append(el('p', quota.lastProbe.state === 'failed' ? 'field-error' : 'field-hint', `最近查询：${quota.lastProbe.state === 'never' ? '从未查询' : quota.lastProbe.state === 'failed' ? `失败 ${quota.lastProbe.errorCode ?? ''}；保留上次成功值` : '成功'}${quota.lastProbe.attemptedAtMs ? ` · ${date(quota.lastProbe.attemptedAtMs)}` : ''}`));
     }
     content.append(messageFor(ctx, `quota:${alias}`) ?? ''); node.append(content);
@@ -371,11 +383,11 @@ function renderAccount(ctx: RenderContext, snapshot: UiSnapshot, alias: string):
 }
 function renderQuota(title: string, quota: UiQuotaSnapshot | null, freshnessWindowMs: number): HTMLElement {
   const node = el('div', 'quota-source', el('h5', '', title));
-  if (!quota) { node.append(el('p', 'muted', title.startsWith('Live') ? '未查询' : '没有导入额度快照')); return node; }
+  if (!quota) { node.append(el('p', 'muted', title.startsWith('在线') ? '未查询' : '没有导入额度快照')); return node; }
   const sourceTime = (time: UiQuotaSnapshot['generatedAt']): string => time ? time.atMs !== null ? date(time.atMs) : `${time.value}（单位 ${time.unit}，不推测日期）` : '未知';
   let freshness = quota.freshness;
   if (quota.source === 'live_probe' && quota.observedAtMs !== null) { const age = Date.now() - quota.observedAtMs; freshness = age < 0 ? 'unknown' : age > freshnessWindowMs ? 'stale' : quota.freshness; }
-  node.append(el('div', 'quota-value', quota.remaining === null ? '余量未知' : String(quota.remaining), el('span', '', quota.unit === 'unknown' ? '单位未知' : quota.unit)), kv([['来源', quota.source === 'live_probe' ? '用户显式 live probe' : '导入时快照'], ['总量 / 已用', `${quota.total === null ? '未知' : quota.total} / ${quota.used === null ? '未知' : quota.used}`], ['观测时间', date(quota.observedAtMs)], ['官方生成时间', sourceTime(quota.generatedAt)], ['官方服务器时间', sourceTime(quota.serverTime)], ['下次重置', sourceTime(quota.nextReset)], ['新鲜度', freshness === 'fresh' ? '近期观测（不保证云端余额）' : freshness === 'stale' ? '陈旧快照' : '未知']]));
+  node.append(el('div', 'quota-value', quota.remaining === null ? '余量未知' : String(quota.remaining), el('span', '', quota.unit === 'unknown' ? '单位未知' : quota.unit)), kv([['来源', quota.source === 'live_probe' ? '用户发起的在线查询' : '导入时快照'], ['总量 / 已用', `${quota.total === null ? '未知' : quota.total} / ${quota.used === null ? '未知' : quota.used}`], ['观测时间', date(quota.observedAtMs)], ['官方生成时间', sourceTime(quota.generatedAt)], ['官方服务器时间', sourceTime(quota.serverTime)], ['下次重置', sourceTime(quota.nextReset)], ['新鲜度', freshness === 'fresh' ? '近期观测（不保证云端余额）' : freshness === 'stale' ? '陈旧快照' : '未知']]));
   const percentage = quota.percentage;
   if (percentage && percentage.scale !== 'unknown') {
     const value = percentage.scale === '0_to_1' ? percentage.value * 100 : percentage.value;
@@ -388,31 +400,33 @@ function renderComposer(ctx: RenderContext, snapshot: UiSnapshot): HTMLElement {
   const workspace = snapshot.resources.workspaces.find(item => item.workspaceId === draft.workspaceId);
   const worker = snapshot.resources.workers.find(item => item.workerId === draft.workerId);
   const account = snapshot.resources.accounts.find(item => item.alias === worker?.accountAlias);
-  const node = el('div', 'composer-page', heading('DISPATCH / EXPLICIT BINDING', '新任务', '草稿仅保留在本窗口内存，尚未派发。重载或关闭窗口可能丢失。', button(ctx, '返回任务列表', 'page', { page: 'tasks' })));
-  node.append(notice('请选择明确的任务 workspace 和 Worker。不会自动分配、轮换账号或后台排队。'));
+  const node = el('div', 'composer-page', heading('ZCODE / 新任务', '新任务', '选择任务目录与执行器，写下你要完成的工作。草稿在关闭或重载窗口后可能丢失。', button(ctx, '返回任务列表', 'page', { page: 'tasks' })));
+  node.append(el('p', 'field-hint', '任务目录是代码修改的位置；执行器决定使用哪个账号。'));
   const form = el('form', 'composer-form'); form.noValidate = true; form.addEventListener('submit', event => { event.preventDefault(); ctx.action('dispatch'); });
-  form.append(el('div', 'form-grid', field('已登记任务 workspace', select(draft.workspaceId, 'draft.workspaceId', [['', '请选择 workspace'], ...snapshot.resources.workspaces.map(item => [item.workspaceId, `${item.workspaceId} · ${item.branch}${item.activeTaskId ? ' · 已占用' : ''}`] as [string, string])]), undefined, ctx.state.validation.workspaceId), field('明确 Worker', select(draft.workerId, 'draft.workerId', [['', '请选择 Worker'], ...snapshot.resources.workers.map(item => [item.workerId, `${item.workerId} · ${item.accountAlias} · ${item.state}`] as [string, string])]), undefined, ctx.state.validation.workerId)));
-  if (workspace) form.append(kv([['源仓库', workspace.repositoryPath], ['实际执行 worktree', workspace.worktreePath], ['分支', workspace.branch], ['base commit', workspace.baseCommit]]));
-  if (worker) { form.append(kv([['绑定账号', `${worker.accountAlias} / ${account?.provider ?? 'provider 未知'}`], ['账号健康', account?.health], ['原生活动', worker.runningTaskCount === undefined ? '未知' : worker.runningTaskCount], ['调度 lease', worker.leaseTaskIds.join('、') || '无已知占用']])); const unavailable = workerUnavailable(snapshot, worker.workerId); if (unavailable) form.append(notice(unavailable, 'warning')); }
-  if (account?.health === 'unknown') form.append(notice('账号健康未知；不会将其显示为已认证可用，可显式查询认证与额度。', 'warning'));
+  form.append(el('div', 'form-grid', field('任务目录', select(draft.workspaceId, 'draft.workspaceId', [['', '请选择任务目录'], ...snapshot.resources.workspaces.map(item => [item.workspaceId, `${item.workspaceId} · ${item.branch}${item.activeTaskId ? ' · 已占用' : ''}`] as [string, string])]), undefined, ctx.state.validation.workspaceId), field('执行器', select(draft.workerId, 'draft.workerId', [['', '请选择执行器'], ...snapshot.resources.workers.map(item => [item.workerId, `${item.workerId} · ${item.accountAlias} · ${resourceState(item.state)}`] as [string, string])]), undefined, ctx.state.validation.workerId)));
+  if (workspace) form.append(kv([['源仓库', workspace.repositoryPath], ['执行目录', workspace.worktreePath], ['分支', workspace.branch], ['起始提交', workspace.baseCommit]]));
+  if (worker) { form.append(kv([['绑定账号', `${worker.accountAlias} / ${account?.provider ?? '服务商未知'}`], ['账号状态', account ? resourceState(account.health) : '未知'], ['正在运行的操作数', worker.runningTaskCount === undefined ? '未知' : worker.runningTaskCount], ['占用任务', worker.leaseTaskIds.join('、') || '无已知占用']])); const unavailable = workerUnavailable(snapshot, worker.workerId); if (unavailable) form.append(notice(unavailable, 'warning')); }
+  if (account?.health === 'unknown') form.append(notice('账号认证状态尚未确认，可在“资源”页查询认证与额度。', 'warning'));
   const prompt = el('textarea'); prompt.value = draft.prompt; prompt.rows = 9; prompt.maxLength = 100_001; prompt.dataset.field = 'draft.prompt'; prompt.dataset.focus = 'draft.prompt';
-  form.append(field('任务提示词', prompt, '仅发送给所选 Worker 的当前任务；不会写入页面持久状态。最多 100000 个 UTF-16 单元。', ctx.state.validation.prompt));
+  form.append(field('要完成的工作', prompt, '描述目标、要求和验收方式。内容只发送给所选执行器的当前任务。', ctx.state.validation.prompt));
   const model = input(draft.modelId, 'draft.modelId'); const retries = input(String(draft.busyRetryLimit), 'draft.busyRetryLimit', 'number'); retries.min = '0'; retries.max = '10'; retries.step = '1';
-  form.append(el('div', 'form-grid', field('模型 ID', model, '显式模型值；由后端检查支持及既有绑定。', ctx.state.validation.modelId), field('运行 mode', select(draft.mode, 'draft.mode', ['build', 'edit', 'plan', 'yolo', 'guarded'].map(mode => [mode, mode])), 'mode 语义由实际 runtime 决定。'), field('会话', select(draft.session, 'draft.session', [['continue', '继续最近可复用会话'], ['new', '新会话']]), '仅同 workspace、同 Worker 且已确认停止的会话可复用；没有则新建。'), field('模型繁忙立即续跑上限', retries, '初次派发后默认 3 次；0 关闭，最多 10 次。仅原会话发送固定“继续”。', ctx.state.validation.busyRetryLimit)));
-  const commands = section('核验命令', el('p', 'field-hint', '逐项设置 executable、参数数组和超时；不会自动读取仓库文档或日志执行命令。最多 10 项。'));
+  form.append(el('div', 'form-grid', field('模型 ID', model, '后台会检查模型是否可用。', ctx.state.validation.modelId), field('运行模式', select(draft.mode, 'draft.mode', ['build', 'edit', 'plan', 'yolo', 'guarded'].map(mode => [mode, mode])), '由已安装的运行环境决定具体行为。'), field('会话', select(draft.session, 'draft.session', [['continue', '继续最近可复用会话'], ['new', '新会话']]), '仅复用同任务目录、同执行器且已停止的会话；没有则新建。'), field('模型繁忙时续跑次数', retries, '默认 3 次；0 关闭，最多 10 次。使用原会话发送“继续”。', ctx.state.validation.busyRetryLimit)));
+  const commands = section('核验命令', el('p', 'field-hint', '任务执行结束后运行这些命令检查结果，最多 10 项。'));
   for (const [index, command] of draft.verifyCommands.entries()) {
     const executable = input(command.command, `verify.${index}.command`); const args = input(ctx.state.rawFields.get(`verify.${index}.args`) ?? JSON.stringify(command.args), `verify.${index}.args`); const timeout = input(String(command.timeoutMs), `verify.${index}.timeoutMs`, 'number'); timeout.min = '100'; timeout.max = '300000';
-    commands.append(el('div', 'verification-command', el('h4', '', `命令 ${index + 1}`), field('Executable', executable, undefined, ctx.state.validation[`verify.${index}.command`]), field('参数（JSON 字符串数组）', args, '如 ["--test","test/example.test.ts"]；不经过 shell。', ctx.state.validation[`verify.${index}.args`]), field('超时 ms', timeout, undefined, ctx.state.validation[`verify.${index}.timeoutMs`]), button(ctx, '移除此命令', 'verify.remove', { index: String(index) })));
+    commands.append(el('div', 'verification-command', el('h4', '', `命令 ${index + 1}`), field('命令名称', executable, undefined, ctx.state.validation[`verify.${index}.command`]), field('参数（JSON 字符串数组）', args, '如 ["--test","test/example.test.ts"]；不经过 shell。', ctx.state.validation[`verify.${index}.args`]), field('超时（毫秒）', timeout, undefined, ctx.state.validation[`verify.${index}.timeoutMs`]), button(ctx, '移除此命令', 'verify.remove', { index: String(index) })));
   }
   if (!draft.verifyCommands.length) commands.append(code('git diff --check', '未配置命令时使用此默认核验'));
   commands.append(button(ctx, '添加核验命令', 'verify.add', {}, { reason: draft.verifyCommands.length >= 10 ? '已达 10 项上限。' : null })); form.append(commands);
   const reason = mutationReason(snapshot, 'dispatchTask') ?? (ctx.state.submittedDraftToken === draft.submitToken ? '此草稿已提交，保留原请求身份。请检查回执或查询原请求；建立独立任务请返回列表后点击“新任务”。' : null);
-  form.append(actionWithReason(ctx, '派发此任务', 'dispatch', {}, reason, true), messageFor(ctx, 'dispatch') ?? '', el('p', 'field-hint', '提交时 Host 固定 request ID 并防止重复点击；结果未知时仅查询原请求，不会自动重发。'));
+  form.append(actionWithReason(ctx, '提交任务', 'dispatch', {}, reason, true), messageFor(ctx, 'dispatch') ?? '', el('p', 'field-hint', '提交后可在任务列表查看进度。若结果待确认，请通过回执查询原请求。'));
   node.append(form); return node;
 }
 function renderSettings(ctx: RenderContext, snapshot: UiSnapshot): HTMLElement {
   const connection = snapshot.connection; const interval = input(ctx.state.settingsInterval, 'settingsInterval', 'number'); interval.min = '15'; interval.max = '300';
   const valid = Number.isInteger(Number(ctx.state.settingsInterval)) && Number(ctx.state.settingsInterval) >= 15 && Number(ctx.state.settingsInterval) <= 300;
   const diagnostic = { host: connection.host, pool: connection.poolHome, mode: connection.mode, state: connection.state, storeId: connection.storeId, instanceId: connection.instanceId, daemonVersion: connection.daemonVersion, error: connection.error?.code, taskId: snapshot.selectedTaskId, revision: snapshot.detail?.revision };
-  return el('div', 'settings-page', heading('SETTINGS / HOST DIAGNOSTICS', '设置与诊断', '连接设置属于当前执行侧；保存不会连接服务或修改已有任务。'), section('执行侧与连接', kv([['当前 Host', connection.host], ['pool 绝对路径', connection.poolHome], ['连接模式', connection.mode === 'mock' ? '演示（无实际服务）' : '真实 daemon'], ['daemon 版本', connection.daemonVersion], ['store / instance', `${connection.storeId ?? '—'} / ${connection.instanceId ?? '—'}`], ['信任状态', connection.trusted ? '已信任' : '受限模式']]), button(ctx, '在 Host User / Remote Settings 修改 pool', 'settings.open'), el('p', 'field-hint', 'pool 使用 machine scope；不能由仓库设置或页面任意路径覆盖。切换 Host 请使用 VS Code Remote 窗口。'), button(ctx, '查看 Linux / SSH / WSL 运行指引', 'guidance.open', { topic: 'connection' })), section('可见视图发现间隔', field('概览刷新间隔（秒）', interval, '默认 30，范围 15–300；仅影响可见视图的任务发现，不查询额度或触发模型操作。', ctx.state.validation.settingsInterval), actionWithReason(ctx, '保存刷新间隔', 'settings.save', {}, valid ? null : '请输入 15–300 的整数。', true), messageFor(ctx, 'settings.save')), section('脱敏诊断预览', el('p', 'field-hint', '仅复制 Host/pool 身份、连接状态、脱敏错误码、task/request ID 和 revision；不附原生日志、审批正文、提示词或凭据。'), code(JSON.stringify(diagnostic, null, 2), '待复制的脱敏诊断预览'), button(ctx, '复制脱敏诊断', 'diagnostics.copy'), messageFor(ctx, 'diagnostics.copy')));
+  const diagnostics = el('details', 'settings-diagnostics', el('summary', '', '高级：诊断信息'), el('p', 'field-hint', '复制内容包括连接身份、状态、版本与错误码，以及当前任务 ID。审批正文、提示词和凭据不会附在诊断中。'), code(JSON.stringify(diagnostic, null, 2), '待复制的脱敏诊断预览'), button(ctx, '复制脱敏诊断', 'diagnostics.copy'), messageFor(ctx, 'diagnostics.copy'));
+  diagnostics.dataset.details = 'settings-diagnostics';
+  return el('div', 'settings-page', heading('ZCODE / 设置', '设置', '更改当前运行环境的连接目录和刷新频率。'), section('连接', kv([['运行环境', connection.host], ['连接目录', connection.poolHome], ['连接模式', connection.mode === 'mock' ? '演示（模拟数据）' : '后台服务'], ['工作区信任', connection.trusted ? '已信任' : '受限模式']]), el('div', 'inline-actions', button(ctx, '选择连接目录', 'connection.configure', {}, { busy: ctx.state.pending.has('connection.configure') }), button(ctx, '更多 VS Code 设置', 'settings.open'), button(ctx, '连接帮助', 'guidance.open', { topic: 'connection' })), el('p', 'field-hint', '切换目录后需重新连接。切换远程计算环境请使用 VS Code Remote 窗口。'), messageFor(ctx, 'connection.configure')), section('自动刷新', field('刷新间隔（秒）', interval, '默认 30 秒，范围 15–300 秒；工作台可见时自动发现新任务。', ctx.state.validation.settingsInterval), actionWithReason(ctx, '保存刷新间隔', 'settings.save', {}, valid ? null : '请输入 15–300 的整数。', true), messageFor(ctx, 'settings.save')), diagnostics);
 }

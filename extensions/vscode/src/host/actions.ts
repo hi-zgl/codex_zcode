@@ -17,6 +17,8 @@ export interface NativeAdapter {
   openDiff(taskId: string, manifestSha256: string, file: UiArtifactFile, read: (side: 'base'|'final') => Promise<string>): Promise<void>;
   openCurrentFile?(worktreePath:string,relativePath:string):Promise<void>;
   openSettings(): Promise<void>;
+  configureConnection?(): Promise<void>;
+  startDaemon?(): Promise<void>;
   saveInterval(value: number): Promise<void>;
   copyDiagnostics(value: string): Promise<void>;
   guidance(topic: string): Promise<void>;
@@ -27,6 +29,7 @@ export interface ServiceOptions {
   native: NativeAdapter;
   onSnapshot(snapshot: UiSnapshot): void;
   overviewIntervalSeconds?: number;
+  initialGeneration?: number;
   supported?: boolean; environmentReason?: string;
   configurationError?: HostError;
   projectContext?():ProjectContext;
@@ -56,16 +59,17 @@ export class ActionService implements RouterTarget {
   private visible = false;
   constructor(private readonly options: ServiceOptions) {
     this.state = {
-      connection:{state:options.configurationError?'error':'disconnected',mode:options.mode,generation:0,host:options.host,poolHome:options.poolHome,trusted:options.native.trusted(),lastReceivedAtMs:null,stale:false,storeId:null,instanceId:null,daemonVersion:null,capabilities:{},error:options.configurationError?safeError(options.configurationError):null,supported:options.supported??true,environmentReason:options.environmentReason??null},
+      connection:{state:options.configurationError?'error':'disconnected',mode:options.mode,generation:options.initialGeneration??0,host:options.host,poolHome:options.poolHome,trusted:options.native.trusted(),lastReceivedAtMs:null,stale:false,storeId:null,instanceId:null,daemonVersion:null,capabilities:{},error:options.configurationError?safeError(options.configurationError):null,supported:options.supported??true,environmentReason:options.environmentReason??null},
       tasks:[],scope:'recent_50_loaded',total:null,listNextCursor:null,selectedTaskId:null,detail:null,
       resources:{accounts:[],workers:[],workspaces:[],quotas:{}},approvals:null,delivery:{manifest:null,files:[],nextCursor:null,reviewed:false},draft:blankDraft(),actions:[],overviewIntervalSeconds:options.overviewIntervalSeconds??30,notice:null,
     };
-    this.poll = new PollCoordinator(signal=>this.refresh(signal),signal=>this.wait(signal),()=>this.state.overviewIntervalSeconds*1000,error=>{this.state.connection.stale=true;this.state.connection.error=safeError(error);this.emit();});
+    this.poll = new PollCoordinator(signal=>this.refreshSnapshot(signal),signal=>this.wait(signal),()=>this.state.overviewIntervalSeconds*1000,error=>{this.state.connection.stale=true;this.state.connection.error=safeError(error);this.emit();});
   }
   generation(): number {return this.state.connection.generation;}
   snapshot(): UiSnapshot {this.state.connection.trusted=this.options.native.trusted();this.state.preferredRepositoryId=this.options.projectContext?resolvePreferredRepositoryId(this.options.projectContext(),this.state.resources.workspaces):null;return this.state;}
   private emit(): void {if (!this.disposed) this.options.onSnapshot(this.snapshot());}
   setVisible(visible: boolean): void {this.visible=visible;this.poll.setVisible(visible&&!!this.client);}
+  setOverviewInterval(seconds:number): void {if(this.state.overviewIntervalSeconds===seconds)return;this.state.overviewIntervalSeconds=seconds;this.poll.intervalChanged();this.emit();}
   trustChanged(): void {this.emit();}
   private requireConnection(): TypedClient {if(!this.client)throw new HostError('NOT_CONNECTED','Connect explicitly to the selected host and pool.');return this.client;}
   private requireCapability(name: string, mutate = false): void {
@@ -104,14 +108,21 @@ export class ActionService implements RouterTarget {
     }catch(error){if(generation===this.generation()){this.client?.dispose();this.client=undefined;this.state.connection.state='error';this.state.connection.error=safeError(error);this.emit();}throw error;}
   }
   disconnect(emit=true): void {
-    this.poll.setVisible(false);this.connectionAbort.abort();this.selectionAbort.abort();this.connectionAbort=new AbortController();this.selectionAbort=new AbortController();this.client?.dispose();this.client=undefined;
+    this.poll.setVisible(false);this.poll.reset();this.connectionAbort.abort();this.selectionAbort.abort();this.connectionAbort=new AbortController();this.selectionAbort=new AbortController();this.client?.dispose();this.client=undefined;
     this.state.connection={...this.state.connection,state:this.options.configurationError?'error':'disconnected',generation:this.generation()+1,stale:this.state.tasks.length>0,error:this.options.configurationError?safeError(this.options.configurationError):null,storeId:null,instanceId:null,capabilities:{}};
     this.state.detail=null;this.state.selectedTaskId=null;this.state.legacyResult=null;this.state.approvals=null;this.state.delivery={manifest:null,files:[],nextCursor:null,reviewed:false};this.state.resources.quotas={};this.reviews.clear();this.taskCache.clear();this.deliveryOpened.clear();this.viewedFiles.clear();this.listSequence++;this.selectionSequence++;
     this.state.tasks=[];this.state.total=null;this.state.listNextCursor=null;this.historicalPagesLoaded=false;this.listFilter=undefined;
     if(emit)this.emit();
   }
-  async refresh(signal=this.connectionAbort.signal): Promise<void> {
+  refresh(signal=this.connectionAbort.signal): Promise<void> {return this.poll.requestRefresh(false,signal);}
+  private async refreshSnapshot(signal:AbortSignal): Promise<void> {
     const generation=this.generation();const overview=await this.requireConnection().legacy('overview',{},signal);this.assertCurrent(generation);
+    const detailRequests=new Map<string,Promise<UiTaskDetail>>();
+    const detailFor=(taskId:string):Promise<UiTaskDetail>=>{
+      let pending=detailRequests.get(taskId);
+      if(!pending){pending=this.ui('ui_get_task_detail',{apiVersion:1,task_id:taskId},signal).then(value=>value.data);detailRequests.set(taskId,pending);}
+      return pending;
+    };
     this.state.resources.accounts=overview.accounts;
     this.state.resources.workspaces=overview.workspaces;
     this.state.resources.workers=overview.workers.map(worker=>({...worker,leaseTaskIds:overview.tasks.filter(task=>task.workerId===worker.workerId&&task.leaseHeld).map(task=>task.taskId)}));
@@ -122,19 +133,19 @@ export class ActionService implements RouterTarget {
     else{
       this.state.tasks=overview.tasks.slice(-50).reverse();this.state.scope='recent_50_loaded';this.state.total=null;this.state.listNextCursor=null;
       if(this.state.connection.capabilities.taskDetail?.version){
-        const details=await Promise.all(overview.tasks.map(task=>this.ui('ui_get_task_detail',{apiVersion:1,task_id:task.taskId},signal).then(value=>value.data)));
+        const details=await Promise.all(overview.tasks.map(task=>detailFor(task.taskId)));
         this.assertCurrent(generation);for(const detail of details)this.mergeDetail(detail,false);
       }
     }
     // Workspace occupancy is authoritative across the whole pool, including tasks older
     // than the overview window. Resolve every held workspace before showing worker controls.
     if(this.state.connection.capabilities.taskDetail?.version){
-      const held=overview.workspaces.map(w=>w.activeTaskId).filter((id):id is string=>!!id);
-      const details=await Promise.all(held.map(taskId=>this.ui('ui_get_task_detail',{apiVersion:1,task_id:taskId},signal).then(v=>v.data)));
+      const held=[...new Set(overview.workspaces.map(w=>w.activeTaskId).filter((id):id is string=>!!id))];
+      const details=await Promise.all(held.map(detailFor));
       for(const detail of details)this.mergeDetail(detail,false);
       for(const worker of this.state.resources.workers)worker.leaseTaskIds=[...new Set([...worker.leaseTaskIds,...details.filter(t=>t.workerId===worker.workerId&&t.leaseHeld).map(t=>t.taskId)])];
     }
-    if(this.state.selectedTaskId&&this.state.connection.capabilities.taskDetail?.version)this.mergeDetail((await this.ui('ui_get_task_detail',{apiVersion:1,task_id:this.state.selectedTaskId},signal)).data);
+    if(this.state.selectedTaskId&&this.state.connection.capabilities.taskDetail?.version)this.mergeDetail(await detailFor(this.state.selectedTaskId));
     this.state.connection.lastReceivedAtMs=Date.now();this.state.connection.stale=false;this.state.connection.error=null;this.emit();
   }
   async listTasks(payload: RequestPayload<'tasks.list'>,signal=this.connectionAbort.signal): Promise<unknown> {
@@ -178,10 +189,10 @@ export class ActionService implements RouterTarget {
     this.mergeDetail(detail);this.emit();return detail;
   }
   private async freshTask(taskId: string): Promise<UiTaskDetail> {this.requireCapability('taskDetail');const detail=(await this.ui('ui_get_task_detail',{apiVersion:1,task_id:taskId})).data;this.mergeDetail(detail);return detail;}
-  private async wait(signal: AbortSignal): Promise<boolean> {
-    if(!this.client)return false;
+  private async wait(signal: AbortSignal): Promise<boolean|'idle'> {
+    if(!this.client)return 'idle';
     const tasks=this.state.tasks.filter(task=>task.leaseHeld||!['succeeded','failed','cancelled'].includes(task.status)).slice(0,50);
-    if(!tasks.length)return false;
+    if(!tasks.length)return 'idle';
     const generation=this.generation();const started=Date.now();
     const result=await this.client.legacy('wait',{task_ids:tasks.map(task=>task.taskId),after_revision:Object.fromEntries(tasks.map(task=>[task.taskId,task.revision])),timeout_sec:25},signal);this.assertCurrent(generation);
     for(const task of result.tasks){
@@ -208,7 +219,7 @@ export class ActionService implements RouterTarget {
     return this.serialize(`${generation}:${key}`,async()=>{
       this.assertCurrent(generation);
       this.action({key,phase:'pending',message:'Submitting the explicit operation; waiting for daemon state.',taskId});
-      try{const result=await operation();this.assertCurrent(generation);this.action({key,phase:'succeeded',message:key.startsWith('cancel:')?'Cancellation was requested. Occupancy remains until termination is confirmed.':'The daemon acknowledged this operation. Current task state remains authoritative.',taskId});await this.refresh();this.assertCurrent(generation);return result;}
+      try{const result=await operation();this.assertCurrent(generation);this.action({key,phase:'succeeded',message:key.startsWith('cancel:')?'Cancellation was requested. Occupancy remains until termination is confirmed.':'The daemon acknowledged this operation. Current task state remains authoritative.',taskId});await this.poll.requestRefresh(true,this.connectionAbort.signal);this.assertCurrent(generation);return result;}
       catch(error){const safe=safeError(error);if(generation===this.generation())this.action({key,phase:safe.unknownOutcome?'unknown':'failed',message:safe.message,taskId,error:safe});throw error;}
     });
   }
@@ -232,7 +243,7 @@ export class ActionService implements RouterTarget {
       try{
         const result=await client.legacy('dispatch_task',{...payload,request_id:requestId},signal);this.assertCurrent(generation);
         this.action({key:`dispatch:${requestId}`,phase:'succeeded',message:'Task dispatch was acknowledged.',requestId,taskId:result.task.taskId});
-        await this.refresh();await this.selectTask(result.task.taskId);return {...result,requestId};
+        await this.poll.requestRefresh(true,signal);this.assertCurrent(generation);await this.selectTask(result.task.taskId);return {...result,requestId};
       }catch(error){const safe=safeError(error);if(generation===this.generation())this.action({key:`dispatch:${requestId}`,phase:'unknown',message:'Dispatch result is unresolved. Query this request ID before an explicit retry.',requestId,error:safe});throw error;}
     })();
     this.submissions.set(submitToken,{hash:fingerprint,generation,promise});return promise;
@@ -337,9 +348,21 @@ export class ActionService implements RouterTarget {
     if(request.type!=='ready'&&request.generation!==this.generation())throw new HostError('STALE_CONNECTION','Reload the current workbench state.');
     switch(request.type){
       case 'ready':this.emit();return this.snapshot();
+      case 'connection.configure':{
+        if(!this.options.native.configureConnection)throw new HostError('ACTION_UNAVAILABLE','Connection configuration is unavailable in this Host.');
+        await this.options.native.configureConnection();return {configured:true};
+      }
+      case 'daemon.start':{
+        if(!this.options.native.trusted())throw new HostError('WORKSPACE_UNTRUSTED','Trust this workspace before starting the daemon.');
+        if(this.options.mode!=='real')throw new HostError('ACTION_UNAVAILABLE','Daemon startup is available only for a real connection.');
+        if(this.state.connection.supported===false)throw new HostError('UNSUPPORTED_PLATFORM',this.state.connection.environmentReason??'This host does not support real daemon connections.');
+        if(this.options.configurationError)throw this.options.configurationError;
+        if(!this.options.native.startDaemon)throw new HostError('ACTION_UNAVAILABLE','Daemon startup is unavailable in this Host.');
+        await this.options.native.startDaemon();return {started:true};
+      }
       case 'connect':return this.connect();
       case 'disconnect':this.disconnect();return this.state;
-      case 'refresh':case 'resources.refresh':await this.poll.requestRefresh();return this.state;
+      case 'refresh':case 'resources.refresh':await this.refresh();return this.state;
       case 'tasks.list':return this.listTasks(request.payload);
       case 'task.select':return this.selectTask(request.payload.taskId);
       case 'draft.change':this.state.draft=request.payload.draft;this.emit();return {saved:true};
@@ -393,7 +416,7 @@ export class ActionService implements RouterTarget {
         await this.options.native.setState(this.reviewStorageKey(taskId,manifestSha256),reviewed);this.state.delivery.reviewed=reviewed;const summary=this.state.tasks.find(task=>task.taskId===taskId);if(summary)summary.deliveryReview=reviewed?'reviewed':'pending';this.emit();return {reviewed};
       }
       case 'settings.open':await this.options.native.openSettings();return {opened:true};
-      case 'settings.save':await this.options.native.saveInterval(request.payload.overviewIntervalSeconds);this.state.overviewIntervalSeconds=request.payload.overviewIntervalSeconds;this.emit();return {saved:true};
+      case 'settings.save':await this.options.native.saveInterval(request.payload.overviewIntervalSeconds);this.setOverviewInterval(request.payload.overviewIntervalSeconds);return {saved:true};
       case 'diagnostics.copy':{const c=this.state.connection;const value=JSON.stringify({host:c.host,pool:c.poolHome,mode:c.mode,state:c.state,storeId:c.storeId,instanceId:c.instanceId,daemonVersion:c.daemonVersion,error:c.error?.code,taskId:this.state.selectedTaskId,revision:this.state.detail?.revision},null,2);await this.options.native.copyDiagnostics(value);return {copied:true};}
       case 'guidance.open':await this.options.native.guidance(request.payload.topic);return {opened:true};
     }

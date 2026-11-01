@@ -13,6 +13,7 @@ const task = z.object({ taskId: id }).strict();
 const page = z.object({ taskId: id, cursor: z.number().int().nonnegative().optional() }).strict();
 export const requestPayloads = {
   ready: empty, connect: empty, disconnect: empty, refresh: empty,
+  'connection.configure': empty, 'daemon.start': empty,
   'tasks.list': z.object({ filter: z.object({ repositoryId:id.optional(),workspaceId:id.optional(),workerId:id.optional(),statuses:z.array(z.enum(['queued','dispatching','running','waiting_approval','verifying','succeeded','failed','cancelled','blocked','interrupted'])).max(10).optional(),leaseHeld:z.boolean().optional(),query:z.string().max(200).optional() }).strict().optional(),cursor:z.string().max(2048).optional() }).strict(), 'task.select': task,
   'draft.change': z.object({ draft: draftSchema }).strict(),
   dispatch: z.object({ submitToken: id }).strict(),

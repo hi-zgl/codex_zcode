@@ -55,7 +55,7 @@ test('bootstrap and explicit connection do not turn generation changes into fail
   const initial = snapshot(); initial.connection.state = 'disconnected'; initial.connection.generation = 0; initial.connection.storeId = null; initial.tasks = []; initial.detail = null; initial.selectedTaskId = null;
   const h = harness(initial); h.reply(request => request.type === 'ready' ? initial : {}); await h.app.start();
   assert.deepEqual(h.sent.map(request => request.type), ['ready']);
-  assert.match(h.root.textContent!, /连接你的执行侧/);
+  assert.match(h.root.textContent!, /连接任务工作台/);
   const connected = snapshot();
   h.reply(request => { assert.equal(request.type, 'connect'); h.push(connected); return connected; });
   await h.app.action('connect');
@@ -73,6 +73,90 @@ test('connection generation evicts old business reads but accepts its own discon
   assert.equal((await read as BridgeError).detail.code, 'STALE_CONNECTION');
   assert.equal(h.app.state.errors.has('disconnect'), false);
   assert.equal(h.app.state.snapshot!.connection.generation, 2);
+});
+
+test('directory selection and explicit daemon start accept their own connection generation changes', async () => {
+  for (const action of ['connection.configure', 'daemon.start'] as const) {
+    const h = harness(); h.push();
+    const oldRead = h.bridge.request('events.read', { taskId: 'task-approval' }).catch(error => error);
+    const next = snapshot(); next.connection.generation = 2;
+    if (action === 'connection.configure') { next.connection.poolHome = '/chosen/pool'; next.connection.state = 'disconnected'; next.connection.storeId = null; }
+    h.reply(request => { assert.equal(request.type, action); h.push(next); return {}; });
+    await h.app.action(action);
+    assert.equal((await oldRead as BridgeError).detail.code, 'STALE_CONNECTION');
+    assert.equal(h.app.state.errors.has(action), false);
+    assert.equal(h.app.state.snapshot!.connection.generation, 2);
+    h.bridge.receive({ v: 1, type: 'state', generation: 1, data: snapshot() });
+    assert.equal(h.app.state.snapshot!.connection.generation, 2, 'an old Host cannot roll the connection back');
+    assert.deepEqual(h.sent.filter(request => request.type !== 'events.read').map(request => request.type), [action]);
+  }
+});
+
+test('disconnected welcome exposes direct directory selection and gates explicit real daemon start', () => {
+  const s = snapshot(); s.connection.state = 'disconnected'; s.tasks = []; s.selectedTaskId = null; s.detail = null;
+  const state = createState(); applySnapshot(state, s);
+  let dom = renderApp({ state, action: () => {} });
+  assert.ok(choose(dom, 'connection.configure'));
+  assert.equal(dom.querySelector('[data-action="daemon.start"]'), null, 'mock mode cannot start a daemon');
+  s.connection.mode = 'real'; applySnapshot(state, s); dom = renderApp({ state, action: () => {} });
+  assert.equal(choose(dom, 'daemon.start').disabled, false);
+  s.connection.trusted = false; applySnapshot(state, s); dom = renderApp({ state, action: () => {} });
+  assert.equal(choose(dom, 'daemon.start').disabled, true);
+  assert.match(choose(dom, 'daemon.start').getAttribute('aria-label')!, /信任/);
+  s.connection.trusted = true; s.connection.supported = false; applySnapshot(state, s); dom = renderApp({ state, action: () => {} });
+  assert.equal(choose(dom, 'daemon.start').disabled, true);
+});
+
+test('one approval click opens and validates the complete content without sending a decision', async () => {
+  const h = harness(); h.push(); const descriptor = review();
+  h.app.state.tab = 'approvals';
+  h.app.state.snapshot!.approvals = { items: [{ approvalId: descriptor.approvalId, kind: 'permission', toolName: 'Write', summary: 'Write src/demo.ts', truncated: true, sourceComplete: true, responseState: 'none', readOnlyReason: null }], total: 1, nextCursor: null, approvalSetRevision: 'set', stateKnown: true, unattributedCount: 0 };
+  let release!: (value: unknown) => void;
+  h.reply(request => request.type === 'approval.open' ? descriptor : new Promise(resolve => { assert.equal(request.type, 'approval.read'); release = resolve; }));
+  const opening = h.app.action('approval.open', { taskId: descriptor.taskId, approvalId: descriptor.approvalId });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(h.sent.map(request => request.type), ['approval.open', 'approval.read']);
+  assert.equal(h.app.state.reviews.get(descriptor.approvalId)!.loading, true);
+  assert.equal(choose(h.root as unknown as ParentNode, 'approval.respond', 'accept').disabled, true);
+  assert.equal(h.root.querySelector('[data-action="approval.read"]'), null, 'complete reading has no extra click');
+  await h.app.action('approval.open', { taskId: descriptor.taskId, approvalId: descriptor.approvalId });
+  assert.equal(h.sent.length, 2, 'a duplicate click does not create a second review');
+  release({ review: descriptor, loadedComplete: true, text: fixture.approvalContents[descriptor.reviewId] }); await opening;
+  assert.equal(h.app.state.reviews.get(descriptor.approvalId)!.loadedComplete, true);
+  assert.equal(choose(h.root as unknown as ParentNode, 'approval.respond', 'accept').disabled, false);
+  assert.equal(h.sent.some(request => request.type === 'approval.respond'), false);
+});
+
+test('combined approval reading rejects changed ownership and hashes, and retries from a fresh review', async () => {
+  for (const mismatch of ['hash', 'owner', 'task'] as const) {
+    const h = harness(); h.push(); const descriptor = review(); let fail = true;
+    h.reply(request => {
+      if (request.type === 'approval.open') return descriptor;
+      assert.equal(request.type, 'approval.read'); const changed = structuredClone(descriptor);
+      if (fail) { if (mismatch === 'hash') changed.content!.sha256 = 'a'.repeat(64); else if (mismatch === 'owner') changed.owner.commandId = 'other-command'; else changed.taskId = 'other-task'; }
+      return { review: changed, loadedComplete: true, text: fixture.approvalContents[descriptor.reviewId] };
+    });
+    const data = { taskId: descriptor.taskId, approvalId: descriptor.approvalId };
+    await h.app.action('approval.open', data);
+    let entry = h.app.state.reviews.get(descriptor.approvalId)!;
+    assert.equal(entry.loadedComplete, false, mismatch); assert.equal(entry.loading, false, mismatch); assert.equal(entry.text, null, mismatch);
+    assert.match(h.app.state.errors.get(`approval:${descriptor.approvalId}`)!, /INTEGRITY_MISMATCH/);
+    assert.ok(approvalDisabled(h.app.state, entry, 'accept'));
+    fail = false; await h.app.action('approval.open', data); entry = h.app.state.reviews.get(descriptor.approvalId)!;
+    assert.equal(entry.loadedComplete, true); assert.equal(h.app.state.errors.has(`approval:${descriptor.approvalId}`), false);
+    assert.deepEqual(h.sent.map(request => request.type), ['approval.open', 'approval.read', 'approval.open', 'approval.read']);
+  }
+});
+
+test('a task change during combined review loading discards the old content', async () => {
+  const h = harness(); h.push(); const descriptor = review(); let release!: (value: unknown) => void;
+  h.reply(request => request.type === 'approval.open' ? descriptor : new Promise(resolve => { release = resolve; }));
+  const opening = h.app.action('approval.open', { taskId: descriptor.taskId, approvalId: descriptor.approvalId });
+  await new Promise(resolve => setImmediate(resolve));
+  h.push(snapshot('task-complete'));
+  release({ review: descriptor, loadedComplete: true, text: fixture.approvalContents[descriptor.reviewId] }); await opening;
+  assert.equal(h.app.state.reviews.size, 0); assert.equal(h.root.textContent!.includes('Complete approval content'), false);
+  assert.equal(h.sent.some(request => request.type === 'approval.respond'), false);
 });
 
 test('approval acceptance needs complete validated content; decline does not need read-all', () => {
@@ -100,7 +184,7 @@ test('approval response sends a bound single decision and keeps ACK pending with
   const request = h.sent[0]!; assert.equal(request.type, 'approval.respond');
   assert.deepEqual(request.payload, { taskId: descriptor.taskId, approvalId: descriptor.approvalId, decision: 'accept', reviewId: descriptor.reviewId, contentSha256: descriptor.content!.sha256, approvalRevision: descriptor.approvalRevision, nativeRevision: descriptor.nativeRevision });
   assert.equal(h.app.state.snapshot!.detail!.status, 'waiting_approval');
-  assert.match(h.root.textContent!, /等待原生确认/);
+  assert.match(h.root.textContent!, /等待确认|等待后台确认/);
   assert.equal(choose(h.root as unknown as ParentNode, 'approval.respond', 'accept').disabled, true);
   assert.equal(choose(h.root as unknown as ParentNode, 'approval.respond', 'decline').disabled, true);
   assert.equal(h.root.querySelector('img'), null, 'projected approval text must never become markup');

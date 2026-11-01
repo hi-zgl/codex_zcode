@@ -31,7 +31,9 @@ export ZCODE_POOL_HOME="$HOME/.zcode_pool"
 "$HOME/.local/share/zcode-pool-app/node_modules/.bin/zcode-pool" daemon
 ```
 
-在 VS Code 扩展的执行侧设置同一个绝对 pool 路径，再点连接。扩展不替你启动服务。另一个终端使用相同 `ZCODE_POOL_HOME` 可以调用 `overview`、`daemon-stop` 等 CLI 命令。关闭 VS Code 不停止 daemon。
+在 VS Code 扩展的执行侧设置同一个绝对 pool 路径，再点连接。也可以在工作台点击“启动后台并连接”：插件先尝试连接已有服务，仅在服务不可达时调用已安装 CLI 的 `daemon-start`。它不启动 Worker 或模型。另一个终端使用相同 `ZCODE_POOL_HOME` 可以调用 `overview`、`daemon-stop` 等 CLI 命令。关闭 VS Code 不停止 daemon。
+
+默认安装目录采用上面的 `~/.local/share/zcode-pool-app`。非默认安装位置可在执行侧 User/Remote Settings 配置 `zcodePool.daemonCliPath`，指向安装包的 `bin/zcode-pool.mjs` 或 npm `.bin/zcode-pool`；`zcodePool.daemonNodePath` 指定 Node 24+ 的绝对路径，留空时从执行侧 PATH 的绝对目录查找。插件不执行工作区 npm 脚本，不自动安装或下载后台。
 
 长期运行时，安装后的 CLI 也提供 `service-generate` 和 `service-install`，生成的 unit 固定实际 Node、包内 tsx、daemon 入口和安装目录的绝对路径。它们只生成/写入 unit，不会启用服务。审阅 unit 后再按需使用 systemd 用户服务；每个 pool 只选择一种管理方式，不混用手工后台进程和 systemd。升级、迁移安装目录或 Node 后重新生成 unit。
 

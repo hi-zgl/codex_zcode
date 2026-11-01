@@ -10,8 +10,8 @@ export class BridgeError extends Error {
   constructor(readonly detail: UiError) { super(detail.message); this.name = 'BridgeError'; }
 }
 type Pending = { generation: number; type: RequestType; resolve(value: unknown): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout> };
-const writes = new Set<RequestType>(['dispatch', 'cancel', 'reconcile', 'resume', 'approval.respond', 'accounts.import', 'workspace.create', 'worker.start', 'worker.stop', 'worker.probe']);
-const connectionRequests = new Set<RequestType>(['ready', 'connect', 'disconnect']);
+const writes = new Set<RequestType>(['dispatch', 'cancel', 'reconcile', 'resume', 'approval.respond', 'accounts.import', 'workspace.create', 'worker.start', 'worker.stop', 'worker.probe', 'daemon.start']);
+const connectionRequests = new Set<RequestType>(['ready', 'connect', 'disconnect', 'connection.configure', 'daemon.start']);
 
 /** The only Webview message boundary. Never forwards RPC methods or filesystem paths. */
 export class WebviewBridge {
@@ -36,7 +36,7 @@ export class WebviewBridge {
       const timer = setTimeout(() => {
         this.pending.delete(id);
         reject(new BridgeError({ code: writes.has(type) ? 'OUTCOME_UNKNOWN' : 'TIMEOUT', message: writes.has(type) ? '结果待确认。请检查目标状态；此操作不会自动重发。' : '读取超时，请重试读取。', unknownOutcome: writes.has(type) }));
-      }, writes.has(type) ? 60_000 : 35_000);
+      }, type === 'daemon.start' ? 90_000 : writes.has(type) ? 60_000 : 35_000);
       this.pending.set(id, { generation, type, resolve: value => resolve(value as T), reject, timer });
       this.api.postMessage({ v: 1, id, generation, type, payload } as WebviewRequest);
     });
@@ -55,7 +55,7 @@ export class WebviewBridge {
     const response = value as HostResponse;
     const pending = typeof response.id === 'string' ? this.pending.get(response.id) : undefined;
     if (!pending || typeof response.ok !== 'boolean') return;
-    // A connect/disconnect may itself advance generation, including before its ACK.
+    // Connection actions may themselves advance generation, including before their ACK.
     if (response.generation !== this.generation && !(connectionRequests.has(pending.type) && response.generation >= this.generation)) return;
     if (!connectionRequests.has(pending.type) && pending.generation !== response.generation) return;
     this.pending.delete(response.id); clearTimeout(pending.timer);

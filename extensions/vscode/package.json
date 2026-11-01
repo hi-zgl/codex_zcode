@@ -72,11 +72,11 @@
       "zcodePool": [
         {
           "id": "zcodePool.tasks",
-          "name": "Tasks"
+          "name": "任务"
         },
         {
           "id": "zcodePool.resources",
-          "name": "Resources"
+          "name": "资源"
         }
       ]
     },
@@ -167,6 +167,18 @@
         "command": "zcodePool.openSettings",
         "title": "ZCode Pool: Open Settings",
         "icon": "$(settings-gear)"
+      },
+      {
+        "command": "zcodePool.configureConnection",
+        "title": "选择连接目录",
+        "category": "ZCode Pool",
+        "icon": "$(folder-open)"
+      },
+      {
+        "command": "zcodePool.startDaemon",
+        "title": "启动后台并连接",
+        "category": "ZCode Pool",
+        "icon": "$(play)"
       }
     ],
     "menus": {
@@ -241,6 +253,18 @@
           "maximum": 300,
           "scope": "window",
           "description": "Visible-view discovery interval. Does not query quota or dispatch tasks."
+        },
+        "zcodePool.daemonNodePath": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "description": "后台使用的 Node.js 24+ 可执行文件绝对路径；留空从执行侧 PATH 查找 node。仅手动启动后台时使用。"
+        },
+        "zcodePool.daemonCliPath": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "description": "已安装的 zcode-pool CLI 绝对路径；留空使用 ~/.local/share/zcode-pool-app/node_modules/zcode-pool/bin/zcode-pool.mjs。不会执行工作区脚本或自动安装。"
         }
       }
     }

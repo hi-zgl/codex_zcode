@@ -148,7 +148,6 @@ try {
   await action('tab', '[data-tab="approvals"]').click();
   await action('approvals.list').click();
   await action('approval.open').click();
-  await action('approval.read').click();
   await action('approval.respond', '[data-decision="accept"]').waitFor();
   await page.waitForFunction(() => !!document.querySelector('[data-action="approval.respond"][data-decision="accept"]') && !document.querySelector('[data-action="approval.respond"][data-decision="accept"]').disabled);
   await page.screenshot({ path: join(output, 'approval.png'), fullPage: true });
@@ -156,7 +155,7 @@ try {
   await action('approval.respond', '[data-decision="accept"]').click();
   await waitState(() => transport.calls.filter(call => call.method === 'ui_respond_approval').length === 1);
   assert.equal(transport.calls.filter(call => call.method === 'ui_respond_approval').length, 1);
-  report.push('Complete approval read, hash validation and single fingerprint-bound answer');
+  report.push('One-click complete approval read, hash validation and single fingerprint-bound answer');
 
   await action('compose.open').click();
   await checkLayout('compose');

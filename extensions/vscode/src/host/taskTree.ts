@@ -8,11 +8,12 @@ export class TaskTree implements vscode.TreeDataProvider<vscode.TreeItem>,vscode
   refresh():void{this.changed.fire(undefined);}
   getTreeItem(item:vscode.TreeItem):vscode.TreeItem{return item;}
   getChildren():vscode.TreeItem[]{
-    const state=this.snapshot();if(!state.tasks.length){const item=new vscode.TreeItem(state.connection.state==='disconnected'?'Connect to load tasks':'No tasks in the loaded scope');item.contextValue='empty';return [item];}
+    const state=this.snapshot();if(!state.tasks.length){const connected=['connected','legacy-readonly'].includes(state.connection.state);const item=new vscode.TreeItem(connected?'暂无任务 · 打开工作台':'打开工作台并连接');item.contextValue='empty';item.iconPath=new vscode.ThemeIcon('dashboard');item.command={command:'zcodePool.openWorkbench',title:'打开工作台'};return [item];}
     return state.tasks.map(task=>this.item(task));
   }
   private item(task:UiTask):vscode.TreeItem{
-    const item=new vscode.TreeItem(task.taskId);item.id=task.taskId;item.description=`${task.status}${task.leaseHeld?' · lease held':''}`;
+    const labels:Record<string,string>={queued:'排队中',dispatching:'派发中',running:'执行中',waiting_approval:'等待审批',verifying:'核验中',succeeded:'已完成',failed:'失败',cancelled:'已取消',blocked:'受阻',interrupted:'待核对'};
+    const item=new vscode.TreeItem(task.taskId);item.id=task.taskId;item.description=`${labels[task.status]??task.status}${task.leaseHeld?' · 占用中':''}`;
     (item as vscode.TreeItem&{taskId:string}).taskId=task.taskId;
     item.contextValue=active.has(task.status)?'task.active':task.leaseHeld||task.status==='interrupted'?'task.uncertain':'task.finished';
     item.iconPath=new vscode.ThemeIcon(task.status==='waiting_approval'?'shield':task.status==='succeeded'?'pass':task.leaseHeld?'circle-filled':'circle-outline');

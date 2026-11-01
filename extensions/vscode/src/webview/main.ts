@@ -3,7 +3,7 @@ import type { RequestType, RequestPayload } from '../host/protocol.js';
 import type { UiSnapshot, TaskDraft } from '../host/types.js';
 import type { UiApprovalReview, UiRpcResult } from '../../../../src/shared/ui-contract.js';
 import { renderApp } from './components.js';
-import { applySnapshot, approvalDisabled, clearTaskContent, connectionIdentity, createState, defaultFilters, persistedUi, validateDraft, type ArtifactChunk, type DetailTab, type EventPage, type LocalState, type PatchPage } from './state.js';
+import { applySnapshot, approvalDisabled, clearTaskContent, connectionIdentity, createState, defaultFilters, persistedUi, validateDraft, type ArtifactChunk, type DetailTab, type EventPage, type LocalState, type PatchPage, type ReviewContent } from './state.js';
 
 declare function acquireVsCodeApi(): VsCodeApi;
 type Frame = { focus: string | undefined; selection: [number | null, number | null] | null; scroll: Map<string, number>; details: Map<string, boolean> };
@@ -91,6 +91,20 @@ export class WorkbenchApp {
     const sequence = this.selectionSequence; const generation = this.state.snapshot?.connection.generation ?? 0;
     await this.run(key, async () => { const response = await this.bridge.request(type, payload as never); if (this.current(taskId, sequence, generation)) receive(response as T); });
   }
+  private async readApprovalContent(taskId: string, approvalId: string, entry: ReviewContent, sequence: number, generation: number): Promise<void> {
+    const descriptor = entry.review;
+    entry.loading = true; entry.text = null; entry.loadedComplete = false; this.render();
+    try {
+      const response = await this.bridge.request<'approval.read', { review: UiApprovalReview; loadedComplete: boolean; text: string }>('approval.read', { taskId, approvalId, reviewId: descriptor.reviewId });
+      if (!this.current(taskId, sequence, generation) || this.state.reviews.get(approvalId) !== entry) return;
+      const review = response.review;
+      if (review.taskId !== taskId || review.approvalId !== approvalId || review.reviewId !== descriptor.reviewId || review.content?.sha256 !== descriptor.content?.sha256 || review.content?.totalBytes !== descriptor.content?.totalBytes || review.approvalRevision !== descriptor.approvalRevision || review.nativeRevision !== descriptor.nativeRevision || Object.keys(descriptor.owner).some(key => review.owner[key as keyof typeof review.owner] !== descriptor.owner[key as keyof typeof descriptor.owner])) {
+        throw new BridgeError({ code: 'INTEGRITY_MISMATCH', message: '审批内容或归属已变化，请重新查看完整操作。' });
+      }
+      if (entry.locked || entry.review.readOnlyReason || entry.review.state !== 'pending' || entry.review.response.state !== 'none') return;
+      entry.review = review; entry.text = response.text; entry.loadedComplete = response.loadedComplete === true;
+    } finally { entry.loading = false; }
+  }
   async action(name: string, data: Record<string, string> = {}): Promise<void> {
     const snapshot = this.state.snapshot;
     if (name === 'page') {
@@ -142,9 +156,13 @@ export class WorkbenchApp {
       if (this.draftTimer) { clearTimeout(this.draftTimer); this.draftTimer = null; }
       await this.run(name, async () => { const response = await this.bridge.request<typeof name, UiSnapshot>(name, {}); if (response?.connection) this.receiveSnapshot(response); }); return;
     }
+    if (name === 'connection.configure' || name === 'daemon.start') {
+      if (this.draftTimer) { clearTimeout(this.draftTimer); this.draftTimer = null; }
+      await this.run(name, () => this.bridge.request(name, {})); return;
+    }
     if (name === 'tasks.more' || name === 'tasks.reload') { await this.run('tasks.list', () => this.bridge.request('tasks.list', name === 'tasks.more' && snapshot?.listNextCursor ? { cursor: snapshot.listNextCursor } : this.listPayload())); return; }
     if (name === 'refresh' || name === 'resources.refresh' || name === 'settings.open' || name === 'diagnostics.copy') {
-      await this.run(name, async () => { await this.bridge.request(name, {}); this.state.message = name === 'diagnostics.copy' ? '已复制脱敏诊断。' : name === 'settings.open' ? '已打开当前 Host 的 VS Code 设置。' : '已更新当前快照。'; }); return;
+      await this.run(name, async () => { await this.bridge.request(name, {}); this.state.message = name === 'diagnostics.copy' ? '已复制脱敏诊断。' : name === 'settings.open' ? '已打开当前计算环境的 VS Code 设置。' : '已更新任务和资源。'; }); return;
     }
     if (name === 'guidance.open') { await this.run(name, () => this.bridge.request('guidance.open', { topic: data.topic as 'connection' | 'approval' | 'workspace' | 'recovery' })); return; }
     if (name === 'settings.save') {
@@ -155,14 +173,14 @@ export class WorkbenchApp {
     if (name === 'accounts.import') {
       await this.run(name, async () => {
         const response = await this.bridge.request<'accounts.import', { cancelled?: boolean; fileCount?: number; recordCount?: number; duplicateCount?: number; accountCount?: number }>('accounts.import', {});
-        if (!response.cancelled) { this.state.message = `导入已返回：${response.fileCount ?? '—'} 个文件，${response.recordCount ?? response.accountCount ?? '—'} 条记录，同批去重 ${response.duplicateCount ?? '—'}。去重数不是池内已有数；同 alias 可能被覆盖。`; this.state.importSummary = this.state.message; }
+        if (!response.cancelled) { this.state.message = `已导入 ${response.fileCount ?? '—'} 个文件、${response.recordCount ?? response.accountCount ?? '—'} 条记录，本次合并 ${response.duplicateCount ?? '—'} 条重复记录。同名账号可能覆盖已有记录。`; this.state.importSummary = this.state.message; }
       }); return;
     }
     if (name === 'workspace.create') {
-      if (!this.state.baseRef.trim()) { this.state.validation.baseRef = '请输入 base ref。'; this.render(); this.focusInvalid(); return; }
+      if (!this.state.baseRef.trim()) { this.state.validation.baseRef = '请输入起始分支或提交。'; this.render(); this.focusInvalid(); return; }
       await this.run(name, async () => {
         const response = await this.bridge.request<'workspace.create', { cancelled?: boolean; workspace?: { workspaceId: string }; workspaceId?: string }>('workspace.create', { baseRef: this.state.baseRef.trim() });
-        if (!response.cancelled) { this.state.message = '创建已返回，实际 worktree、分支与 base commit 请查看资源列表。'; const id = response.workspace?.workspaceId ?? response.workspaceId; if (id && this.state.draft) { this.state.draft.workspaceId = id; this.state.draftDirty = true; this.scheduleDraft(); } }
+        if (!response.cancelled) { this.state.message = '任务目录已创建，路径、分支与起始提交可在资源列表查看。'; const id = response.workspace?.workspaceId ?? response.workspaceId; if (id && this.state.draft) { this.state.draft.workspaceId = id; this.state.draftDirty = true; this.scheduleDraft(); } }
       }); return;
     }
     if (name === 'worker.start') { await this.run(name, () => this.bridge.request('worker.start', { workerId: this.state.workerId, accountAlias: this.state.workerAccount })); return; }
@@ -205,23 +223,21 @@ export class WorkbenchApp {
       await this.taskRead<unknown>(taskId, name, `task:${taskId}:${label}`, { taskId, ...(data.cursor ? { cursor: data.cursor } : {}) }, () => {}); return;
     }
     if (name === 'approval.open') {
+      if (this.state.pending.has(`approval:${data.approvalId}:respond`)) return;
       const sequence = this.selectionSequence; const generation = snapshot!.connection.generation;
       await this.run(`approval:${data.approvalId}`, async () => {
         const review = await this.bridge.request<'approval.open', UiApprovalReview>('approval.open', { taskId, approvalId: data.approvalId });
         if (!this.current(taskId, sequence, generation)) return;
         if (review.taskId !== taskId || review.approvalId !== data.approvalId) throw new Error('ownership');
-        this.state.reviews.set(review.approvalId, { review, text: null, loadedComplete: false, loading: false, error: null, locked: review.response.state !== 'none' || review.state !== 'pending' });
+        const entry: ReviewContent = { review, text: null, loadedComplete: false, loading: false, error: null, locked: review.response.state !== 'none' || review.state !== 'pending' };
+        this.state.reviews.set(review.approvalId, entry);
+        if (review.content?.sourceComplete && !review.readOnlyReason && !entry.locked) await this.readApprovalContent(taskId, data.approvalId, entry, sequence, generation);
       }); return;
     }
     if (name === 'approval.read') {
       const entry = this.state.reviews.get(data.approvalId); if (!entry) return;
-      const sequence = this.selectionSequence; const generation = snapshot!.connection.generation; entry.loading = true;
-      await this.run(`approval:${data.approvalId}`, async () => {
-        const response = await this.bridge.request<'approval.read', { review: UiApprovalReview; loadedComplete: boolean; text: string }>('approval.read', { taskId, approvalId: data.approvalId, reviewId: entry.review.reviewId });
-        if (!this.current(taskId, sequence, generation) || this.state.reviews.get(data.approvalId) !== entry) return;
-        if (response.review.reviewId !== entry.review.reviewId || response.review.content?.sha256 !== entry.review.content?.sha256) throw new Error('identity');
-        entry.review = response.review; entry.text = response.text; entry.loadedComplete = response.loadedComplete === true; entry.loading = false;
-      }); entry.loading = false; this.render(); return;
+      const sequence = this.selectionSequence; const generation = snapshot!.connection.generation;
+      await this.run(`approval:${data.approvalId}`, () => this.readApprovalContent(taskId, data.approvalId, entry, sequence, generation)); return;
     }
     if (name === 'approval.respond') {
       const entry = this.state.reviews.get(data.approvalId); const decision = data.decision as 'accept' | 'decline';
@@ -233,9 +249,9 @@ export class WorkbenchApp {
           const response = await this.bridge.request<'approval.respond', UiRpcResult<'ui_respond_approval'>['data']>('approval.respond', { taskId, approvalId: data.approvalId, reviewId: entry.review.reviewId, contentSha256: entry.review.content!.sha256, approvalRevision: entry.review.approvalRevision, nativeRevision: entry.review.nativeRevision, decision });
           if (this.state.reviews.get(data.approvalId) !== entry) return;
           entry.review.response = { actionId: response.actionId, decision, state: response.responseState }; entry.review.state = 'response_pending';
-          entry.error = response.responseState === 'resolved_unattributed' ? '此审批已不再待处理，无法确认采用了哪次答复。' : response.responseState === 'confirmed' ? null : '答复已发送，等待原生确认。任务状态与资源占用继续以 daemon 为准。';
+          entry.error = response.responseState === 'resolved_unattributed' ? '此审批已不再待处理，无法确认采用了哪次答复。' : response.responseState === 'confirmed' ? null : '答复已发送，等待后台确认。任务状态与资源占用继续以后台为准。';
         } catch (error) {
-          if (error instanceof BridgeError && error.detail.code === 'APPROVAL_CHANGED') { entry.text = null; entry.loadedComplete = false; entry.locked = false; entry.error = '审批已变化，请重新读取完整内容；旧 hash 不可再使用。'; entry.review.readOnlyReason = 'APPROVAL_CHANGED'; }
+          if (error instanceof BridgeError && error.detail.code === 'APPROVAL_CHANGED') { entry.text = null; entry.loadedComplete = false; entry.locked = false; entry.error = '审批已变化，请重新查看完整操作。'; entry.review.readOnlyReason = 'APPROVAL_CHANGED'; }
           else { entry.locked = true; entry.error = error instanceof BridgeError && error.detail.code === 'APPROVAL_GONE' ? '审批已不再待处理或已失效；无法确认由谁、采用何种答复。' : '答复结果待确认。请读取当前审批或核对执行状态，不会自动重发。'; }
           throw error;
         }
@@ -306,7 +322,7 @@ export class WorkbenchApp {
   }
   private scheduleDraft(): void {
     if (this.draftTimer) clearTimeout(this.draftTimer);
-    this.draftTimer = setTimeout(() => void this.flushDraft().catch(() => { this.state.errors.set('dispatch', '草稿尚未同步到 Host。提交时会重新校验。'); this.render(); }), 250);
+    this.draftTimer = setTimeout(() => void this.flushDraft().catch(() => { this.state.errors.set('dispatch', '草稿尚未同步，提交时会重新校验。'); this.render(); }), 250);
   }
   private async flushDraft(): Promise<void> {
     if (this.draftTimer) { clearTimeout(this.draftTimer); this.draftTimer = null; }

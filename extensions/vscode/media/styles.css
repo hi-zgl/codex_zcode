@@ -154,8 +154,10 @@ input[aria-invalid=true], textarea[aria-invalid=true] { border-color: var(--vsco
 .approval-card, .resource-card { border: 1px solid var(--line); border-radius: 4px; padding: 16px; margin: 12px 0; min-width: 0; }
 .approval-card > p { font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .approval-card > .button { margin: 5px 7px 5px 0; }
-.review-identity, .review-canonical { margin: 13px 0; border: 1px solid var(--line); border-radius: 3px; padding: 9px 11px; }
-.review-identity summary, .review-canonical summary { cursor: pointer; font-size: 11px; color: var(--muted); }
+.approval-card > .approval-read-status { margin: 13px 0 8px; color: var(--muted); font-size: 11px; }
+.approval-card > .approval-read-status.complete { color: var(--success); }
+.review-identity, .review-canonical, .settings-diagnostics { margin: 13px 0; border: 1px solid var(--line); border-radius: 3px; padding: 9px 11px; }
+.review-identity summary, .review-canonical summary, .settings-diagnostics summary { cursor: pointer; font-size: 11px; color: var(--muted); }
 .permission-content { margin-top: 20px; border-top: 1px solid var(--line); padding-top: 18px; }
 .permission-content .section > p { font-size: 12px; overflow-wrap: anywhere; }
 .parameter-label { font-family: var(--mono); color: var(--muted); margin-top: 13px; }

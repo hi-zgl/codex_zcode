@@ -28,9 +28,9 @@ Mock 可体验任务、完整审批、账号/Worker、不可变 Diff、核验、
 ZCODE_POOL_HOME=/绝对路径/测试池 npm run daemon
 ```
 
-选择 **ZCode Pool: Real daemon (explicit connect)** 按 F5，输入同一个绝对 pool 路径。在调试窗口点连接后才会读取 daemon。预先启动已有服务不会自动派发任务、导入账号、probe 额度或恢复观察。首次测试建议使用空测试池与单独的小 Git 仓库。
+选择 **ZCode Pool: Real daemon (explicit connect)** 按 F5，输入同一个绝对 pool 路径。在调试窗口点连接后才会读取 daemon。也可点“选择连接目录”直接修改执行侧路径，无需离开工作台查找设置。预先启动已有服务不会自动派发任务、导入账号、probe 额度或恢复观察。首次测试建议使用空测试池与单独的小 Git 仓库。
 
-安装版通过 User/Remote Settings 的 `zcodePool.poolHome` 指定 pool，生产模式忽略所有调试 Mock 环境变量。切换 pool 后需要重新连接。受限工作区只允许读取，写操作由 Host 再检查 Workspace Trust。
+安装版通过 User/Remote Settings 的 `zcodePool.poolHome` 指定 pool，生产模式忽略所有调试 Mock 环境变量。F5 输入只提供初始目录，随后通过工作台或 User/Remote Settings 修改目录会覆盖本次 F5 初始值，无需重启。切换目录后需要重新连接。受限工作区只允许读取，写操作由 Host 再检查 Workspace Trust。
 
 任务列表优先定位活动文件对应的已登记项目；单根且能唯一确定时默认该项目，否则显示整个池。已有手动筛选或同池恢复值不会被自动覆盖。
 
@@ -38,10 +38,12 @@ ZCODE_POOL_HOME=/绝对路径/测试池 npm run daemon
 
 账号导入仅支持原有 OAuth JSON 格式，不是 `.zsb` 备份。导入由原生文件选择器完成，凭据及导入源路径不进入 Webview。同 alias 导入可能替换既有记录，不会自动启动 Worker。
 
+后台已按[独立安装说明](../distribution.md)安装时，可点“启动后台并连接”。此动作先连接已有服务；服务不可达时使用已安装 CLI 启动后台，再连接。启动需要已信任的 Linux 执行侧，不会启动执行器或模型；关闭界面也不会停止后台。
+
 ### F5 或连接遇到问题
 
 - 没有调试配置：在 Remote SSH 窗口打开本项目根目录，而不是仅打开 `extensions/vscode`。
-- 出现 `INVALID_POOL_HOME` 或 `Set an absolute pool path`：检查路径来源。真实 F5 使用启动时的输入框，需关闭该调试窗口后重新 F5，输入 Linux 执行侧的绝对路径，不加引号、反引号或 `~`；安装版则修改 User/Remote Settings 的 `zcodePool.poolHome`。F5 的路径优先于设置。
+- 出现 `INVALID_POOL_HOME` 或 `Set an absolute pool path`：点击“选择连接目录”，输入 Linux 执行侧的绝对路径，不加引号、反引号或 `~`；也可修改 User/Remote Settings 的 `zcodePool.poolHome`。修改后重新连接即可，无需重启 F5。
 - 工作台打开但连接失败：记录界面显示的执行侧、pool 路径和完整错误文字；确认 daemon 使用同一个 pool。已有任务不因界面断开而停止，不要为排查连接问题再次派发任务。
 
 ## 操作含义
@@ -49,7 +51,7 @@ ZCODE_POOL_HOME=/绝对路径/测试池 npm run daemon
 - 模型繁忙继续使用同一账号、模型与会话，默认初次派发后最多立即继续 3 次；没有延迟队列或自动换账号。
 - “核对执行状态”不发模型命令，但会更新本地记录，证实停止后可能释放占用。“恢复观察”可能继续已有核验或符合条件的繁忙续跑。
 - 取消请求不代表已停止；状态未知时仍保留占用，禁止强行复用。
-- 审批必须有完整、可信的来源和当前归属；批准前完整读取并核对内容摘要。未知交互类型、旧截断记录、敏感字段无法完整呈现等情况只读。当前支持经核实的普通 permission 单次批准/拒绝，不承诺原生 CAS；审批消失也不代表本窗口答复已被采用。
+- 审批必须有完整、可信的来源和当前归属；点击“查看完整操作”后一次加载描述与全文；完整校验成功后核对内容，再批准。未知交互类型、旧截断记录、敏感字段无法完整呈现等情况只读。当前支持经核实的普通 permission 单次批准/拒绝，不承诺原生 CAS；审批消失也不代表本窗口答复已被采用。
 - Diff 来自完成时保存的 base/final 字节，包含未跟踪文件清单。相对任务 workspace 的 baseCommit 累计比较，可能包含之前任务的改动。旧任务缺快照时明确不可用，不拿当前磁盘内容替代。
 - “本客户端已审阅”只保存本地 manifest 绑定标记，不自动合并、不修改 daemon 的成功状态。UI 阅读不会自动发送给 Codex；MCP 仍保持精简输出限制。
 
