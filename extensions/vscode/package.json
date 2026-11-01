@@ -1,0 +1,248 @@
+{
+  "name": "zcode-pool",
+  "publisher": "zcode-pool",
+  "displayName": "ZCode Pool",
+  "description": "Explicit, trusted control of a local ZCode Pool daemon.",
+  "version": "0.1.0",
+  "private": true,
+  "type": "commonjs",
+  "license": "UNLICENSED",
+  "engines": {
+    "vscode": "^1.95.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./dist/host/extension.cjs",
+  "extensionKind": [
+    "workspace"
+  ],
+  "activationEvents": [
+    "onView:zcodePool.tasks",
+    "onView:zcodePool.resources"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "description": "Restricted Mode permits explicit read-only connections. Execution and account changes require workspace trust."
+    },
+    "virtualWorkspaces": {
+      "supported": false
+    }
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "watch": "node scripts/build.mjs --watch",
+    "typecheck": "node scripts/typecheck.mjs",
+    "test:unit": "node scripts/test-unit.mjs",
+    "test:integration": "node scripts/test-integration.mjs",
+    "test:smoke": "node scripts/test-smoke.mjs",
+    "test:browser": "node scripts/test-browser.mjs",
+    "test:installed": "node scripts/test-installed.mjs",
+    "test:real-model": "node scripts/test-real-model.mjs",
+    "vscode:prepublish": "npm run build",
+    "package:vsix": "vsce package --no-dependencies",
+    "package:check": "node scripts/check-package.mjs"
+  },
+  "dependencies": {
+    "zod": "3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "20.17.30",
+    "@types/vscode": "1.95.0",
+    "@vscode/test-electron": "2.5.2",
+    "@vscode/vsce": "3.6.2",
+    "esbuild": "0.25.12",
+    "happy-dom": "^20.0.10",
+    "playwright-core": "^1.56.1",
+    "tsx": "4.20.6",
+    "typescript": "5.8.3"
+  },
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "zcodePool",
+          "title": "ZCode Pool",
+          "icon": "media/zcode-pool.svg"
+        }
+      ]
+    },
+    "views": {
+      "zcodePool": [
+        {
+          "id": "zcodePool.tasks",
+          "name": "Tasks"
+        },
+        {
+          "id": "zcodePool.resources",
+          "name": "Resources"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "zcodePool.openWorkbench",
+        "title": "ZCode Pool: Open Workbench",
+        "icon": "$(open-preview)"
+      },
+      {
+        "command": "zcodePool.connect",
+        "title": "ZCode Pool: Connect",
+        "icon": "$(plug)"
+      },
+      {
+        "command": "zcodePool.disconnect",
+        "title": "ZCode Pool: Disconnect",
+        "enablement": "zcodePool.connected"
+      },
+      {
+        "command": "zcodePool.refresh",
+        "title": "ZCode Pool: Refresh",
+        "enablement": "zcodePool.connected",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "zcodePool.openTask",
+        "title": "ZCode Pool: Open Task",
+        "enablement": "zcodePool.connected"
+      },
+      {
+        "command": "zcodePool.newTask",
+        "title": "ZCode Pool: New Task",
+        "enablement": "zcodePool.canMutate",
+        "icon": "$(add)"
+      },
+      {
+        "command": "zcodePool.createWorkspace",
+        "title": "ZCode Pool: Create Workspace",
+        "enablement": "zcodePool.canMutate"
+      },
+      {
+        "command": "zcodePool.importAccounts",
+        "title": "ZCode Pool: Import Accounts",
+        "enablement": "zcodePool.canMutate"
+      },
+      {
+        "command": "zcodePool.startWorker",
+        "title": "ZCode Pool: Start Worker",
+        "enablement": "zcodePool.canMutate"
+      },
+      {
+        "command": "zcodePool.stopWorker",
+        "title": "ZCode Pool: Stop Worker",
+        "enablement": "zcodePool.canMutate"
+      },
+      {
+        "command": "zcodePool.probeWorker",
+        "title": "ZCode Pool: Query Authentication and Quota",
+        "enablement": "zcodePool.canMutate"
+      },
+      {
+        "command": "zcodePool.cancelTask",
+        "title": "ZCode Pool: Request Cancellation",
+        "enablement": "zcodePool.canMutate"
+      },
+      {
+        "command": "zcodePool.reconcileTask",
+        "title": "ZCode Pool: 核对执行状态",
+        "enablement": "zcodePool.canMutate"
+      },
+      {
+        "command": "zcodePool.resumeTask",
+        "title": "ZCode Pool: 恢复观察",
+        "enablement": "zcodePool.canMutate"
+      },
+      {
+        "command": "zcodePool.respondApproval",
+        "title": "ZCode Pool: Review Approval",
+        "enablement": "zcodePool.canMutate"
+      },
+      {
+        "command": "zcodePool.openDiff",
+        "title": "ZCode Pool: Open Immutable File Diff",
+        "enablement": "zcodePool.connected"
+      },
+      {
+        "command": "zcodePool.openSettings",
+        "title": "ZCode Pool: Open Settings",
+        "icon": "$(settings-gear)"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "zcodePool.openWorkbench",
+          "when": "view == zcodePool.tasks",
+          "group": "navigation@1"
+        },
+        {
+          "command": "zcodePool.refresh",
+          "when": "view == zcodePool.tasks",
+          "group": "navigation@2"
+        },
+        {
+          "command": "zcodePool.newTask",
+          "when": "view == zcodePool.tasks && zcodePool.canMutate",
+          "group": "navigation@3"
+        },
+        {
+          "command": "zcodePool.connect",
+          "when": "view == zcodePool.resources && !zcodePool.connected",
+          "group": "navigation"
+        },
+        {
+          "command": "zcodePool.openSettings",
+          "when": "view == zcodePool.resources",
+          "group": "configuration"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "zcodePool.openTask",
+          "when": "view == zcodePool.tasks && viewItem =~ /^task\\./",
+          "group": "inline@1"
+        },
+        {
+          "command": "zcodePool.cancelTask",
+          "when": "view == zcodePool.tasks && viewItem == task.active && zcodePool.canMutate",
+          "group": "task@1"
+        },
+        {
+          "command": "zcodePool.reconcileTask",
+          "when": "view == zcodePool.tasks && viewItem == task.uncertain && zcodePool.canMutate",
+          "group": "task@2"
+        },
+        {
+          "command": "zcodePool.probeWorker",
+          "when": "view == zcodePool.resources && viewItem == worker.ready && zcodePool.canMutate",
+          "group": "worker@1"
+        },
+        {
+          "command": "zcodePool.stopWorker",
+          "when": "view == zcodePool.resources && viewItem == worker.ready && zcodePool.canMutate",
+          "group": "worker@2"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "ZCode Pool",
+      "properties": {
+        "zcodePool.poolHome": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "description": "Absolute pool path on the extension host. Empty uses that host user's ~/.zcode_pool. Saving disconnects; connect explicitly."
+        },
+        "zcodePool.overviewIntervalSeconds": {
+          "type": "integer",
+          "default": 30,
+          "minimum": 15,
+          "maximum": 300,
+          "scope": "window",
+          "description": "Visible-view discovery interval. Does not query quota or dispatch tasks."
+        }
+      }
+    }
+  }
+}

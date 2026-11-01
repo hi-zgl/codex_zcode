@@ -1,6 +1,6 @@
 # VS Code 扩展架构
 
-状态：设计，尚未实现。根 `package.json` 是 Node 24 daemon/CLI；浏览器原型也不能 F5。开发入口见 [开发方案](development-and-acceptance.md)，DTO/能力门槛见 [集成契约](integration-contract.md)。
+本文保留实现前的设计基线（`21d4663`）。下文阶段、拟议文件与接口用于说明设计约束，不代表当前开发状态；已落地代码、运行方法及验证边界以[运行与测试指南](implementation.md)和[验收记录](../validation/2026-11-01-vscode.md)为准。
 
 ## 运行位置与目录
 

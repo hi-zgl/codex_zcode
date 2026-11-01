@@ -1,0 +1,706 @@
+{
+  "version": 1,
+  "clock": 1793491200000,
+  "capabilities": {
+    "selectedApiVersion": {
+      "major": 1,
+      "minor": 0
+    },
+    "daemonVersion": "0.1.0-mock",
+    "instanceId": "mock-instance",
+    "storeId": "mock-store",
+    "servedAtMs": 1793491200000,
+    "capabilities": {
+      "taskDetail": {
+        "version": 1
+      },
+      "taskLookupByRequest": {
+        "version": 1
+      },
+      "taskList": {
+        "version": 1
+      },
+      "quotaSnapshots": {
+        "version": 1
+      },
+      "quotaProbe": {
+        "version": 1
+      },
+      "approvalRead": {
+        "version": 1
+      },
+      "approvalRespondFingerprint": {
+        "version": 1
+      },
+      "artifactSnapshots": {
+        "version": 1
+      },
+      "dispatchTask": {
+        "version": 1
+      },
+      "createWorkspace": {
+        "version": 1
+      },
+      "importAccounts": {
+        "version": 1
+      },
+      "startWorker": {
+        "version": 1
+      },
+      "stopWorker": {
+        "version": 1
+      },
+      "reconcileTask": {
+        "version": 1
+      },
+      "resumeTask": {
+        "version": 1
+      },
+      "cancelTask": {
+        "version": 1
+      }
+    },
+    "limits": {
+      "requestBytes": 524288,
+      "responseBytes": 262144,
+      "chunkBytes": 65536,
+      "taskPageItems": 100,
+      "approvalPageItems": 50,
+      "artifactPageItems": 100,
+      "approvalSnapshotBytes": 8388608,
+      "editorFileBytes": 2097152
+    },
+    "runtime": {
+      "platform": "linux",
+      "supportedOfficialVersions": [
+        "3.16.3"
+      ]
+    }
+  },
+  "overview": {
+    "accounts": [
+      {
+        "alias": "account-demo",
+        "provider": "zai",
+        "health": "available",
+        "plan": "demo"
+      },
+      {
+        "alias": "account-review",
+        "provider": "zai",
+        "health": "available"
+      },
+      {
+        "alias": "account-unknown",
+        "provider": "bigmodel",
+        "health": "unknown"
+      }
+    ],
+    "workers": [
+      {
+        "workerId": "worker-demo",
+        "accountAlias": "account-demo",
+        "state": "ready",
+        "processOwned": true,
+        "runningTaskCount": 0,
+        "version": "3.16.3"
+      },
+      {
+        "workerId": "worker-review",
+        "accountAlias": "account-review",
+        "state": "ready",
+        "processOwned": true,
+        "runningTaskCount": 1,
+        "version": "3.16.3"
+      },
+      {
+        "workerId": "worker-unknown",
+        "accountAlias": "account-unknown",
+        "state": "ready",
+        "processOwned": true,
+        "runningTaskCount": 0,
+        "version": "3.16.3"
+      }
+    ],
+    "workspaces": [
+      {
+        "workspaceId": "workspace-demo",
+        "repositoryPath": "/demo/project",
+        "worktreePath": "/demo/pool/worktrees/demo",
+        "branch": "zcode/demo",
+        "baseCommit": "abc123",
+        "activeTaskId": null,
+        "state": "active"
+      },
+      {
+        "workspaceId": "workspace-review",
+        "repositoryPath": "/demo/project",
+        "worktreePath": "/demo/pool/worktrees/review",
+        "branch": "zcode/review",
+        "baseCommit": "abc123",
+        "activeTaskId": "task-approval",
+        "state": "active"
+      },
+      {
+        "workspaceId": "workspace-unknown",
+        "repositoryPath": "/demo/other",
+        "worktreePath": "/demo/pool/worktrees/unknown",
+        "branch": "zcode/unknown",
+        "baseCommit": "def456",
+        "activeTaskId": "task-unknown",
+        "state": "active"
+      }
+    ],
+    "tasks": [
+      {
+        "taskId": "task-complete",
+        "workspaceId": "workspace-demo",
+        "workerId": "worker-demo",
+        "status": "succeeded",
+        "revision": 8,
+        "leaseHeld": false,
+        "retry": {
+          "used": 0,
+          "max": 3,
+          "reason": "model_busy"
+        }
+      },
+      {
+        "taskId": "task-approval",
+        "workspaceId": "workspace-review",
+        "workerId": "worker-review",
+        "status": "waiting_approval",
+        "revision": 7,
+        "leaseHeld": true,
+        "retry": {
+          "used": 0,
+          "max": 3,
+          "reason": "model_busy"
+        }
+      },
+      {
+        "taskId": "task-unknown",
+        "workspaceId": "workspace-unknown",
+        "workerId": "worker-unknown",
+        "status": "interrupted",
+        "revision": 6,
+        "leaseHeld": true,
+        "retry": {
+          "used": 1,
+          "max": 3,
+          "reason": "model_busy"
+        }
+      }
+    ]
+  },
+  "details": {
+    "task-complete": {
+      "taskId": "task-complete",
+      "workspaceId": "workspace-demo",
+      "workerId": "worker-demo",
+      "status": "succeeded",
+      "revision": 8,
+      "createdAtMs": 1793491192000,
+      "updatedAtMs": 1793491200000,
+      "leaseHeld": false,
+      "executionStopped": true,
+      "cancelRequestedAtMs": null,
+      "approval": {
+        "pendingCount": 0,
+        "responsePending": false,
+        "stateKnown": true
+      },
+      "retry": {
+        "used": 0,
+        "max": 3,
+        "reason": "model_busy"
+      },
+      "requestId": "request-task-complete",
+      "workspace": {
+        "workspaceId": "workspace-demo",
+        "repositoryPath": "/demo/project",
+        "worktreePath": "/demo/pool/worktrees/demo",
+        "branch": "zcode/demo",
+        "baseCommit": "abc123",
+        "activeTaskId": null,
+        "state": "active"
+      },
+      "execution": {
+        "dispatchAttemptedAtMs": 1793491190000,
+        "currentCommandId": "command-task-complete",
+        "sessionId": "session-task-complete",
+        "turnId": "command-task-complete",
+        "stopProof": {
+          "kind": "runtime_terminal",
+          "observedAtMs": 1793491200000,
+          "evidenceSummary": "The exact native execution was observed terminal."
+        },
+        "attachment": "not_attached",
+        "finalizing": false
+      },
+      "selection": {
+        "requestedWorkerId": "worker-demo",
+        "requestedSession": "continue",
+        "mode": "build",
+        "requestedModelId": "GLM-5.3-Flash",
+        "binding": {
+          "accountAlias": "account-demo",
+          "providerId": "account:zai-start-plan",
+          "modelId": "GLM-5.3-Flash"
+        }
+      },
+      "verificationPolicy": {
+        "complete": true,
+        "defaultDiffCheck": true,
+        "commands": [],
+        "unavailableReason": null
+      },
+      "attempts": [
+        {
+          "index": 0,
+          "commandId": "command-task-complete",
+          "sessionId": "session-task-complete",
+          "turnId": "command-task-complete",
+          "intentAtMs": 1793491190000,
+          "acknowledgedAtMs": 1793491191000,
+          "terminalState": "completedSuccess",
+          "stopProofKind": "runtime_terminal",
+          "failureCategory": null,
+          "busyRetryEligible": false,
+          "continuationBlocked": false
+        }
+      ],
+      "currentAttemptIndex": 0,
+      "controls": {
+        "cancel": {
+          "available": false,
+          "reason": "Execution already stopped.",
+          "effects": [
+            "Persists cancellation intent; keeps occupancy until stopped."
+          ]
+        },
+        "reconcile": {
+          "available": false,
+          "reason": "No uncertain execution.",
+          "effects": [
+            "Reads native state; may update task records and release proved stopped occupancy."
+          ]
+        },
+        "resume": {
+          "available": false,
+          "reason": "No observation recovery needed.",
+          "effects": [
+            "May run configured verification or a qualified remaining busy continuation."
+          ]
+        }
+      },
+      "result": {
+        "available": true,
+        "createdAtMs": 1793491200000,
+        "summary": "Implemented the demo change. Functional acceptance is still required.",
+        "summaryTruncated": false,
+        "changedFileCount": 2,
+        "artifactCount": 1,
+        "verification": [
+          {
+            "commandDisplay": "git diff --check",
+            "exitCode": 0,
+            "summary": "No whitespace errors. Functional tests were not configured.",
+            "summaryTruncated": false
+          }
+        ],
+        "blockers": [],
+        "manifestState": "available"
+      },
+      "diagnostic": null
+    },
+    "task-approval": {
+      "taskId": "task-approval",
+      "workspaceId": "workspace-review",
+      "workerId": "worker-review",
+      "status": "waiting_approval",
+      "revision": 7,
+      "createdAtMs": 1793491193000,
+      "updatedAtMs": 1793491200000,
+      "leaseHeld": true,
+      "executionStopped": false,
+      "cancelRequestedAtMs": null,
+      "approval": {
+        "pendingCount": 1,
+        "responsePending": false,
+        "stateKnown": true
+      },
+      "retry": {
+        "used": 0,
+        "max": 3,
+        "reason": "model_busy"
+      },
+      "requestId": "request-task-approval",
+      "workspace": {
+        "workspaceId": "workspace-review",
+        "repositoryPath": "/demo/project",
+        "worktreePath": "/demo/pool/worktrees/review",
+        "branch": "zcode/review",
+        "baseCommit": "abc123",
+        "activeTaskId": "task-approval",
+        "state": "active"
+      },
+      "execution": {
+        "dispatchAttemptedAtMs": 1793491190000,
+        "currentCommandId": "command-task-approval",
+        "sessionId": "session-task-approval",
+        "turnId": "command-task-approval",
+        "stopProof": null,
+        "attachment": "attached",
+        "finalizing": false
+      },
+      "selection": {
+        "requestedWorkerId": "worker-review",
+        "requestedSession": "continue",
+        "mode": "build",
+        "requestedModelId": "GLM-5.3-Flash",
+        "binding": {
+          "accountAlias": "account-review",
+          "providerId": "account:zai-start-plan",
+          "modelId": "GLM-5.3-Flash"
+        }
+      },
+      "verificationPolicy": {
+        "complete": true,
+        "defaultDiffCheck": true,
+        "commands": [],
+        "unavailableReason": null
+      },
+      "attempts": [
+        {
+          "index": 0,
+          "commandId": "command-task-approval",
+          "sessionId": "session-task-approval",
+          "turnId": "command-task-approval",
+          "intentAtMs": 1793491190000,
+          "acknowledgedAtMs": 1793491191000,
+          "terminalState": null,
+          "stopProofKind": null,
+          "failureCategory": null,
+          "busyRetryEligible": false,
+          "continuationBlocked": false
+        }
+      ],
+      "currentAttemptIndex": 0,
+      "controls": {
+        "cancel": {
+          "available": true,
+          "reason": null,
+          "effects": [
+            "Persists cancellation intent; keeps occupancy until stopped."
+          ]
+        },
+        "reconcile": {
+          "available": false,
+          "reason": "No uncertain execution.",
+          "effects": [
+            "Reads native state; may update task records and release proved stopped occupancy."
+          ]
+        },
+        "resume": {
+          "available": false,
+          "reason": "No observation recovery needed.",
+          "effects": [
+            "May run configured verification or a qualified remaining busy continuation."
+          ]
+        }
+      },
+      "result": {
+        "available": false,
+        "createdAtMs": null,
+        "summary": "",
+        "summaryTruncated": false,
+        "changedFileCount": 0,
+        "artifactCount": 0,
+        "verification": [],
+        "blockers": [],
+        "manifestState": "not_captured"
+      },
+      "diagnostic": null
+    },
+    "task-unknown": {
+      "taskId": "task-unknown",
+      "workspaceId": "workspace-unknown",
+      "workerId": "worker-unknown",
+      "status": "interrupted",
+      "revision": 6,
+      "createdAtMs": 1793491194000,
+      "updatedAtMs": 1793491200000,
+      "leaseHeld": true,
+      "executionStopped": false,
+      "cancelRequestedAtMs": null,
+      "approval": {
+        "pendingCount": 0,
+        "responsePending": false,
+        "stateKnown": false
+      },
+      "retry": {
+        "used": 1,
+        "max": 3,
+        "reason": "model_busy"
+      },
+      "requestId": "request-task-unknown",
+      "workspace": {
+        "workspaceId": "workspace-unknown",
+        "repositoryPath": "/demo/other",
+        "worktreePath": "/demo/pool/worktrees/unknown",
+        "branch": "zcode/unknown",
+        "baseCommit": "def456",
+        "activeTaskId": "task-unknown",
+        "state": "active"
+      },
+      "execution": {
+        "dispatchAttemptedAtMs": 1793491190000,
+        "currentCommandId": "command-task-unknown",
+        "sessionId": "session-task-unknown",
+        "turnId": "command-task-unknown",
+        "stopProof": null,
+        "attachment": "unknown",
+        "finalizing": false
+      },
+      "selection": {
+        "requestedWorkerId": "worker-unknown",
+        "requestedSession": "continue",
+        "mode": "build",
+        "requestedModelId": "GLM-5.3-Flash",
+        "binding": {
+          "accountAlias": "account-unknown",
+          "providerId": "account:zai-start-plan",
+          "modelId": "GLM-5.3-Flash"
+        }
+      },
+      "verificationPolicy": {
+        "complete": true,
+        "defaultDiffCheck": true,
+        "commands": [],
+        "unavailableReason": null
+      },
+      "attempts": [
+        {
+          "index": 0,
+          "commandId": "command-task-unknown",
+          "sessionId": "session-task-unknown",
+          "turnId": "command-task-unknown",
+          "intentAtMs": 1793491190000,
+          "acknowledgedAtMs": 1793491191000,
+          "terminalState": null,
+          "stopProofKind": null,
+          "failureCategory": "model_busy",
+          "busyRetryEligible": false,
+          "continuationBlocked": false
+        }
+      ],
+      "currentAttemptIndex": 0,
+      "controls": {
+        "cancel": {
+          "available": true,
+          "reason": null,
+          "effects": [
+            "Persists cancellation intent; keeps occupancy until stopped."
+          ]
+        },
+        "reconcile": {
+          "available": true,
+          "reason": null,
+          "effects": [
+            "Reads native state; may update task records and release proved stopped occupancy."
+          ]
+        },
+        "resume": {
+          "available": true,
+          "reason": null,
+          "effects": [
+            "May run configured verification or a qualified remaining busy continuation."
+          ]
+        }
+      },
+      "result": {
+        "available": false,
+        "createdAtMs": null,
+        "summary": "",
+        "summaryTruncated": false,
+        "changedFileCount": 0,
+        "artifactCount": 0,
+        "verification": [],
+        "blockers": [],
+        "manifestState": "not_captured"
+      },
+      "diagnostic": {
+        "code": "RECOVERY_REQUIRED",
+        "message": "Native execution cannot yet be proved stopped; occupancy remains."
+      }
+    }
+  },
+  "reviews": {
+    "approval-demo": {
+      "taskId": "task-approval",
+      "approvalId": "approval-demo",
+      "reviewId": "review-demo",
+      "owner": {
+        "attemptIndex": 0,
+        "commandId": "command-task-approval",
+        "sessionId": "session-task-approval",
+        "nativeTurnId": "native-turn-demo"
+      },
+      "state": "pending",
+      "approvalRevision": "approval-revision-1",
+      "nativeRevision": 41,
+      "observedAtMs": 1793491200000,
+      "expiresAtMs": 2108851200000,
+      "content": {
+        "mediaType": "application/json",
+        "encoding": "utf8",
+        "totalBytes": 7973,
+        "sha256": "7a5c65fe2f715a3b2fd52c8a0ae26716b7a0aa3cf2ed8427feef5e1fd3a3ba04",
+        "schema": "permission-review/1",
+        "sourceComplete": true
+      },
+      "redactions": [],
+      "decisions": [
+        {
+          "decision": "accept",
+          "label": "只批准本次操作",
+          "nativeOptionId": "allow-once"
+        },
+        {
+          "decision": "decline",
+          "label": "拒绝本次操作",
+          "nativeOptionId": "deny"
+        }
+      ],
+      "readOnlyReason": null,
+      "response": {
+        "actionId": null,
+        "decision": null,
+        "state": "none"
+      }
+    }
+  },
+  "approvalContents": {
+    "review-demo": "{\"schema\":\"permission-review/1\",\"taskId\":\"task-approval\",\"approvalId\":\"approval-demo\",\"owner\":{\"attemptIndex\":0,\"commandId\":\"command-task-approval\",\"sessionId\":\"session-task-approval\",\"nativeTurnId\":\"native-turn-demo\"},\"workspacePath\":\"/demo/pool/worktrees/review\",\"interaction\":{\"interactionId\":\"approval-demo\",\"kind\":\"permission\",\"sourceCommandId\":\"command-task-approval\",\"turnId\":\"native-turn-demo\",\"payload\":{\"kind\":\"permission\",\"toolCallId\":\"tool-demo\",\"toolName\":\"Write\",\"summary\":\"Write a demonstration file (complete content exceeds the old log preview).\",\"detail\":{\"file_path\":\"src/demo.ts\",\"content\":\"// Complete approval content\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\nexport const example = \\\"review safely 😀\\\";\\n\"},\"options\":[{\"optionId\":\"allow-once\",\"label\":\"Allow once\",\"kind\":\"allowOnce\"},{\"optionId\":\"deny\",\"label\":\"Deny\",\"kind\":\"deny\"}]}}}"
+  },
+  "manifests": {
+    "task-complete": {
+      "taskId": "task-complete",
+      "state": "available",
+      "schemaVersion": 1,
+      "manifestSha256": "e433f17bbd14afead4f9e96081f60d8e24dcfe3f8a32b3c16dba124eb578dee9",
+      "scope": "workspace_base_cumulative",
+      "baseCommit": "abc123",
+      "sourceScope": "git_tracked_plus_nonignored_untracked",
+      "captureStartedAtMs": 1793491199500,
+      "captureCompletedAtMs": 1793491200000,
+      "consistency": "lease_held_non_atomic",
+      "fileCount": 2,
+      "availableFileCount": 2,
+      "unavailableFileCount": 0,
+      "fileListComplete": true,
+      "patch": {
+        "available": true,
+        "sha256": "117f91ebb420e5643320da9b99a49509bfd60f62162ee871d73407b710306a0a",
+        "sizeBytes": 5869
+      },
+      "unavailableReason": null
+    }
+  },
+  "files": {
+    "e433f17bbd14afead4f9e96081f60d8e24dcfe3f8a32b3c16dba124eb578dee9": [
+      {
+        "fileId": "file-demo",
+        "relativePath": "src/demo.ts",
+        "displayPath": "src/demo.ts",
+        "basePath": "src/demo.ts",
+        "finalPath": "src/demo.ts",
+        "change": "modified",
+        "base": {
+          "state": "available",
+          "reason": null,
+          "kind": "regular",
+          "mode": "100644",
+          "sha256": "e77ce1f09268079de910c45c2b1b66b28fe0f516708a1eabfec5157d711cdd98",
+          "sizeBytes": 26,
+          "encoding": "utf8"
+        },
+        "final": {
+          "state": "available",
+          "reason": null,
+          "kind": "regular",
+          "mode": "100644",
+          "sha256": "4c8b7d101ffbb0b6065e1acb3120b1ef164c3058749ccafbab57b1bbed1193b4",
+          "sizeBytes": 34,
+          "encoding": "utf8"
+        },
+        "nativeDiff": {
+          "available": true,
+          "reason": null
+        }
+      },
+      {
+        "fileId": "file-new",
+        "relativePath": "notes.txt",
+        "displayPath": "notes.txt",
+        "basePath": null,
+        "finalPath": "notes.txt",
+        "change": "untracked",
+        "base": {
+          "state": "absent",
+          "reason": null,
+          "kind": "regular",
+          "mode": null,
+          "sha256": null,
+          "sizeBytes": 0,
+          "encoding": "utf8"
+        },
+        "final": {
+          "state": "available",
+          "reason": null,
+          "kind": "regular",
+          "mode": "100644",
+          "sha256": "5dc47980ff0bf5851fcb0e5beab7c9b482b07a3d8f1f802764a18d2b00c9ee33",
+          "sizeBytes": 43,
+          "encoding": "utf8"
+        },
+        "nativeDiff": {
+          "available": true,
+          "reason": null
+        }
+      }
+    ]
+  },
+  "fileContents": {
+    "file-demo:base": "export const answer = 41;\n",
+    "file-demo:final": "export const answer = 42; // 😀\n",
+    "file-new:final": "A nonignored untracked immutable artifact.\n"
+  },
+  "patches": {
+    "task-complete": "diff --git a/src/demo.ts b/src/demo.ts\n--- a/src/demo.ts\n+++ b/src/demo.ts\n@@ -1 +1 @@\n-export const answer = 41;\n+export const answer = 42; // 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n// UTF-16 patch page 😀\n"
+  },
+  "events": [
+    {
+      "taskId": "task-complete",
+      "revision": 8,
+      "type": "status",
+      "status": "succeeded",
+      "createdAt": 1793491200000
+    },
+    {
+      "taskId": "task-approval",
+      "revision": 7,
+      "type": "status",
+      "status": "waiting_approval",
+      "createdAt": 1793491200000
+    },
+    {
+      "taskId": "task-unknown",
+      "revision": 6,
+      "type": "status",
+      "status": "interrupted",
+      "createdAt": 1793491200000
+    }
+  ]
+}

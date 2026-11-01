@@ -4,6 +4,10 @@
 
 当前代码为 Linux / Node.js 24 原型，已通过[本机真实任务与双账号并行验证](validation/2026-11-01.md)。官方适配器只接受已核对的 ZCode Server 3.16.3 / server protocol 1；其他版本拒绝自动兼容。任务只指定 Start Plan，不自动回退到付费 provider。
 
+可视化操作见 [VS Code 扩展运行与 F5 测试](ui/implementation.md)，不依赖开发 checkout 的后台安装见[独立 daemon 包](distribution.md)。扩展与 CLI/MCP 共享同一调度服务，UI 不会自动把完整审批或文件内容送入 Codex 上下文。
+
+UI 功能将持久存储升级到 schema 3，保留原有任务/attempt，并增加 store 身份、完整审批记录和答复回执；旧任务缺失的文件快照不会补猜。新 daemon 首次打开旧 schema 1/2 数据库时迁移，旧版 daemon 无法读取 schema 3；升级后不要混用旧后台程序。
+
 ## 安装与检查
 
 在项目根目录执行：

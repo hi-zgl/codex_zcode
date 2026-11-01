@@ -1,6 +1,6 @@
 # VS Code 可视化与交互设计
 
-状态：完整设计提案，**尚未实现 VS Code 扩展、F5 调试入口或新增 UI API**。核对日期：2026-11-01；源码基线：`d403eb5a201e442d5c778cb43938915a193ec939`。现有静态原型只覆盖部分演示场景，不是可连接 daemon 的客户端。
+本文保留实现前的设计基线（`21d4663`）。下文阶段、拟议文件与接口用于说明设计约束，不代表当前开发状态；已落地代码、运行方法及验证边界以[运行与测试指南](implementation.md)和[验收记录](../validation/2026-11-01-vscode.md)为准。
 
 阅读顺序：[流程与状态](flows-and-states.md) → [集成契约](integration-contract.md) → [扩展架构](extension-architecture.md) → [开发与验收](development-and-acceptance.md)。本文负责形态、屏幕和交互原则；按钮条件与异常反馈见流程文档。
 

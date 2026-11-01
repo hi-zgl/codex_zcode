@@ -1,0 +1,11 @@
+import {spawnSync}from'node:child_process';
+import {readdir}from'node:fs/promises';
+const root=new URL('..',import.meta.url);
+const listed=spawnSync(process.execPath,['node_modules/@vscode/vsce/vsce','ls','--no-dependencies'],{cwd:root,encoding:'utf8'});if(listed.status!==0)throw new Error(listed.stderr||listed.stdout);
+const files=listed.stdout.trim().split('\n').filter(Boolean);
+const allowed=/^(?:package\.json|readme\.md|changelog\.md|LICENSE(?:\.txt)?|dist\/(?:host\/extension\.cjs|webview\/(?:main\.js|styles\.css))|media\/zcode-pool\.svg)$/i;
+for(const file of files)if(!allowed.test(file))throw new Error(`Unexpected packaged file: ${file}`);
+const archives=(await readdir(root)).filter(file=>file.endsWith('.vsix'));if(!archives.length)throw new Error('Build a VSIX before package:check');
+const zip=spawnSync('unzip',['-Z1',archives.at(-1)],{cwd:root,encoding:'utf8'});if(zip.status!==0)throw new Error('Cannot inspect VSIX');
+for(const file of zip.stdout.trim().split('\n'))if(!['[Content_Types].xml','extension.vsixmanifest'].includes(file)&&!allowed.test(file.replace(/^extension\//,'')))throw new Error(`Unexpected VSIX entry: ${file}`);
+console.log(`Standalone VSIX verified: ${files.length} allowlisted files, no source, dependencies, maps, credentials or fixtures.`);

@@ -34,6 +34,10 @@ function selectionFromSnapshot(snapshot: Record<string, any>): ModelSelection | 
   if (typeof config.provider !== 'string' || !config.provider || typeof config.model !== 'string' || !config.model) return;
   return { providerId: config.provider, modelId: config.model, ...(config.thought ? { options: { reasoningLevel: config.thought } } : {}) };
 }
+function snapshotView(session:SessionRef,raw:Record<string,any>):SessionSnapshot {
+ const summary=(raw.rows?.window??[]).filter((row:any)=>row.kind==='assistantText').map((row:any)=>row.text).filter((text:unknown)=>typeof text==='string').at(-1)??'';
+ return {...session,phase:raw.control?.phase??'unknown',revision:raw.revision??0,cursor:'',summary:redact(summary),modelSelection:selectionFromSnapshot(raw),pendingApprovals:redact(structuredClone(raw.pendingInteractions??[])),raw:redact(structuredClone(raw))};
+}
 function accepted(ack: Record<string, any>, operation: string): void {
   if (!['accepted', 'duplicate', 'noop'].includes(ack.status)) throw new RuntimeFault(`Official ${operation} ${ack.status ?? 'failed'}: ${ack.reasonCode ?? ''} ${ack.message ?? ''}`);
 }
@@ -233,8 +237,17 @@ export class ZCodeServerConnection implements RuntimeConnection {
   async syncHistory(session: SessionRef): Promise<SessionSnapshot> {
     const state = await this.ensureSubscribed(session);
     const raw = state.projection.snapshot!;
-    const summary = (raw.rows?.window ?? []).filter((row: any) => row.kind === 'assistantText').map((row: any) => row.text).filter((text: unknown) => typeof text === 'string').at(-1) ?? '';
-    return { ...session, phase: raw.control?.phase ?? 'unknown', revision: raw.revision ?? 0, cursor: state.projection.cursor, summary: redact(summary), modelSelection: selectionFromSnapshot(raw), pendingApprovals: redact(raw.pendingInteractions ?? []), raw: redact(structuredClone(raw)) };
+    return {...snapshotView(session,raw),cursor:state.projection.cursor};
+  }
+  async readApprovalSnapshot(session: SessionRef) {
+    const state=await this.ensureSubscribed(session);
+    const raw=structuredClone(state.projection.snapshot!);
+    return {snapshot:{...snapshotView(session,raw),cursor:state.projection.cursor},pendingApprovals:raw.pendingInteractions??[],sourceComplete:true,
+      // Verified offline against official 3.16.3 agent-runtime a430054f…:
+      // permission executor allocates perm_<crypto.randomUUID()> for each request;
+      // raceClientRequestWithV4Interaction closes over its input/options; registry
+      // resolve removes that ID before invoking the captured responder. No native CAS.
+      stablePermissionIds:this.info.version==='3.16.3'&&this.info.protocolVersion===1&&this.info.conversationProtocolVersion===3};
   }
   async queryCommand(session: SessionRef, commandId: string): Promise<Record<string, unknown> | 'unknown'> {
     const response = record(await this.rpc.call(AGENT, 'queryConversationCommandsV4', { workspacePath: session.workspacePath, commands: [{ sessionId: session.sessionId, commandId }] }));

@@ -1,6 +1,6 @@
 # 开发、F5 与验收方案
 
-状态：**仅设计**；扩展目录/manifest/launch/build/VSIX 尚未创建，当前 F5 不可用。JSON 是未来模板，未实跑。见 [架构](extension-architecture.md) 与 [API 边界](integration-contract.md)。
+本文保留实现前的设计基线（`21d4663`）。下文阶段、拟议文件与接口用于说明设计约束，不代表当前开发状态；已落地代码、运行方法及验证边界以[运行与测试指南](implementation.md)和[验收记录](../validation/2026-11-01-vscode.md)为准。
 
 ## 交付顺序与依赖
 

@@ -4,6 +4,8 @@ import { mkdir, open, readFile, unlink, chmod, lstat, realpath, type FileHandle 
 import { createHash, randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { consumeLines, isRequest, MAX_FRAME_BYTES } from '../shared/rpc.js';
+import { UI_LIMITS } from '../shared/ui-contract.js';
+import { UiRpcError } from './ui-support.js';
 
 export type RpcHandler = (method: string, params: Record<string, unknown>) => Promise<unknown>;
 interface FileIdentity { dev: string; ino: string; ctimeNs: string }
@@ -171,16 +173,23 @@ export async function serveRpc(root: string, handler: RpcHandler): Promise<{serv
     consumeLines(socket, line => {
       void (async () => {
         let id: string | number | null = null;
+        let uiRequest = false;
+        let protocolCode: number|undefined;
         try {
-          const request: unknown = JSON.parse(line);
-          if (!isRequest(request)) throw new Error('Invalid JSON-RPC request');
+          let request:unknown;
+          try{request=JSON.parse(line);}catch{protocolCode=-32700;throw new Error('Parse error');}
+          if (!isRequest(request)) {protocolCode=-32600;throw new Error('Invalid JSON-RPC request');}
           id = request.id;
+          uiRequest=request.method.startsWith('ui_');
+          if(uiRequest&&Buffer.byteLength(line)+1>UI_LIMITS.requestBytes)throw new UiRpcError('INVALID_ARGUMENT');
           const result = await handler(request.method, request.params ?? {});
           const response = JSON.stringify({jsonrpc:'2.0', id, result}) + '\n';
+          if(uiRequest&&Buffer.byteLength(response)>UI_LIMITS.responseBytes)throw new UiRpcError('OUTPUT_BUDGET_EXCEEDED',{outcome:['ui_respond_approval','ui_probe_quota'].includes(request.method)?'may_have_applied':'read_only'});
           if (Buffer.byteLength(response) > MAX_FRAME_BYTES) throw new Error('Result too large; request a smaller page');
           if (!socket.destroyed) socket.write(response);
         } catch (error) {
-          if (!socket.destroyed) socket.write(JSON.stringify({jsonrpc:'2.0', id, error:{code:-32000,message:error instanceof Error ? error.message : 'Request failed'}}) + '\n');
+          const failure=error instanceof UiRpcError?{code:error.code,message:error.message,...(error.data?{data:error.data}:{})}:protocolCode?{code:protocolCode,message:error instanceof Error?error.message:'Invalid request'}:uiRequest?{code:-32010,message:'The daemon could not complete this UI request.',data:{kind:'INTERNAL_ERROR',retryable:false,outcome:'may_have_applied'}}:{code:-32000,message:error instanceof Error ? error.message : 'Request failed'};
+          if (!socket.destroyed) socket.write(JSON.stringify({jsonrpc:'2.0', id, error:failure}) + '\n');
         }
       })();
     });

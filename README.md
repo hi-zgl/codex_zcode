@@ -22,9 +22,9 @@
 
 [安装、运行与当前限制](docs/development.md) · [主会话调度约定](docs/codex-workflow.md) · [上下文输出策略](docs/context-policy.md) · [首版实测记录](docs/validation/2026-11-01.md) · [恢复与上下文验证](docs/validation/2026-11-01-recovery-context.md) · [续跑验证（136 项测试）](docs/validation/2026-11-01-busy-continuation.md) · `npm run typecheck` · `npm test`
 
-## 可视化设计
+## VS Code 可视化扩展
 
-推荐采用 VS Code 原生侧栏与编辑区详情面板，继续连接独立 daemon。当前交付为 [完整交互设计、接口契约与 F5 实施方案](docs/ui/README.md)，另有可点击演示原型；尚未实现或安装扩展，F5 配置目前仅为文档模板。
+已实现原生任务/资源侧栏、编辑区工作台、F5 Mock/真实连接、审批与不可变 Diff。见[运行与测试指南](docs/ui/implementation.md)、[实现验收记录](docs/validation/2026-11-01-vscode.md)及[设计规格](docs/ui/README.md)。扩展连接独立 daemon；后台也提供[独立安装包](docs/distribution.md)。
 
 ## 阅读入口
 
@@ -44,6 +44,9 @@ codex_zcode/
 ├── package-lock.json         # 锁定依赖版本
 ├── tsconfig.json             # TypeScript 配置
 ├── .gitignore                # 账号、运行产物、依赖和参考克隆忽略规则
+├── bin/                      # 独立安装包 CLI 启动器
+├── extensions/vscode/        # VS Code 扩展源码、构建与测试
+├── .vscode/                  # F5 Mock / 真实连接调试配置
 ├── src/                      # daemon、MCP、CLI、协议与账号管理
 ├── test/                     # 自动测试与脱敏 fixtures，不主动消耗额度
 ├── scripts/                  # 显式运行的真实任务验证脚本

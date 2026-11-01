@@ -12,6 +12,8 @@ import { DurableTaskStore } from '../core/index.js';
 import type { Task, JsonValue, TaskResult, StopProof } from '../core/types.js';
 import { validateMethod, type MethodName } from '../shared/methods.js';
 import { createWorkspace, snapshotWorkspace } from './workspace.js';
+import { UiService } from './ui.js';
+import { UiRpcError } from './ui-support.js';
 
 const exec = promisify(execFile);
 const FINAL_STATUSES = new Set(['succeeded', 'failed', 'cancelled']);
@@ -130,21 +132,62 @@ export class Coordinator {
  private readonly approvalOperations = new Map<string,Promise<unknown>>();
  private closing = false;
  private workerChanges: Promise<unknown> = Promise.resolve();
+ readonly ui: UiService;
  constructor(readonly root: string, readonly store: DurableTaskStore) {
   this.vault = new AccountVault(join(root,'accounts'));
   this.supervisor = new WorkerSupervisor({poolRoot:root});
+  this.ui=new UiService(root,store,{
+   attachment:taskId=>!!this.active.get(taskId)?.turn,
+   serialApproval:(taskId,action)=>this.serialApproval(taskId,action),
+   accounts:()=>this.vault.list(),
+   observeApprovals:async task=>{
+    const active=this.active.get(task.taskId);
+    if(!active?.session||!active.turn||task.executionStopped||!task.leaseHeld||active.turn.commandId!==task.currentCommandId||active.session.sessionId!==task.sessionId)return null;
+    let connection:RuntimeConnection|undefined;
+    try{
+     const worker=await this.supervisor.status(task.workerId!);if(worker.state!=='ready'||!worker.endpoint)throw new UiRpcError('NATIVE_UNAVAILABLE');
+     // A separate read-only subscription gives this check a fresh native snapshot.
+     // Existing-session open does not create a session, configure it or resume execution.
+     connection=await this.adapter.connect(worker.endpoint);
+     const session=await connection.openSession({workspacePath:this.store.getWorkspace(task.workspaceId).worktreePath,sessionId:task.sessionId!});
+     const source=connection.readApprovalSnapshot?await connection.readApprovalSnapshot(session):{snapshot:await connection.syncHistory(session),pendingApprovals:[],sourceComplete:false,stablePermissionIds:false};
+     const latest=this.store.getTask(task.taskId);if(latest.currentCommandId!==task.currentCommandId||latest.sessionId!==task.sessionId)return null;
+     const observation=observeSnapshot(latest,session,source.snapshot);if(observation.kind!=='active')return null;
+     const binding=record(latest.runtimeBinding),selection=source.snapshot.modelSelection;
+     if(!selection||selection.providerId!==binding.providerId||selection.modelId!==binding.modelId)throw new UiRpcError('MODEL_SELECTION_MISMATCH');
+     const approvals=ownApprovals(latest,{...source.snapshot,pendingApprovals:source.pendingApprovals},observation.header!);
+     return {snapshot:source.snapshot,approvals,nativeTurnId:observation.header!.turnId,sourceComplete:source.sourceComplete,stablePermissionIds:source.stablePermissionIds,unattributedCount:source.pendingApprovals.length-approvals.length};
+    }finally{if(connection&&connection!==active.connection)await connection.close().catch(()=>{});}
+   },
+   canAcceptApproval:async task=>{
+    const binding=record(task.runtimeBinding),active=this.active.get(task.taskId);
+    if(typeof binding.accountAlias!=='string'||binding.accountAlias!==active?.accountAlias)return false;
+    try{const account=await this.vault.load(binding.accountAlias);return !UNAVAILABLE_HEALTH.has(account.health)&&binding.providerId===`account:${account.provider}-start-plan`;}catch{return false;}
+   },
+   sendApproval:async(task,approvalId,optionId)=>{
+    const active=this.active.get(task.taskId);if(!active?.turn||active.turn.commandId!==task.currentCommandId)throw new UiRpcError('RECOVERY_REQUIRED');
+    await active.connection.respondApproval(active.turn,approvalId,{optionId});
+    active.approvalResponses??=new Map();active.approvalResponses.set(approvalId,`ui:${optionId}`);
+    this.watchApprovalRevision(task.taskId,active);
+   },
+   probeQuota:async workerId=>{
+    const worker=await this.supervisor.status(workerId);if(worker.state!=='ready'||!worker.endpoint)throw new UiRpcError('WORKER_UNAVAILABLE',{outcome:'not_started'});
+    try{const result=await this.handle('probe_worker',{worker_id:workerId}) as {quota:Record<string,unknown>};const account=await this.vault.load(worker.accountAlias);return {accountAlias:worker.accountAlias,providerId:`account:${account.provider}-start-plan`,quota:result.quota};}
+    catch(error){throw Object.assign(new UiRpcError('NATIVE_UNAVAILABLE',{outcome:'may_have_applied'}),{accountAlias:worker.accountAlias});}
+   },
+  });
+ }
+ private serialApproval<T>(taskId:string,action:()=>Promise<T>):Promise<T>{
+  const previous=this.approvalOperations.get(taskId)??Promise.resolve();
+  const operation=previous.catch(()=>{}).then(()=>{if(this.closing)throw new Error('Daemon is shutting down');return action();}).finally(()=>{if(this.approvalOperations.get(taskId)===operation)this.approvalOperations.delete(taskId);});
+  this.approvalOperations.set(taskId,operation);return operation;
  }
  async call(method: string, input: Record<string,unknown>): Promise<unknown> {
+  if(method.startsWith('ui_')){if(this.closing)throw new UiRpcError('NATIVE_UNAVAILABLE');return this.ui.call(method,input);}
   const {name,params:p} = validateMethod(method,input);
   if (this.closing) throw new Error('Daemon is shutting down');
   if (name === 'respond_approval') {
-   const previous = this.approvalOperations.get(p.task_id) ?? Promise.resolve();
-   const operation = previous.catch(()=>{}).then(()=>{
-    if (this.closing) throw new Error('Daemon is shutting down');
-    return this.handle(name,p);
-   }).finally(()=>{if(this.approvalOperations.get(p.task_id)===operation)this.approvalOperations.delete(p.task_id);});
-   this.approvalOperations.set(p.task_id,operation);
-   return operation;
+   return this.serialApproval(p.task_id,()=>this.handle(name,p));
   }
   if (name === 'start_worker' || name === 'stop_worker' || name === 'dispatch_task') {
    const operation = this.workerChanges.then(() => this.handle(name,p));
@@ -224,6 +267,7 @@ export class Coordinator {
     return {taskId:task.taskId,cancelRequested:true,terminationConfirmed:false};
    }
    case 'respond_approval': {
+    if(this.store.listUiApprovalActions<{approvalId:string;responseState:string}>(p.task_id).some(a=>a.approvalId===p.approval_id&&['intent_recorded','awaiting_native','unknown'].includes(a.responseState)))throw new UiRpcError('APPROVAL_RESPONSE_PENDING',{outcome:'not_started'});
     if (!this.active.get(p.task_id)?.turn) await this.recoverTask(p.task_id,true);
     const active = this.active.get(p.task_id);
     const task = this.store.getTask(p.task_id);
@@ -374,6 +418,7 @@ export class Coordinator {
   const observation = observeSnapshot(task,active.session,snapshot);
   if (observation.kind !== 'active') return;
   const approvals = ownApprovals(task,snapshot,observation.header!);
+  this.ui.noteObservedApprovalSet(task,approvals,observation.header!.turnId);
   const ids = new Set(approvals.map(value=>approvalView(value)?.approvalId));
   for (const id of active.approvalResponses?.keys() ?? []) if (!ids.has(id)) active.approvalResponses!.delete(id);
   const first = approvals[0] ? approvalView(approvals[0]) : undefined;
@@ -407,13 +452,15 @@ export class Coordinator {
     if (FINAL_STATUSES.has(this.store.getTask(taskId).status)) break;
     if (event.type === 'approval_requested') {
      const task = this.store.getTask(taskId);
-     const snapshot = await connection.syncHistory(session);
+     const source=connection.readApprovalSnapshot?await connection.readApprovalSnapshot(session):null;
+     const snapshot = source?.snapshot??await connection.syncHistory(session);
      const observation = observeSnapshot(task,session,snapshot);
+     if(observation.kind==='active'&&source){const approvals=ownApprovals(task,{...snapshot,pendingApprovals:source.pendingApprovals},observation.header!);this.ui.captureApprovals(task,{snapshot,approvals,nativeTurnId:observation.header!.turnId,sourceComplete:source.sourceComplete,stablePermissionIds:source.stablePermissionIds,unattributedCount:source.pendingApprovals.length-approvals.length});}
      const id = approvalView(event.data)?.approvalId;
      const approval = observation.kind==='active' ? ownApprovals(task,snapshot,observation.header!).find(value=>approvalView(value)?.approvalId===id) : undefined;
      if (!approval) continue;
      const view = this.publishApproval(taskId,approval);
-     if (view && task.status === 'running') this.store.transitionTask(taskId,'waiting_approval',{detail:view as unknown as JsonValue});
+     if (view && ['running','waiting_approval','blocked'].includes(task.status)) this.store.transitionTask(taskId,task.status==='blocked'?'blocked':'waiting_approval',{detail:{...view,pendingApprovalCount:ownApprovals(task,snapshot,observation.header!).length} as unknown as JsonValue});
      continue;
     }
     const terminal = ['turn_completed','turn_failed','turn_cancelled'].includes(event.type);
@@ -454,6 +501,7 @@ export class Coordinator {
   if (observation.kind !== 'terminal') throw new Error(observation.reason ?? 'Original turn is not terminal with no active work; verification refused');
   const expected = type==='turn_completed'?'completedSuccess':type==='turn_failed'?'failed':'completedInterrupted';
   if (observation.header!.state !== expected) throw new Error('Native terminal state conflicts with the observed terminal event');
+  this.ui.noteObservedApprovalSet(task,ownApprovals(task,history,observation.header!),observation.header!.turnId);
   if (type === 'turn_cancelled' || (type==='turn_failed' && this.store.getTask(taskId).cancelRequestedAt!==null)) {
    this.store.transitionTask(taskId,'cancelled',{executionStopped:proof});
    return;
@@ -482,9 +530,8 @@ export class Coordinator {
   }
   const snapshot = await snapshotWorkspace(this.root,taskId,ws);
   const patch = await readFile(snapshot.patchFile);
-  result.artifacts = [{kind:'patch',path:snapshot.patchFile,sha256:createHash('sha256').update(patch).digest('hex'),sizeBytes:patch.length,mediaType:'text/x-diff'}];
+  result.artifacts = [{kind:'patch',path:snapshot.patchFile,sha256:createHash('sha256').update(patch).digest('hex'),sizeBytes:patch.length,mediaType:'text/x-diff'},snapshot.manifestArtifact,...snapshot.snapshotArtifacts];
   result.changedFiles = snapshot.changedFiles;
-  for (const file of snapshot.untracked) result.artifacts.push({kind:'untracked',path:join(this.root,'scheduler','artifacts',taskId,file.artifact),sha256:file.sha256,sizeBytes:(await readFile(join(this.root,'scheduler','artifacts',taskId,file.artifact))).length});
   if (!policy.verifyCommands.length) result.blockers!.push('Only git diff --check was configured; functional acceptance remains for reviewer');
   this.store.completeTask(taskId,result,{status:result.verification!.every(v=>v.exitCode===0)?'succeeded':'failed',executionStopped:proof});
  }

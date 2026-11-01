@@ -237,8 +237,8 @@ export class DurableTaskStore {
     // Recheck after acquiring the write lock: another process may have migrated
     // between opening this connection and obtaining schema ownership.
     const version = this.db.prepare('PRAGMA user_version').get() as { user_version: number };
-    if (version.user_version > 2) fail('UNSUPPORTED_SCHEMA', `State schema ${version.user_version} is newer than this program`);
-    if (version.user_version === 2) {this.db.exec('COMMIT');return;}
+    if (version.user_version > 3) fail('UNSUPPORTED_SCHEMA', `State schema ${version.user_version} is newer than this program`);
+    if (version.user_version === 3) {this.db.exec('COMMIT');return;}
     if (version.user_version === 0) this.db.exec(`
       CREATE TABLE IF NOT EXISTS workspaces (
         workspace_id TEXT PRIMARY KEY,
@@ -293,7 +293,7 @@ export class DurableTaskStore {
         BEGIN SELECT RAISE(ABORT, 'Task results are immutable'); END;
       PRAGMA user_version = 1;
     `);
-    this.db.exec(`
+    if (version.user_version < 2) this.db.exec(`
       ALTER TABLE tasks ADD COLUMN current_command_id TEXT NOT NULL DEFAULT '';
       ALTER TABLE tasks ADD COLUMN busy_retry_count INTEGER NOT NULL DEFAULT 0 CHECK (busy_retry_count >= 0);
       ALTER TABLE tasks ADD COLUMN cancel_requested_at INTEGER;
@@ -319,6 +319,15 @@ export class DurableTaskStore {
           CASE WHEN turn_id IS NOT NULL THEN updated_at END,stop_proof FROM tasks WHERE dispatch_attempted_at IS NOT NULL;
       PRAGMA user_version = 2;
     `);
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS ui_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT;
+      CREATE TABLE IF NOT EXISTS ui_records (kind TEXT NOT NULL, key TEXT NOT NULL, task_id TEXT NOT NULL REFERENCES tasks(task_id),
+        payload TEXT NOT NULL, PRIMARY KEY(kind,key)) STRICT;
+      CREATE TABLE IF NOT EXISTS ui_approval_actions (action_id TEXT PRIMARY KEY, owner_key TEXT NOT NULL UNIQUE,
+        task_id TEXT NOT NULL REFERENCES tasks(task_id), fingerprint TEXT NOT NULL, payload TEXT NOT NULL) STRICT;
+      PRAGMA user_version = 3;
+    `);
+    this.db.prepare('INSERT OR IGNORE INTO ui_metadata(key,value) VALUES(?,?)').run('store_id',randomUUID());
     this.db.exec('COMMIT');
     } catch (error) {
       try {this.db.exec('ROLLBACK');} catch { /* Preserve the original migration failure. */ }
@@ -776,6 +785,102 @@ export class DurableTaskStore {
   listTasks(): Task[] {
     this.ensureOpen();
     return (this.db.prepare('SELECT * FROM tasks ORDER BY created_at,task_id').all() as unknown as TaskRow[]).map(taskFromRow);
+  }
+
+  get storeId(): string {
+    this.ensureOpen();
+    return (this.db.prepare("SELECT value FROM ui_metadata WHERE key='store_id'").get() as {value:string}).value;
+  }
+
+  findTaskByRequestId(requestId: string): Task | null {
+    this.ensureOpen(); requiredString(requestId,'requestId');
+    const row = this.db.prepare('SELECT * FROM tasks WHERE request_id=?').get(requestId) as unknown as TaskRow | undefined;
+    return row ? taskFromRow(row) : null;
+  }
+
+  /** One short SQLite read transaction for revision-gated UI pagination. */
+  readSnapshot<T>(read:()=>T):T {
+    this.ensureOpen();this.db.exec('BEGIN');
+    try {const result=read();this.db.exec('COMMIT');return result;}
+    catch (error) {this.db.exec('ROLLBACK');throw error;}
+  }
+
+  readTaskListSnapshot(): {revision:number;tasks:Task[];workspaces:Workspace[];approvalActions:Record<string,JsonValue[]>} {
+    return this.readSnapshot(()=>{
+      const revision=this.getRevision(),tasks=this.listTasks(),workspaces=this.listWorkspaces();
+      const approvalActions:Record<string,JsonValue[]>={};
+      for(const row of this.db.prepare('SELECT task_id,payload FROM ui_approval_actions').all() as {task_id:string;payload:string}[])(approvalActions[row.task_id]??=[]).push(JSON.parse(row.payload) as JsonValue);
+      return {revision,tasks,workspaces,approvalActions};
+    });
+  }
+
+  getUiRecord<T>(kind: string, key: string): T | null {
+    this.ensureOpen();
+    const row = this.db.prepare('SELECT payload FROM ui_records WHERE kind=? AND key=?').get(kind,key) as {payload:string}|undefined;
+    return row ? JSON.parse(row.payload) as T : null;
+  }
+
+  listUiRecords<T>(kind: string, taskId: string): T[] {
+    this.taskRow(taskId);
+    return (this.db.prepare('SELECT payload FROM ui_records WHERE kind=? AND task_id=? ORDER BY key').all(kind,taskId) as {payload:string}[]).map(r=>JSON.parse(r.payload) as T);
+  }
+
+  putUiImmutableRecord(kind: string, key: string, taskId: string, value: unknown): void {
+    const payload = canonicalJson(value);
+    this.write(()=>{
+      this.taskRow(taskId);
+      const existing = this.db.prepare('SELECT payload FROM ui_records WHERE kind=? AND key=?').get(kind,key) as {payload:string}|undefined;
+      if (existing && existing.payload!==payload) fail('UI_RECORD_IMMUTABLE','An immutable UI record cannot be overwritten');
+      if (!existing) this.db.prepare('INSERT INTO ui_records(kind,key,task_id,payload) VALUES(?,?,?,?)').run(kind,key,taskId,payload);
+    });
+  }
+
+  getUiApprovalAction<T>(actionId: string): {fingerprint:string;payload:T}|null {
+    this.ensureOpen();
+    const row = this.db.prepare('SELECT fingerprint,payload FROM ui_approval_actions WHERE action_id=?').get(actionId) as {fingerprint:string;payload:string}|undefined;
+    return row ? {fingerprint:row.fingerprint,payload:JSON.parse(row.payload) as T} : null;
+  }
+
+  listUiApprovalActions<T>(taskId: string): T[] {
+    this.taskRow(taskId);
+    return (this.db.prepare('SELECT payload FROM ui_approval_actions WHERE task_id=?').all(taskId) as {payload:string}[]).map(r=>JSON.parse(r.payload) as T);
+  }
+
+  /** The UNIQUE owner key makes an uncertain intent non-replayable across restarts and clients. */
+  recordUiApprovalIntent(actionId: string, ownerKey: string, taskId: string, fingerprint: string, value: unknown): void {
+    this.write(()=>{
+      this.taskRow(taskId);
+      if (this.db.prepare('SELECT action_id FROM ui_approval_actions WHERE action_id=?').get(actionId)) fail('ACTION_CONFLICT','Approval action ID already exists');
+      if (this.db.prepare('SELECT action_id FROM ui_approval_actions WHERE owner_key=?').get(ownerKey)) fail('APPROVAL_RESPONSE_PENDING','An approval already has a response intent');
+      this.db.prepare('INSERT INTO ui_approval_actions(action_id,owner_key,task_id,fingerprint,payload) VALUES(?,?,?,?,?)').run(actionId,ownerKey,taskId,fingerprint,canonicalJson(value));
+      const row=this.taskRow(taskId);this.event(taskId,'ui_approval_send_intent',row.status,{actionId},this.now());
+    });
+  }
+
+  updateUiApprovalAction(actionId: string, value: unknown): void {
+    this.write(()=>{
+      const existing=this.db.prepare('SELECT task_id,payload FROM ui_approval_actions WHERE action_id=?').get(actionId) as {task_id:string;payload:string}|undefined;
+      if(!existing)fail('ACTION_NOT_FOUND','Approval action does not exist');
+      const previous=JSON.parse(existing.payload),next=JSON.parse(canonicalJson(value));
+      for(const key of ['taskId','approvalId','actionId','ownerKey','decision','intentAtMs','nativeRevisionAtCheck'])if(canonicalJson(previous[key])!==canonicalJson(next[key]))fail('ACTION_CONFLICT','Approval action identity cannot be changed');
+      if(previous.responseState===next.responseState)return;
+      const row=this.taskRow(existing.task_id);
+      next.taskRevision=this.event(row.task_id,'ui_approval_response_state',row.status,{actionId,responseState:next.responseState},this.now());
+      this.db.prepare('UPDATE ui_approval_actions SET payload=? WHERE action_id=?').run(canonicalJson(next),actionId);
+    });
+  }
+
+  markUiApprovalActionsUnknown(): void {
+    this.write(()=>{
+      for (const row of this.db.prepare('SELECT action_id,payload FROM ui_approval_actions').all() as {action_id:string;payload:string}[]) {
+        const value=JSON.parse(row.payload);
+        if (value.responseState==='awaiting_native'||value.responseState==='intent_recorded') {
+          value.responseState='unknown';
+          const task=this.taskRow(value.taskId);value.taskRevision=this.event(task.task_id,'ui_approval_response_recovered',task.status,{actionId:row.action_id,responseState:'unknown'},this.now());
+          this.db.prepare('UPDATE ui_approval_actions SET payload=? WHERE action_id=?').run(canonicalJson(value),row.action_id);
+        }
+      }
+    });
   }
 
   getResult(taskId: string): PersistedTaskResult | null {

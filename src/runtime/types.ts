@@ -64,6 +64,13 @@ export interface SessionSnapshot extends SessionRef {
   /** Redacted current tail window, not a promise of complete conversation history. */
   raw: Record<string, unknown>;
 }
+/** Private, pre-redaction approval input. Only the daemon's strict review schema may project it. */
+export interface ApprovalSourceSnapshot {
+ snapshot: SessionSnapshot;
+ pendingApprovals: Array<Record<string,unknown>>;
+ sourceComplete: boolean;
+ stablePermissionIds: boolean;
+}
 export type ApprovalDecision = 'accept' | 'decline' | 'cancel' | { optionId?: string; freeText?: string; action?: 'accept' | 'decline' | 'cancel'; content?: Record<string, unknown> };
 
 export interface RuntimeConnection {
@@ -74,6 +81,7 @@ export interface RuntimeConnection {
   respondApproval(turn: TurnRef, approvalId: string, decision: ApprovalDecision): Promise<void>;
   cancel(turn: TurnRef): Promise<void>;
   syncHistory(session: SessionRef): Promise<SessionSnapshot>;
+  readApprovalSnapshot?(session: SessionRef): Promise<ApprovalSourceSnapshot>;
   queryCommand(session: SessionRef, commandId: string): Promise<Record<string, unknown> | 'unknown'>;
   /** Official billing read; no local estimates of cloud balance. */
   quota(providerId: string): Promise<Record<string, unknown>>;

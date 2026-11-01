@@ -1,0 +1,9 @@
+**
+!package.json
+!README.md
+!CHANGELOG.md
+!LICENSE
+!dist/host/extension.cjs
+!dist/webview/main.js
+!dist/webview/styles.css
+!media/zcode-pool.svg

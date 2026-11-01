@@ -9,6 +9,13 @@
 /node_modules/
 /dist/
 /coverage/
+/extensions/vscode/node_modules/
+/extensions/vscode/dist/
+/extensions/vscode/*.vsix
+/extensions/vscode/.vscode-test/
+/extensions/vscode/.test-output/
+/extensions/vscode/.test-browser/
+/extensions/vscode/coverage/
 
 # Independent reference checkout (not a runtime dependency)
 /references/
