@@ -1,5 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
+import {createHash} from 'node:crypto';
+import {readFile} from 'node:fs/promises';
 import {resolve} from 'node:path';
 import {ActionService, type NativeAdapter} from '../../src/host/actions.js';
 import {MockTransport,loadMockFixture} from '../../src/host/mock.js';
@@ -15,6 +17,20 @@ async function harness(trusted=true){
   const service=new ActionService({mode:'mock',poolHome:'/mock/pool',host:'mock-host',authority:'local',createTransport:async()=>{if(first){first=false;return transport;}const next=new MockTransport(fixture);transports.push(next);return next;},native,onSnapshot:()=>{}});
   let id=0;const execute=(type:RequestType,payload:unknown={})=>service.execute(parseRequest({v:1,id:String(++id),generation:service.generation(),type,payload}));
   return {service,transport,transports,native,storage,diffs,execute,setTrusted:(value:boolean)=>{trusted=value;}};
+}
+function setApprovalContent(h:Awaited<ReturnType<typeof harness>>,document:any):void{
+  const review=h.transport.fixture.reviews['approval-demo']!;const text=JSON.stringify(document);
+  h.transport.fixture.approvalContents[review.reviewId]=text;
+  review.content={...review.content!,totalBytes:Buffer.byteLength(text),sha256:createHash('sha256').update(text).digest('hex')};
+}
+async function officialPermissionHarness(){
+  const h=await harness();const review=h.transport.fixture.reviews['approval-demo']!;
+  const document=JSON.parse(h.transport.fixture.approvalContents[review.reviewId]!);
+  document.interaction=JSON.parse(await readFile(resolve(__dirname,'../../../../test/runtime/fixtures/official-permission.json'),'utf8'));
+  document.interaction.interactionId=review.approvalId;
+  review.decisions=[{decision:'accept',label:'Allow once',nativeOptionId:'allowOnce'},{decision:'decline',label:'Deny',nativeOptionId:'deny'}];
+  setApprovalContent(h,document);await h.execute('connect');await h.execute('task.select',{taskId:review.taskId});
+  return {...h,document};
 }
 test('strict bridge rejects generic RPC, paths, unknown keys and oversized requests',()=>{
   const good={v:1,id:'r',generation:0,type:'worker.stop',payload:{workerId:'worker-demo'}};assert.equal(parseRequest(good).type,'worker.stop');
@@ -45,6 +61,50 @@ test('complete approval is hash-verified; accepts require complete content and r
   const body:any=await h.execute('approval.read',{taskId:review.taskId,approvalId:review.approvalId,reviewId:review.reviewId});assert.ok(body.loadedComplete);assert.ok(body.text.length>4000);
   const response:any=await h.execute('approval.respond',payload);assert.equal(response.responseState,'awaiting_native');assert.equal(h.transport.calls.filter(c=>c.method==='ui_respond_approval').length,1);
   await assert.rejects(h.execute('approval.respond',{...payload,decision:'decline'}));assert.equal(h.transport.calls.filter(c=>c.method==='ui_respond_approval').length,1);h.service.dispose();
+});
+test('official Edit review supports optional denial feedback and retains fixed allow-once/deny choices',async()=>{
+  for(const freeText of [undefined,false,true]){
+    const h=await officialPermissionHarness();
+    try{
+      if(freeText===undefined)delete h.document.interaction.payload.freeText;else h.document.interaction.payload.freeText=freeText;
+      setApprovalContent(h,h.document);
+      const review:any=await h.execute('approval.open',{taskId:'task-approval',approvalId:'approval-demo'});
+      assert.equal(review.readOnlyReason,null);assert.deepEqual(review.decisions.map((decision:any)=>decision.nativeOptionId),['allowOnce','deny']);
+      const body:any=await h.execute('approval.read',{taskId:review.taskId,approvalId:review.approvalId,reviewId:review.reviewId});
+      assert.equal(body.loadedComplete,true);assert.deepEqual(JSON.parse(body.text),h.document);
+      assert.ok(h.document.interaction.payload.options.find((option:any)=>option.kind==='allowAlways').response.permissionUpdates);
+      assert.equal(h.transport.calls.some(call=>call.method==='ui_respond_approval'),false);
+    }finally{h.service.dispose();}
+  }
+});
+test('feedback-capable reviews retain strict schema, owner, digest and option-response checks',async()=>{
+  const cases:[string,string,(h:Awaited<ReturnType<typeof officialPermissionHarness>>)=>void][]=[
+    ['unknown decision parameters','UNSUPPORTED_SCHEMA',h=>{h.document.interaction.payload.detail.extra_decision_field='another operation';}],
+    ['different owner','APPROVAL_CHANGED',h=>{h.document.owner.nativeTurnId='another-turn';}],
+    ['different interaction','UNSUPPORTED_SCHEMA',h=>{h.document.interaction.interactionId='another-approval';}],
+    ['duplicate option ID','UNSUPPORTED_SCHEMA',h=>{h.document.interaction.payload.options.push(structuredClone(h.document.interaction.payload.options[0]));}],
+    ['wrong option kind','UNSUPPORTED_SCHEMA',h=>{h.document.interaction.payload.options[0].kind='allowAlways';}],
+    ['mismatched response','UNSUPPORTED_SCHEMA',h=>{h.document.interaction.payload.options[0].response.decision='deny';}],
+    ['allow-once permission update','UNSUPPORTED_SCHEMA',h=>{h.document.interaction.payload.options[0].response.permissionUpdates=[];}],
+    ['deny permission update','UNSUPPORTED_SCHEMA',h=>{h.document.interaction.payload.options.at(-1).response.permissionUpdates=[];}],
+    ['non-string reason','UNSUPPORTED_SCHEMA',h=>{h.document.interaction.payload.options[0].response.reason={operation:'another operation'};}],
+  ];
+  for(const [label,code,change]of cases){
+    const h=await officialPermissionHarness();
+    try{
+      change(h);setApprovalContent(h,h.document);
+      const review:any=await h.execute('approval.open',{taskId:'task-approval',approvalId:'approval-demo'});
+      await assert.rejects(h.execute('approval.read',{taskId:review.taskId,approvalId:review.approvalId,reviewId:review.reviewId}),(error:unknown)=>error instanceof HostError&&error.code===code,label);
+      await assert.rejects(h.execute('approval.respond',{taskId:review.taskId,approvalId:review.approvalId,reviewId:review.reviewId,contentSha256:review.content.sha256,approvalRevision:review.approvalRevision,nativeRevision:review.nativeRevision,decision:'accept'}),/Load and verify all/);
+      assert.equal(h.transport.calls.some(call=>call.method==='ui_respond_approval'),false);
+    }finally{h.service.dispose();}
+  }
+  const h=await officialPermissionHarness();
+  try{
+    const review:any=await h.execute('approval.open',{taskId:'task-approval',approvalId:'approval-demo'});
+    h.transport.fixture.approvalContents[review.reviewId]+=' ';
+    await assert.rejects(h.execute('approval.read',{taskId:review.taskId,approvalId:review.approvalId,reviewId:review.reviewId}),(error:unknown)=>error instanceof HostError&&error.code==='INTEGRITY_MISMATCH');
+  }finally{h.service.dispose();}
 });
 test('immutable file Diff verifies whole file hashes; review binds manifest and never calls daemon',async()=>{
   const h=await harness();await h.execute('connect');await h.execute('task.select',{taskId:'task-complete'});await h.execute('artifacts.list',{taskId:'task-complete'});

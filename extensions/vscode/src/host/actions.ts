@@ -409,8 +409,13 @@ function validatePermissionContent(data:unknown,review:UiApprovalReview):void{
   const parsed=uiPermissionReviewSchema.safeParse(data);if(!parsed.success)throw new HostError('UNSUPPORTED_SCHEMA','This permission review contains an unsupported decision schema.');
   const value=parsed.data;
   if(value.taskId!==review.taskId||value.approvalId!==review.approvalId||JSON.stringify(value.owner)!==JSON.stringify(review.owner))throw new HostError('APPROVAL_CHANGED','The permission review belongs to another interaction or attempt.');
-  if(value.interaction.interactionId!==review.approvalId||value.interaction.payload.freeText||review.decisions.some(decision=>{
-    const option=value.interaction.payload.options.find(item=>item.optionId===decision.nativeOptionId);
-    return !option||decision.decision==='accept'&&option.kind!=='allowOnce'||decision.decision==='decline'&&option.kind!=='deny'||decision.decision==='cancel';
+  // Official 3.16.3 freeText only enables optional feedback on deny. Fixed option
+  // IDs remain usable without feedback; only their mapped responses need checking.
+  const options=value.interaction.payload.options;
+  if(value.interaction.interactionId!==review.approvalId||new Set(options.map(option=>option.optionId)).size!==options.length||review.decisions.some(decision=>{
+    const option=options.find(item=>item.optionId===decision.nativeOptionId);
+    if(!option||decision.decision==='accept'&&option.kind!=='allowOnce'||decision.decision==='decline'&&option.kind!=='deny'||decision.decision==='cancel')return true;
+    const response=option.response;
+    return response!==undefined&&(response.decision!==(decision.decision==='accept'?'allow':'deny')||Object.keys(response).some(key=>!['decision','reason'].includes(key))||response.reason!==undefined&&typeof response.reason!=='string');
   }))throw new HostError('UNSUPPORTED_SCHEMA','This interaction does not provide supported allow-once and deny decisions.');
 }
