@@ -3,13 +3,17 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=24.0.0" },
+  "engines": {
+    "node": ">=24.0.0"
+  },
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "tsx --test test/**/*.test.ts",
     "cli": "tsx src/cli/main.ts",
     "daemon": "tsx src/daemon/main.ts",
-    "mcp": "tsx src/mcp/main.ts"
+    "mcp": "tsx src/mcp/main.ts",
+    "package:daemon": "node scripts/package-daemon.mjs",
+    "test:daemon-package": "npm run package:daemon && node scripts/daemon-package-smoke.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.26.0",
