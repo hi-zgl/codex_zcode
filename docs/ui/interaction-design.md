@@ -1,98 +1,83 @@
 # VS Code 可视化与交互设计
 
-状态：设计提案，尚未实现 VS Code 扩展或下述新增接口。核对日期：2026-11-01；本仓库核对基线：`ac55e71818d1b13c5a210f43abf870d2625d7958`。本文只规划界面，未实现部分的运行边界和 API 缺口见 [集成契约](integration-contract.md)。
+状态：完整设计提案，**尚未实现 VS Code 扩展、F5 调试入口或新增 UI API**。核对日期：2026-11-01；源码基线：`d403eb5a201e442d5c778cb43938915a193ec939`。现有静态原型只覆盖部分演示场景，不是可连接 daemon 的客户端。
 
-## 推荐形态
+阅读顺序：[流程与状态](flows-and-states.md) → [集成契约](integration-contract.md) → [扩展架构](extension-architecture.md) → [开发与验收](development-and-acceptance.md)。本文负责形态、屏幕和交互原则；按钮条件与异常反馈见流程文档。
 
-主要在 VS Code 中使用 Codex，优先做 **VS Code workspace extension**：用原生侧栏和状态栏掌握任务，用按需打开的 `WebviewPanel` 审阅详情、审批和管理资源。daemon 继续独立运行，扩展只作为客户端。关闭面板、重载窗口或关闭 VS Code 都不能解释为取消任务。
+## 产品形态
 
-侧栏负责索引和状态，Webview 补充复杂审阅，保留现有 CLI、MCP 和 daemon 的边界。VS Code 官方建议数据列表优先采用 Tree View，并以 Webview 补充复杂详情；GitHub Pull Request 的列表加详情也是其列出的示例。[Views 指南](https://code.visualstudio.com/api/ux-guidelines/views)、[Webviews UX 指南](https://code.visualstudio.com/api/ux-guidelines/webviews)
+优先做 **workspace extension：原生侧栏 + 一个状态栏入口 + 按需打开的编辑区 WebviewPanel**。daemon 继续在 Linux 上用独立 Node.js 24 运行；扩展只是客户端。关闭面板、重载窗口、断开 UI 或退出 VS Code 都不取消任务。
 
-| 方案 | 对当前使用方式的价值 | 必须承担的工作 | 建议 |
+| 形态 | 适用价值 | 当前选择 |
+| --- | --- | --- |
+| VS Code 原生视图 + 详情 Webview | 代码旁跟踪任务，复用文件导航、主题、键盘和原生 Diff；SSH/WSL 与 daemon 同侧运行 | 首选 |
+| 独立 Web 管理台 | 跨编辑器访问 | 暂缓；浏览器到 Unix socket 还需认证和桥接 |
+| 独立桌面应用 | 离开编辑器管理 | 暂缓；多一套打包、更新和远程连接，不解决现有 Linux 边界 |
+
+日常索引用 Tree View，复杂审阅用 Webview；Activity Bar 只打开视图容器，不直接弹出编辑区。这个组合符合 VS Code 对数据列表和 Webview 的分工建议。[Views 指南](https://code.visualstudio.com/api/ux-guidelines/views)、[Webview API](https://code.visualstudio.com/api/extension-guides/webview)
+
+## 视觉参考
+
+参考 [pjpv/zcode-switch](https://github.com/pjpv/zcode-switch/tree/f34225686dfef05d84c256a56f868719248f15ff) 的固定版本 `f34225686dfef05d84c256a56f868719248f15ff`：[截图](https://github.com/pjpv/zcode-switch/blob/f34225686dfef05d84c256a56f868719248f15ff/docs/screenshot.png)、[MIT 许可](https://github.com/pjpv/zcode-switch/blob/f34225686dfef05d84c256a56f868719248f15ff/LICENSE)，版权为 `Copyright (c) 2026 zcode-switch contributors`。可选本地参考保留在 `references/zcode-switch/`；不纳入主项目 Git。
+
+借鉴中性底色、细分隔线、克制的琥珀强调、紧凑资源行、清楚的标签和等宽数字。主页面围绕多项目任务，不照搬账号切换工具的布局、品牌、图标或源码。若未来复用实际素材或代码，保留对应许可。
+
+**生产样式跟随 VS Code**：使用 `--vscode-*` 主题色、编辑器字体与 Codicon；固定深色仅是静态原型的参考外观。注意状态同时带文字/图标，浅色、高对比度、屏幕阅读器和减少动画模式都要可用。[主题与可访问性 API](https://code.visualstudio.com/api/extension-guides/webview#theming-webview-content)
+
+## 公共名词与入口
+
+pool 是同一主机、用户和规范化路径下的资源池；项目按源仓库归组；**任务 workspace** 是 pool 创建的隔离 git worktree，区别于 VS Code 工作区窗口。Worker 绑定一个账号，`ready` 只说明可连接，不能等同空闲。任务身份是 `taskId`，繁忙续跑不会创建另一个任务。
+
+| 入口 | 固定 ID | 内容与操作 |
+| --- | --- | --- |
+| Activity Bar 容器 | `zcodePool` | 标题 ZCode Pool；打开原生视图 |
+| 任务 Tree View | `zcodePool.tasks` | 项目/状态筛选下的任务索引；需要处理、执行中、最近结束分组 |
+| 资源 Tree View | `zcodePool.resources` | Workers / Accounts / Workspaces 三组，定位关联任务 |
+| 编辑区面板 | `zcodePool.workbench` | 同窗口复用一个面板；恢复选中 task、页签和筛选 |
+| 状态栏 | 一个工作区级 item | `ZCode · 未连接`、`ZCode · 近期 2 执行 · 1 需处理` 或连接中断；点击打开工作台并聚焦需要处理 |
+
+状态栏计数与当前项目/列表范围一致，tooltip 说明主机、pool、快照时间和“最近 50 条”限制；不显示无法证明的全池总数或多个账号余额，不持续使用自定义醒目背景。[Status Bar 指南](https://code.visualstudio.com/api/ux-guidelines/status-bar)
+
+命令统一使用 `zcodePool.*`：`openWorkbench`、`connect`、`disconnect`、`refresh`、`openSettings`、`openTask`、`newTask`、`cancelTask`、`reconcileTask`、`resumeTask`、`respondApproval`、`importAccounts`、`startWorker`、`stopWorker`、`probeWorker`、`createWorkspace`。完整参数和 menu 条件以[扩展架构](extension-architecture.md)为准；命令 ID 不是 daemon RPC 名。
+
+## 屏幕清单与区块
+
+顶部始终标明执行侧，例如 `SSH: host-a · ~/.zcode_pool`；项目筛选不改变账号或任务绑定。工作台以任务列表/详情为主，资源和设置由同一面板入口打开，不再复制一套应用侧栏。
+
+| 屏幕 | 区块与默认内容 | 主要操作 | 次要操作 |
 | --- | --- | --- | --- |
-| 原生 VS Code 扩展，Tree View + Status Bar + WebviewPanel | 随代码查看任务、跳转文件、使用原生 Diff；Remote SSH / WSL 能与项目同机连接 daemon | 扩展消息桥、主题和键盘适配、远程兼容测试 | 首选；原生组件做日常入口，Webview 做详情 |
-| 独立 Web 管理台 | 浏览器可看，未来适合跨编辑器使用 | 浏览器不能直接连接 Unix socket；需另建 HTTP/WebSocket 桥、认证、来源校验及远程访问策略 | 后续复用界面组件时再考虑；静态原型不能充当可操作管理台 |
-| 独立桌面应用，例如 Tauri | 不开编辑器也能管理，适合托盘入口 | 应用打包更新、桌面权限和本地/远程桥接；当前 Linux daemon 仍需单独部署 | 暂无必要；参考项目使用 Tauri 不构成本项目选它的理由 |
+| 首次连接 / 连接异常 | Host 类型、pool 路径、支持边界、连接结果、脱敏诊断；未连接不显示伪造业务空态 | 连接已有 daemon | 修改设置、运行指引、复制诊断 |
+| 任务列表 | 主机/pool、项目选择、来源范围、筛选、任务行、已载入计数、详情区域 | 打开任务；M2 新任务 | 刷新、清除筛选；M3 加载历史 |
+| 任务详情 / 审批 | 身份和状态、账号/Worker/实际执行目录、概况/审批/交付与核验/事件四页签、占用与动作反馈 | 当前上下文唯一主动作，如审阅审批或查看交付 | 取消任务、核对执行状态、恢复观察；条件见状态表 |
+| 交付与核验 | 总结、blockers、命令与退出码、不可变快照身份、baseCommit、文件列表、Diff/工件内容 | 打开原生 Diff；完成后标记本客户端已审阅 | 加载 patch、读取未跟踪工件、打开当前文件 |
+| 资源管理 | 账号来源/健康/额度、Worker 状态与两类占用、workspace 仓库/分支/baseCommit、关联任务 | 按对象启动/探测/创建/导入 | 停止空闲 Worker、查看关联任务；不提供账号切换、合并、删除 |
+| 新任务 / 创建 workspace | 明确仓库与 base ref，实际 worktree、Worker/账号、提示词、模型、session、mode、续跑上限、核验命令 | 创建 workspace 或派发任务 | 保存本次非敏感选择、回到任务；不自动读仓库命令执行 |
+| 设置 | Host 环境说明、pool 路径、概览发现间隔、脱敏诊断；Node/loader 只属于未来启动能力，M2 无该设置 | 保存设置；连接是独立操作 | 查看运行指引；不自动修改 Codex/MCP/systemd |
 
-## 视觉参考与布局原则
+原生任务行显示短 ID、状态、项目/任务 workspace、Worker、续跑提醒；标题栏保留刷新和打开工作台，常用行内动作最多三个，其余放上下文菜单。M1 缺少安全标题/时间字段时用 task ID 和“—”，不截取 prompt 造标题。
 
-参考 [pjpv/zcode-switch](https://github.com/pjpv/zcode-switch) 的 [commit f34225686dfef05d84c256a56f868719248f15ff](https://github.com/pjpv/zcode-switch/tree/f34225686dfef05d84c256a56f868719248f15ff)，包括其 [截图](https://github.com/pjpv/zcode-switch/blob/f34225686dfef05d84c256a56f868719248f15ff/docs/screenshot.png)和 [MIT 许可](https://github.com/pjpv/zcode-switch/blob/f34225686dfef05d84c256a56f868719248f15ff/LICENSE)。版权标注为 `Copyright (c) 2026 zcode-switch contributors`。本地克隆为可选参考：[截图](../../references/zcode-switch/docs/screenshot.png)、[样式](../../references/zcode-switch/src/styles.css)、[LICENSE](../../references/zcode-switch/LICENSE)。
+宽工作台按“列表 | 详情”布局；小于 760px 切换为“列表 → 详情 → 返回”，保持筛选、选中和滚动位置。小于 480px 元数据改成单列，动作换行，审批参数和代码仅在自身区域横向滚动。原生侧栏不嵌整页工作台。完整键盘和反馈规格见[流程与状态](flows-and-states.md#键盘窄屏与反馈)。
 
-借鉴的仅是视觉语言：深色中性底、细分隔线、克制的琥珀强调色、清晰的状态标签、等宽数字、紧凑资源行和就地展开。本文不复制其源码、图标、品牌或页面布局；若未来实际复用代码或素材，应保留对应版权和 MIT 许可声明。
+## 必须保持的交互语义
 
-参考工具围绕账号切换；本项目围绕多个项目的隔离任务，因此主页面以任务为中心。账号列表属于资源管理，不使用“当前唯一账号”作为全局主视觉，也不提供改变共享官方登录身份的“切换”按钮。
+- 第一次打开/F5 仅初始化“未连接”；点击连接后才协商并读数据。连接已有 daemon，不隐式启动 daemon、Worker、模型、核验、探测或系统服务。
+- 后台状态、连接新鲜度、占用、人工审阅是四个独立维度。`verifying` 只叫“核验中”；`succeeded` 可显示“已完成 · 待人工审阅”。本地审阅标记不更改 daemon 状态，也不宣称其他客户端已审阅。
+- 审批预览不等于完整内容，读全不等于取得授权。没有完整来源时整个审批只读；有来源但未读全时不能批准。答复 ACK 后保留“等待原生确认”，不乐观移除审批。
+- 默认繁忙恢复是初次派发后最多 3 次原会话立即发送“继续”，范围 0–10。没有退避倒计时，不换账号/模型、不重发原提示词；取消请求阻止后续续跑。
+- 取消 ACK、断连或没有事件都不证明停止。占用未知继续阻止 Worker/workspace 复用，只提供检查和对账，不提供强制解锁。
+- “核对执行状态”不发模型命令、不运行核验，但会更新本地任务记录，并可能释放已证实停止的占用；“恢复观察”可能运行后续核验或有界续跑。两者都不是普通刷新，M1 不自动调用。
+- 交付 patch 是相对 workspace `baseCommit` 的累计变更，未跟踪文件内容另存工件。原生 Diff 必须读不可变 base/final，不能用当前磁盘冒充历史交付。
+- 普通查看、筛选、刷新、连接、对账、探测、单次审批、取消和停止空闲 Worker 不额外弹一层确认。把目标、范围和效果写在动作旁，最终点击即提交；不以每次勾选免责声明代替完整审阅。
 
-生产扩展应优先使用 `--vscode-*` 主题色、编辑器字体和 Codicon。琥珀只用于需要注意的状态或一个主要操作，成功、错误同时带文字和图标。浅色、高对比度与键盘导航必须可用；不照搬固定黑色背景、字体尺寸或荧光效果。以上是本项目的设计取舍；主题和可访问性要求参见 [Webviews UX 指南](https://code.visualstudio.com/api/ux-guidelines/webviews)。
+## 阶段与交付边界
 
-## 信息结构
+| 阶段 | 能力与验收门槛 |
+| --- | --- |
+| M0 本轮设计 | 设计文档 + 已有本地静态原型；无扩展清单、launch.json、真实连接、账号导入或服务修改 |
+| M1 legacy 只读兼容 | 用户显式连接；近期 50 条、已知任务 wait、结果、事件 20 条/页、patch 4000 UTF-16 单元/页；只读投影必须安全，写动作和本地审阅按钮不可用 |
+| M2 可信可操作首版 | 先补 capability、安全详情、完整审批读取/内容绑定答复、额度来源和不可变文件快照；按独立能力及信任门槛开放取消/恢复/审批、Worker、workspace、Host 导入与派发；原生 Diff 和本地审阅此时可用 |
+| M3 扩展规模 | 稳定全历史列表、服务器筛选/分页、全池变更 feed 等；不作为 M1 可用的前提 |
 
-### 日常入口
+M2 的能力缺失可按项降级，不把不完整 daemon 宣称为全部可操作首版。审批不回退旧 `respond_approval` 绕过审阅绑定，旧任务缺文件快照时原生 Diff 明确不可用。[接口门槛](integration-contract.md)与[开发验收](development-and-acceptance.md)共同定义完成标准。
 
-一个 `ZCode Pool` View Container，默认放原生侧栏，用户可以移动到辅助侧栏。内部最多两个原生 Tree View：
-
-- **任务**：按“需要处理 / 执行中 / 最近结束”分组，默认筛选当前项目，提供“整个池”切换。每行展示任务短 ID、项目、状态和必要提醒，选中后打开详情。标题栏只放刷新与打开管理面板，更多动作放上下文菜单。
-- **资源**：账户 → 对应 Worker，另列 workspace。显示容量与占用的来源；可展开查看关联任务。资源不是固定属于当前 VS Code 窗口。
-
-Activity Bar 点击打开这些视图，不直接弹出编辑区 Webview。树行代表实际对象；操作使用行内动作或上下文菜单，每行最多三个常用动作，符合 [Views 指南](https://code.visualstudio.com/api/ux-guidelines/views)。
-
-状态栏只放一个工作区级入口，例如 `ZCode · 2 执行 · 1 待处理`。断连时改成 `ZCode · 连接中断`，保留最近快照时间；不把所有账户余额塞进状态栏，也不持续用醒目自定义底色。点击定位任务视图。长度和数量控制依据 [Status Bar 指南](https://code.visualstudio.com/api/ux-guidelines/status-bar)。
-
-### 详情与管理面板
-
-按用户操作打开一个可复用的编辑区 `WebviewPanel`。从任务视图进入时保留选中的 task ID；从命令面板进入时恢复上次的筛选。页面结构为：
-
-1. 顶部上下文：连接主机、pool、项目筛选、最近同步时间；明确区分 `SSH: host-a`、`WSL: Ubuntu` 与本机。
-2. 工作区级摘要：执行、待审批、需检查、占用未知。计数的范围必须与筛选一致，并注明是否只是最近 50 条。
-3. 主列表：项目 / workspace、任务状态、Worker、更新时间、续跑次数；选中任务后在详情区审阅。
-4. 详情页签：概况、审批、交付与核验、事件。事件和补丁均按需分页读取，不默认拉取原生会话全文。
-5. 资源管理入口：账号与 Worker、workspace。使用同一详情框架，不重复一套侧边导航。
-
-宽面板可呈现列表与详情双列；窄面板改成列表 → 详情返回，保持选择和滚动位置。不要按桌面应用的固定宽度压缩到账户卡片中。面板只保存筛选、task ID、页签和游标；执行状态以 daemon 为准，凭据、审批全文不写入 Webview 持久状态。
-
-## 主要用户流程
-
-### 看当前项目与整个池
-
-打开侧栏先看当前项目的任务，需要时切到整个 pool。同一 pool 的 CLI、Codex MCP 和多个 VS Code 窗口共享状态；切换筛选不改变任务或账号绑定。多根 workspace 显式选择仓库，任务执行的隔离 worktree 与当前 VS Code 窗口分别标识。
-
-日常读任务状态，需要解释时再打开详情、事件或交付。当前只有最近 50 个任务的概览，界面应显示范围，不能用本地搜索伪装完整历史。账户额度区分导入快照、未查询、查询失败和过期，不能画成持续实时更新的云端余额。
-
-### 处理审批与未知占用
-
-待审批行打开对应交互，先看操作参数、目标和完整度，再按已有授权决定。摘要、完整详情、审阅不完整与答复待原生确认分别显示。参数被截断或无法归属时明确提示缺失，不能凭短摘要批准；当前也不支持任意原生选项表单或批量批准。
-
-提交批准、拒绝或原生交互取消后，保留“等待原生确认”；其他客户端已处理时刷新当前卡片。取消整个任务另用任务动作。连接断开、超时或无事件不代表任务已停止；“占用未知”继续挡住 Worker/workspace 复用，提供对账和检查入口，不提供强制解锁。完整状态和审批契约见 [集成契约](integration-contract.md)。
-
-### 模型繁忙与取消
-
-展示“模型繁忙，原会话已继续 1/3 次”。默认首次派发后最多再继续三次；配置允许 0–10，0 关闭。daemon 只有确认当前回合因明确模型繁忙失败且无活动执行后，才立即在同账号、模型和会话发送“继续”。界面不显示退避倒计时、不重发原任务，也不自动换资源。次数不会因刷新清零；耗尽后保留原任务失败记录。详见 [繁忙恢复](../busy-recovery.md)。
-
-点击取消后显示“取消请求已记录，等待终止确认”，阻止后续自动续跑，保留资源占用直到确认停止。无法定位原回合时提示需检查；关闭面板不能当成取消，也不能退化为停止整个 Worker。
-
-### 审阅交付
-
-结束后先看总结、变更文件和核验结果，需要时再翻阅补丁。只配置 `git diff --check` 时标明仍需功能验收。现有 patch 是相对 workspace baseCommit 的累计变更，并不包含未跟踪文件内容；原生历史 Diff 需要先补工件读取能力。
-
-Codex 与面板是并列客户端。打开 Dashboard、展开日志和审批详情都不会自动把内容送进 Codex；MCP 继续按需返回精简结果。
-
-## 分阶段落地
-
-### 阶段一：只读面板
-
-实现 Node workspace extension、原生任务/资源视图、单个状态栏入口、按需详情面板及安全消息桥。只连接已有 daemon；先用 `overview` + 已知 task IDs 的 `wait`，按需读 `get_result/get_logs/get_diff`。不自动调用 probe、resume、reconcile、dispatch 或任何启停方法。
-
-对最近 50 条、无完整停止标志、额度快照和 patch 范围显式标记。静态视觉原型中的示例数字和状态均标为演示；没有动作适配器时不显示伪成功。只读阶段的交付是可靠看见已有状态，不以补齐所有后台新接口为前提。
-
-### 阶段二：动作与审批
-
-先补详情、完整审阅和动作绑定的必要契约，再加入对账、恢复观察、取消、单项审批和 Worker 启停。界面说明恢复可能启动既有核验或有界续跑；批准依赖完整操作审阅和现有授权，拒绝/取消保留各自语义。未知占用继续禁止复用，无强制解锁。
-
-验收需覆盖：其他客户端先处理审批、ACK 早于 pending 更新、审批参数截断、恢复时不能归属、取消后不再续跑、繁忙 3 次耗尽、发送 ACK 丢失、daemon 重启和窗口重载。必须证明这些场景不会重发未知任务、重复答复或释放不明占用。
-
-### 阶段三：workspace、Diff 与账号导入
-
-补受限工件读取和更完整的列表/额度 read model，集成原生 `vscode.diff`。加入明确选择源仓库/base ref、创建 worktree、任务派发和本机 OAuth JSON 导入；导入通过 Host 的文件选择与 daemon 完成，敏感文件内容不穿过 Webview。新任务表单展示实际执行目录、Worker/账号、模型、session 策略、繁忙上限及核验命令；不自动从仓库提取命令运行。
-
-对不可用 API 保持禁用并写明原因，例如合并、清理 workspace、账号删除/改名/登录。后续是否做独立 Web 或桌面客户端，按实际跨编辑器需求再决定，不影响 daemon 与 MCP 的独立性。
-
-各阶段都不自动更改 Codex 配置、共享官方登录、系统服务或启动策略。部署、启用服务和新增 MCP 连接保留为清楚的独立操作，沿用 [开发运行](../development.md)、[后台服务](../service.md) 和 [上下文预算](../context-policy.md) 的现有边界。
+原型已演示任务筛选、单项审批结果、繁忙续跑、对账/显式恢复、静态差异与核验、账号展开、本地审阅和窄侧栏；原型“只读对账”等标签的生产语义差距，以及首次连接、分页、完整审批/ACK/并发、取消未知、真实额度/导入、创建/派发和主题适配，见[流程文档覆盖及验收索引](flows-and-states.md#原型覆盖与验收索引)。
