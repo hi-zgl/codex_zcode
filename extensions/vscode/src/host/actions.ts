@@ -28,6 +28,7 @@ export interface ServiceOptions {
   onSnapshot(snapshot: UiSnapshot): void;
   overviewIntervalSeconds?: number;
   supported?: boolean; environmentReason?: string;
+  configurationError?: HostError;
   projectContext?():ProjectContext;
 }
 interface Recovery { requestId: string; payloadHash: string; workspaceId: string; workerId: string; poolKey: string; taskId?: string }
@@ -55,7 +56,7 @@ export class ActionService implements RouterTarget {
   private visible = false;
   constructor(private readonly options: ServiceOptions) {
     this.state = {
-      connection:{state:'disconnected',mode:options.mode,generation:0,host:options.host,poolHome:options.poolHome,trusted:options.native.trusted(),lastReceivedAtMs:null,stale:false,storeId:null,instanceId:null,daemonVersion:null,capabilities:{},error:null,supported:options.supported??true,environmentReason:options.environmentReason??null},
+      connection:{state:options.configurationError?'error':'disconnected',mode:options.mode,generation:0,host:options.host,poolHome:options.poolHome,trusted:options.native.trusted(),lastReceivedAtMs:null,stale:false,storeId:null,instanceId:null,daemonVersion:null,capabilities:{},error:options.configurationError?safeError(options.configurationError):null,supported:options.supported??true,environmentReason:options.environmentReason??null},
       tasks:[],scope:'recent_50_loaded',total:null,listNextCursor:null,selectedTaskId:null,detail:null,
       resources:{accounts:[],workers:[],workspaces:[],quotas:{}},approvals:null,delivery:{manifest:null,files:[],nextCursor:null,reviewed:false},draft:blankDraft(),actions:[],overviewIntervalSeconds:options.overviewIntervalSeconds??30,notice:null,
     };
@@ -84,6 +85,7 @@ export class ActionService implements RouterTarget {
     this.state.connection.lastReceivedAtMs=Date.now();this.state.connection.stale=false;this.state.connection.error=null;return result;
   }
   async connect(): Promise<UiSnapshot> {
+    if(this.options.configurationError)throw this.options.configurationError;
     if(this.state.connection.supported===false)throw new HostError('UNSUPPORTED_PLATFORM',this.state.connection.environmentReason??'This host does not support real daemon connections.');
     if(this.state.connection.state==='connecting')return this.state;
     this.disconnect(false);const generation=this.generation();
@@ -103,7 +105,7 @@ export class ActionService implements RouterTarget {
   }
   disconnect(emit=true): void {
     this.poll.setVisible(false);this.connectionAbort.abort();this.selectionAbort.abort();this.connectionAbort=new AbortController();this.selectionAbort=new AbortController();this.client?.dispose();this.client=undefined;
-    this.state.connection={...this.state.connection,state:'disconnected',generation:this.generation()+1,stale:this.state.tasks.length>0,error:null,storeId:null,instanceId:null,capabilities:{}};
+    this.state.connection={...this.state.connection,state:this.options.configurationError?'error':'disconnected',generation:this.generation()+1,stale:this.state.tasks.length>0,error:this.options.configurationError?safeError(this.options.configurationError):null,storeId:null,instanceId:null,capabilities:{}};
     this.state.detail=null;this.state.selectedTaskId=null;this.state.legacyResult=null;this.state.approvals=null;this.state.delivery={manifest:null,files:[],nextCursor:null,reviewed:false};this.state.resources.quotas={};this.reviews.clear();this.taskCache.clear();this.deliveryOpened.clear();this.viewedFiles.clear();this.listSequence++;this.selectionSequence++;
     this.state.tasks=[];this.state.total=null;this.state.listNextCursor=null;this.historicalPagesLoaded=false;this.listFilter=undefined;
     if(emit)this.emit();

@@ -67,12 +67,14 @@ export async function activate(context:vscode.ExtensionContext):Promise<unknown>
   async function createService():Promise<ActionService>{
     // Machine-scope settings deliberately ignore workspace/folder overrides.
     const inspected=vscode.workspace.getConfiguration('zcodePool').inspect<string>('poolHome');
-    let configured=inspected?.globalValue??'';
-    if(development&&mode==='real'&&process.env.ZCODE_POOL_DEBUG_POOL_HOME)configured=process.env.ZCODE_POOL_DEBUG_POOL_HOME;
-    if(configured&&!isAbsolute(configured))throw new HostError('INVALID_POOL_HOME','Set an absolute pool path in host User/Remote Settings.');
-    const requested=resolve(configured||join(homedir(),'.zcode_pool'));
-    const poolHome=mode==='mock'?'/mock/zcode-pool':await realpath(requested).catch(()=>requested);
-    return new ActionService({mode,poolHome,host,authority,native,onSnapshot:update,projectContext:()=>({workspaceFolderPaths:(vscode.workspace.workspaceFolders??[]).filter(folder=>['file','vscode-remote'].includes(folder.uri.scheme)).map(folder=>folder.uri.fsPath),activeFilePath:vscode.window.activeTextEditor&&['file','vscode-remote'].includes(vscode.window.activeTextEditor.document.uri.scheme)?vscode.window.activeTextEditor.document.uri.fsPath:null}),supported:mode==='mock'||process.platform==='linux',environmentReason:process.platform==='linux'?undefined:'Real daemon connections require a Linux workspace extension host.',overviewIntervalSeconds:vscode.workspace.getConfiguration('zcodePool').get('overviewIntervalSeconds',30),createTransport:async()=>{
+    const debugPoolHome=development&&mode==='real'?process.env.ZCODE_POOL_DEBUG_POOL_HOME:undefined;
+    const configured=debugPoolHome??inspected?.globalValue??'';
+    const configurationError=mode==='real'&&(configured!==''||debugPoolHome!==undefined)&&(!isAbsolute(configured)||configured.includes('\0'))?new HostError('INVALID_POOL_HOME',debugPoolHome!==undefined?'ZCODE_POOL_DEBUG_POOL_HOME must be an absolute path on the extension host without NUL characters. Stop debugging and restart F5; enter an absolute pool path without quotes. Changing Settings does not override this debug input.':'Set zcodePool.poolHome to an absolute pool path without quotes or NUL characters in host User/Remote Settings, then Connect.'):undefined;
+    // Keep invalid input visible; never resolve it or substitute another pool.
+    const requested=configurationError?configured:resolve(configured||join(homedir(),'.zcode_pool'));
+    const poolHome=mode==='mock'?'/mock/zcode-pool':configurationError?requested:await realpath(requested).catch(()=>requested);
+    return new ActionService({mode,poolHome,host,authority,native,configurationError,onSnapshot:update,projectContext:()=>({workspaceFolderPaths:(vscode.workspace.workspaceFolders??[]).filter(folder=>['file','vscode-remote'].includes(folder.uri.scheme)).map(folder=>folder.uri.fsPath),activeFilePath:vscode.window.activeTextEditor&&['file','vscode-remote'].includes(vscode.window.activeTextEditor.document.uri.scheme)?vscode.window.activeTextEditor.document.uri.fsPath:null}),supported:mode==='mock'||process.platform==='linux',environmentReason:process.platform==='linux'?undefined:'Real daemon connections require a Linux workspace extension host.',overviewIntervalSeconds:vscode.workspace.getConfiguration('zcodePool').get('overviewIntervalSeconds',30),createTransport:async()=>{
+      if(configurationError)throw configurationError;
       if(mode==='mock'){
         const fixture=process.env.ZCODE_POOL_UI_FIXTURE??vscode.Uri.joinPath(context.extensionUri,'test','fixtures','pool-demo.json').fsPath;
         return new MockTransport(await loadMockFixture(fixture));

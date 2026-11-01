@@ -38,6 +38,12 @@ ZCODE_POOL_HOME=/绝对路径/测试池 npm run daemon
 
 账号导入仅支持原有 OAuth JSON 格式，不是 `.zsb` 备份。导入由原生文件选择器完成，凭据及导入源路径不进入 Webview。同 alias 导入可能替换既有记录，不会自动启动 Worker。
 
+### F5 或连接遇到问题
+
+- 没有调试配置：在 Remote SSH 窗口打开本项目根目录，而不是仅打开 `extensions/vscode`。
+- 出现 `INVALID_POOL_HOME` 或 `Set an absolute pool path`：检查路径来源。真实 F5 使用启动时的输入框，需关闭该调试窗口后重新 F5，输入 Linux 执行侧的绝对路径，不加引号、反引号或 `~`；安装版则修改 User/Remote Settings 的 `zcodePool.poolHome`。F5 的路径优先于设置。
+- 工作台打开但连接失败：记录界面显示的执行侧、pool 路径和完整错误文字；确认 daemon 使用同一个 pool。已有任务不因界面断开而停止，不要为排查连接问题再次派发任务。
+
 ## 操作含义
 
 - 模型繁忙继续使用同一账号、模型与会话，默认初次派发后最多立即继续 3 次；没有延迟队列或自动换账号。
