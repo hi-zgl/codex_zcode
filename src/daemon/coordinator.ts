@@ -6,8 +6,8 @@ import { createHash } from 'node:crypto';
 import { AccountVault } from '../accounts/index.js';
 import { WorkerSupervisor } from '../supervisor/index.js';
 import { ZCodeServerAdapter } from '../runtime/zcode-server/index.js';
-import type { RuntimeConnection, SessionRef, TurnRef, ExecutionMode, RuntimeEvent, SessionSnapshot } from '../runtime/types.js';
-import { redact, record } from '../runtime/zcode-server/events.js';
+import type { RuntimeConnection, SessionRef, TurnRef, ExecutionMode, RuntimeEvent, SessionSnapshot, ModelSelection } from '../runtime/types.js';
+import { redact, record, classifyTurnFailure } from '../runtime/zcode-server/events.js';
 import { DurableTaskStore } from '../core/index.js';
 import type { Task, JsonValue, TaskResult, StopProof } from '../core/types.js';
 import { validateMethod, type MethodName } from '../shared/methods.js';
@@ -20,7 +20,7 @@ const UNAVAILABLE_HEALTH = new Set(['blocked', 'invalid', 'cooling']);
 const APPROVAL_REVIEW_HINT = 'This is a bounded preview. Inspect the persisted approval event and full local native details before accepting incomplete arguments.';
 
 type TerminalEvent = 'turn_completed' | 'turn_failed' | 'turn_cancelled';
-interface Policy { mode: ExecutionMode; modelId: string; verifyCommands: {command: string; args: string[]; timeout_ms: number}[] }
+interface Policy { mode: ExecutionMode; modelId: string; busyRetryLimit: number; verifyCommands: {command: string; args: string[]; timeout_ms: number}[] }
 interface Active { connection: RuntimeConnection; session?: SessionRef; turn?: TurnRef; accountAlias?: string; approvalResponses?: Map<string,string> }
 interface Observation { kind: 'active' | 'terminal' | 'unknown'; reason?: string; header?: Record<string, any> }
 interface ApprovalView {
@@ -35,7 +35,8 @@ interface RecoveryResult {
 }
 
 function compactTask(task: Task) {
- return {taskId:task.taskId,workspaceId:task.workspaceId,workerId:task.workerId,sessionId:task.sessionId,status:task.status,revision:task.revision,leaseHeld:task.leaseHeld,detail:task.detail};
+ const max = record(task.executionPolicy).busyRetryLimit ?? 3;
+ return {taskId:task.taskId,workspaceId:task.workspaceId,workerId:task.workerId,sessionId:task.sessionId,status:task.status,revision:task.revision,leaseHeld:task.leaseHeld,detail:task.detail,...(task.busyRetryCount?{retry:{used:task.busyRetryCount,max,reason:'model_busy'}}:{})};
 }
 function safeDetail(value: unknown): JsonValue {
  const cleaned = redact(value);
@@ -68,22 +69,24 @@ function taskPolicy(task: Task): Policy {
   !command || typeof command.command !== 'string' || !command.command || !Array.isArray(command.args)
   || command.args.some((arg: unknown) => typeof arg !== 'string') || !Number.isInteger(command.timeout_ms)
   || command.timeout_ms < 100 || command.timeout_ms > 300_000)) throw new Error('Stored verification policy is invalid; inspect before continuing');
- return {mode:policy.mode ?? 'build',modelId:policy.modelId ?? 'GLM-5.3-Flash',verifyCommands:commands};
+ const busyRetryLimit = policy.busyRetryLimit ?? 3;
+ if (!Number.isInteger(busyRetryLimit) || busyRetryLimit < 0 || busyRetryLimit > 10) throw new Error('Stored busy continuation policy is invalid; inspect before continuing');
+ return {mode:policy.mode ?? 'build',modelId:policy.modelId ?? 'GLM-5.3-Flash',busyRetryLimit,verifyCommands:commands};
 }
 function observeSnapshot(task: Task, session: SessionRef, snapshot: SessionSnapshot): Observation {
  if (session.sessionId !== task.sessionId || snapshot.sessionId !== task.sessionId
   || resolve(session.workspacePath) !== resolve(snapshot.workspacePath)) return {kind:'unknown',reason:'Native snapshot identity does not match the persisted session'};
- if (task.turnId !== null && task.turnId !== task.requestId) return {kind:'unknown',reason:'Persisted turn identity does not match the original command'};
+ if (task.turnId !== null && task.turnId !== task.currentCommandId) return {kind:'unknown',reason:'Persisted turn identity does not match the current command'};
  const raw = record(snapshot.raw);
  if (raw.sessionId !== undefined && raw.sessionId !== task.sessionId) return {kind:'unknown',reason:'Native snapshot contains a conflicting session identity'};
  const rows = raw.rows?.window;
  const works = raw.control?.activeWorks;
  if (!Array.isArray(rows) || !Array.isArray(works)) return {kind:'unknown',reason:'Native snapshot does not expose checked turn rows and active work'};
- const headers = rows.filter((row: any) => row.kind === 'turnHeader' && row.sourceCommandId === task.requestId);
+ const headers = rows.filter((row: any) => row.kind === 'turnHeader' && row.sourceCommandId === task.currentCommandId);
  if (headers.length !== 1 || typeof headers[0].turnId !== 'string' || !headers[0].turnId) return {kind:'unknown',reason:'The snapshot tail cannot uniquely identify the original native turn'};
  const header = headers[0];
  if (TERMINAL_STATES.has(header.state) && works.length === 0) return {kind:'terminal',header};
- if (header.state === 'running' && works.length === 1 && works[0]?.sourceCommandId === task.requestId
+ if (header.state === 'running' && works.length === 1 && works[0]?.sourceCommandId === task.currentCommandId
   && (works[0].turnId === undefined || works[0].turnId === header.turnId)) return {kind:'active',header};
  return {kind:'unknown',header,reason:'Original turn state and native active work do not agree; occupancy retained'};
 }
@@ -92,16 +95,16 @@ function ownApprovals(task: Task, snapshot: SessionSnapshot, header: Record<stri
  return snapshot.pendingApprovals.filter(value => {
   const approval = record(value);
   // An explicit conflicting identity always wins over an anchor or session-wide activity.
-  if (approval.sourceCommandId !== undefined && approval.sourceCommandId !== task.requestId) return false;
+  if (approval.sourceCommandId !== undefined && approval.sourceCommandId !== task.currentCommandId) return false;
   if (approval.turnId !== undefined && approval.turnId !== header.turnId) return false;
-  let proved = approval.sourceCommandId === task.requestId || approval.turnId === header.turnId;
+  let proved = approval.sourceCommandId === task.currentCommandId || approval.turnId === header.turnId;
   if (approval.anchorRowId !== undefined) {
    if (!Number.isSafeInteger(approval.anchorRowId)) return false;
    const anchor = Array.isArray(rows) ? rows.find((row: any) => row.rowId === approval.anchorRowId) : undefined;
    if (anchor) {
-    if ((anchor.sourceCommandId !== undefined && anchor.sourceCommandId !== task.requestId)
+    if ((anchor.sourceCommandId !== undefined && anchor.sourceCommandId !== task.currentCommandId)
      || (anchor.turnId !== undefined && anchor.turnId !== header.turnId)) return false;
-    proved ||= anchor.sourceCommandId === task.requestId || anchor.turnId === header.turnId;
+    proved ||= anchor.sourceCommandId === task.currentCommandId || anchor.turnId === header.turnId;
    }
   }
   return proved;
@@ -110,8 +113,8 @@ function ownApprovals(task: Task, snapshot: SessionSnapshot, header: Record<stri
 function taskSummary(task: Task, snapshot: SessionSnapshot, header: Record<string, any>): string {
  const rows = record(snapshot.raw).rows?.window;
  const own = Array.isArray(rows) ? rows.filter((row: any) => row.kind === 'assistantText'
-  && (row.sourceCommandId === undefined || row.sourceCommandId === task.requestId)
-  && (row.turnId === header.turnId || (row.turnId === undefined && row.sourceCommandId === task.requestId)) && typeof row.text === 'string') : [];
+  && (row.sourceCommandId === undefined || row.sourceCommandId === task.currentCommandId)
+  && (row.turnId === header.turnId || (row.turnId === undefined && row.sourceCommandId === task.currentCommandId)) && typeof row.text === 'string') : [];
  return String(redact(own.at(-1)?.text ?? '')).slice(0,2000);
 }
 
@@ -182,7 +185,7 @@ export class Coordinator {
    }
    case 'create_workspace': return this.store.registerWorkspace(await createWorkspace(this.root,p.repository,p.base_ref));
    case 'dispatch_task': {
-    const result = this.store.dispatch({workspaceId:p.workspace_id,workerId:p.worker_id,requestId:p.request_id,prompt:p.prompt,session:p.session,executionPolicy:{mode:p.mode,modelId:p.model_id,verifyCommands:p.verify_commands}});
+    const result = this.store.dispatch({workspaceId:p.workspace_id,workerId:p.worker_id,requestId:p.request_id,prompt:p.prompt,session:p.session,executionPolicy:{mode:p.mode,modelId:p.model_id,busyRetryLimit:p.busy_retry_limit,verifyCommands:p.verify_commands}});
     if (result.created) this.startJob(result.task.taskId, () => this.run(result.task.taskId));
     return {task:compactTask(result.task),created:result.created};
    }
@@ -207,13 +210,16 @@ export class Coordinator {
    case 'reconcile_task': return this.recoverTask(p.task_id,false);
    case 'resume_task': return this.recoverTask(p.task_id,true);
    case 'cancel_task': {
-    let task = this.store.getTask(p.task_id);
+    let task = this.store.requestCancellation(p.task_id);
     if (task.status === 'queued') return compactTask(this.store.transitionTask(task.taskId,'cancelled',{executionStopped:{kind:'not_dispatched',evidence:'Task cancelled before dispatch intent'}}));
     if (!this.active.get(task.taskId)?.turn) await this.recoverTask(task.taskId,true);
     task = this.store.getTask(task.taskId);
     if (task.executionStopped) return {task:compactTask(task),cancelRequested:false,terminationConfirmed:true};
     const active = this.active.get(task.taskId);
-    if (!active?.turn) throw new Error('Cannot safely identify the original live turn; inspect recovery status before cancelling');
+    if (!active?.turn) {
+     if (this.jobs.has(task.taskId)) return {task:compactTask(task),cancelRequested:true,terminationConfirmed:false,awaitingTurnIdentity:true};
+     throw new Error('Cannot safely identify the current live turn; cancellation is persisted and prevents further continuation');
+    }
     await active.connection.cancel(active.turn);
     return {taskId:task.taskId,cancelRequested:true,terminationConfirmed:false};
    }
@@ -278,28 +284,80 @@ export class Coordinator {
    if (this.closing) return;
    const ws = this.store.getWorkspace(task.workspaceId);
    const prior = task.session==='continue' ? this.store.listTasks().filter(t=>t.taskId!==taskId&&t.workspaceId===task.workspaceId&&t.workerId===workerId&&t.sessionId&&t.executionStopped).at(-1) : undefined;
-   task = this.store.beginDispatch(taskId,{workerId,sessionId:prior?.sessionId??undefined});
+   const policy = taskPolicy(task);
+   const selection = {providerId:`account:${account.provider}-start-plan`,modelId:policy.modelId};
+   task = this.store.beginDispatch(taskId,{workerId,sessionId:prior?.sessionId??undefined,runtimeBinding:{accountAlias:account.alias,...selection}});
    connection = await this.adapter.connect(worker.endpoint);
    const active: Active = {connection,accountAlias:account.alias};
    this.active.set(taskId,active);
    if (this.closing) return;
-   const policy = taskPolicy(task);
-   const selection = {providerId:`account:${account.provider}-start-plan`,modelId:policy.modelId};
    const session = await connection.openSession({workspacePath:ws.worktreePath,sessionId:prior?.sessionId??undefined,modelSelection:selection,mode:policy.mode});
    if (resolve(session.workspacePath) !== resolve(ws.worktreePath) || (prior?.sessionId && session.sessionId !== prior.sessionId)) throw new Error('Native session identity did not match the requested workspace/session');
    active.session = session;
    this.store.bindSession(taskId,session.sessionId);
    if (this.closing) return;
-   const turn = await connection.sendTurn(session,{prompt:task.prompt,requestId:task.requestId,modelSelection:selection,mode:policy.mode});
-   if (turn.sessionId !== session.sessionId || turn.turnId !== task.requestId || turn.commandId !== task.requestId) throw new Error('Native acknowledgement did not identify the original command');
-   active.turn = turn;
-   this.store.acknowledgeDispatch(taskId,{sessionId:session.sessionId,turnId:turn.turnId});
+   await this.sendAttempt(taskId,active,task.prompt);
    await this.consumeEvents(taskId,active);
   } finally {
    if (connection && !this.active.has(taskId)) await connection.close().catch(() => {});
    const task = this.store.getTask(taskId);
    if (['running','waiting_approval','dispatching'].includes(task.status)) this.store.markInterrupted(taskId,{reason:this.closing?'Daemon connection closed; native execution was not stopped':'Event stream ended before confirmed terminal'});
   }
+ }
+ private async sendAttempt(taskId: string, active: Active, prompt: string): Promise<void> {
+  const task = this.store.getTask(taskId);
+  const session = active.session!;
+  const policy = taskPolicy(task);
+  const binding = record(task.runtimeBinding);
+  if (typeof binding.providerId!=='string' || typeof binding.modelId!=='string' || session.sessionId!==task.sessionId) throw new Error('Original runtime binding is unavailable; send refused');
+  const selection: ModelSelection = {providerId:binding.providerId,modelId:binding.modelId};
+  // Clear the old turn before awaiting the ACK: cancellation must never target a
+  // previous stopped attempt while a new command may already be executing.
+  active.turn = undefined;
+  active.approvalResponses?.clear();
+  const turn = await active.connection.sendTurn(session,{prompt,requestId:task.currentCommandId,modelSelection:selection,mode:policy.mode});
+  if (turn.sessionId!==session.sessionId || turn.turnId!==task.currentCommandId || turn.commandId!==task.currentCommandId) throw new Error('Native acknowledgement did not identify the current command');
+  active.turn = turn;
+  this.store.acknowledgeDispatch(taskId,{sessionId:session.sessionId,turnId:turn.turnId});
+  if (this.store.getTask(taskId).cancelRequestedAt!==null) await active.connection.cancel(turn);
+ }
+ private recordFailure(taskId: string, commandId: string, data: {errorAttribution?:unknown;category?:unknown;busyRetryEligible?:unknown}): void {
+  if (data.errorAttribution!=='turn' || typeof data.category!=='string') return;
+  this.store.recordAttemptFailure(taskId,commandId,{category:data.category,busyRetryEligible:data.busyRetryEligible===true});
+ }
+ private async continueBusyTask(taskId: string, active: Active, snapshot?: SessionSnapshot, header?: Record<string, any>): Promise<boolean> {
+  let task = this.store.getTask(taskId);
+  const attempt = this.store.getCurrentAttempt(taskId);
+  if (!attempt?.busyRetryEligible || attempt.continuationBlocked || attempt.failureCategory!=='model_busy') return false;
+  const policy = taskPolicy(task);
+  if (task.busyRetryCount>=policy.busyRetryLimit) {
+   this.store.appendEvent(taskId,'busy_continue_limit_reached',{retry:{used:task.busyRetryCount,max:policy.busyRetryLimit,reason:'model_busy'}});
+   return false;
+  }
+  const session = active.session!;
+  const history = snapshot ?? await active.connection.syncHistory(session);
+  task = this.store.getTask(taskId);
+  const observation = observeSnapshot(task,session,history);
+  if (observation.kind!=='terminal' || observation.header!.state!=='failed' || (header && header.turnId!==observation.header!.turnId)) throw new Error('Busy continuation requires the current failed native turn and no active native work; occupancy retained');
+  this.recordFailure(taskId,task.currentCommandId,classifyTurnFailure(record(history.raw),observation.header!));
+  const checkedAttempt = this.store.getCurrentAttempt(taskId);
+  if (!checkedAttempt?.busyRetryEligible || checkedAttempt.continuationBlocked || task.status==='blocked') return false;
+  const proof: StopProof = {kind:'history_stopped',evidence:`Fresh snapshot command ${task.currentCommandId}: failed, no active work`};
+  this.store.recordAttemptTerminal(taskId,task.currentCommandId,'failed',proof);
+  if (task.cancelRequestedAt!==null || this.closing) return false;
+  const binding = record(task.runtimeBinding);
+  if (typeof binding.accountAlias!=='string' || typeof binding.providerId!=='string' || typeof binding.modelId!=='string'
+   || active.accountAlias!==binding.accountAlias || binding.modelId!==policy.modelId) return false;
+  const account = await this.vault.load(binding.accountAlias);
+  if (UNAVAILABLE_HEALTH.has(account.health) || `account:${account.provider}-start-plan`!==binding.providerId) return false;
+  if (history.modelSelection && (history.modelSelection.providerId!==binding.providerId || history.modelSelection.modelId!==binding.modelId)) throw new Error('Native session provider/model changed; busy continuation refused');
+  task = this.store.getTask(taskId);
+  if (task.cancelRequestedAt!==null || this.closing) return false;
+  // This transaction is the only authorization to issue a new command. A crash
+  // after it leaves an uncertain attempt that recovery observes without resend.
+  task = this.store.beginBusyContinuation(taskId,task.currentCommandId,policy.busyRetryLimit);
+  await this.sendAttempt(taskId,active,'继续');
+  return true;
  }
  private publishApproval(taskId: string, value: Record<string, any>): ApprovalView | undefined {
   const view = approvalView(value);
@@ -338,11 +396,13 @@ export class Coordinator {
   this.approvalRefreshes.set(taskId,refresh);
  }
  private async consumeEvents(taskId: string, active: Active, cursor?: string): Promise<void> {
-  const {connection,session,turn} = active;
-  if (!session || !turn) throw new Error('Missing native turn attachment');
+  const {connection,session} = active;
+  if (!session || !active.turn) throw new Error('Missing native turn attachment');
   try {
    for await (const event of connection.events(session,cursor)) {
     if (this.closing) break;
+    const turn = active.turn;
+    if (!turn) throw new Error('Current native command has no confirmed acknowledgement');
     if (event.sessionId !== session.sessionId || (event.turnId && event.turnId !== turn.turnId)) continue;
     if (FINAL_STATUSES.has(this.store.getTask(taskId).status)) break;
     if (event.type === 'approval_requested') {
@@ -362,6 +422,7 @@ export class Coordinator {
     if (!event.turnId && ['assistant_message','tool_call','tool_result','turn_started'].includes(event.type)) continue;
     this.store.appendEvent(taskId,event.type,safeDetail(event.data));
     if (event.type === 'error') {
+     if (event.turnId===turn.turnId) this.recordFailure(taskId,turn.commandId,event.data);
      const category = event.data.category;
      if (category === 'risk_blocked' || category === 'auth_invalid') {
       if (active.accountAlias) await this.vault.setHealth(active.accountAlias,category==='risk_blocked'?'blocked':'invalid');
@@ -371,6 +432,9 @@ export class Coordinator {
     }
     if (terminal) {
      const proof: StopProof = {kind:'runtime_terminal',evidence:`${event.type}:${event.id}`};
+     this.recordFailure(taskId,turn.commandId,event.data);
+     this.store.recordAttemptTerminal(taskId,turn.commandId,event.type==='turn_completed'?'completedSuccess':event.type==='turn_failed'?'failed':'completedInterrupted',proof);
+     if (event.type==='turn_failed' && await this.continueBusyTask(taskId,active)) continue;
      this.store.transitionTask(taskId,'verifying',{executionStopped:proof});
      await this.finishTask(taskId,active,event.type as TerminalEvent,proof);
      break;
@@ -390,13 +454,18 @@ export class Coordinator {
   if (observation.kind !== 'terminal') throw new Error(observation.reason ?? 'Original turn is not terminal with no active work; verification refused');
   const expected = type==='turn_completed'?'completedSuccess':type==='turn_failed'?'failed':'completedInterrupted';
   if (observation.header!.state !== expected) throw new Error('Native terminal state conflicts with the observed terminal event');
-  if (type === 'turn_cancelled') {
+  if (type === 'turn_cancelled' || (type==='turn_failed' && this.store.getTask(taskId).cancelRequestedAt!==null)) {
    this.store.transitionTask(taskId,'cancelled',{executionStopped:proof});
    return;
   }
   const result: TaskResult = {summary:taskSummary(task,history,observation.header!),changedFiles:[],verification:[],blockers:[]};
   if (type === 'turn_failed') {
-   result.blockers = ['Native ZCode turn failed; no automatic retry'];
+   this.recordFailure(taskId,task.currentCommandId,classifyTurnFailure(record(history.raw),observation.header!));
+   const attempt = this.store.getCurrentAttempt(taskId);
+   const policy = taskPolicy(task);
+   result.blockers = [attempt?.busyRetryEligible && !attempt.continuationBlocked
+    ? `Native model remains busy; ${task.busyRetryCount} of ${policy.busyRetryLimit} same-session continuations used`
+    : 'Native ZCode turn failed; no eligible model-busy continuation'];
    this.store.completeTask(taskId,result,{status:'failed',executionStopped:proof});
    return;
   }
@@ -420,7 +489,7 @@ export class Coordinator {
   this.store.completeTask(taskId,result,{status:result.verification!.every(v=>v.exitCode===0)?'succeeded':'failed',executionStopped:proof});
  }
 
- /** Called at startup after the daemon lock and interrupted-state recovery. Never sends a model turn. */
+ /** Restore observation; only a proved busy terminal may start a fresh bounded continuation. */
  async recoverTasks(): Promise<RecoveryResult[]> {
   const candidates = this.store.listTasks().filter(task=>task.leaseHeld);
   return Promise.all(candidates.map(task=>this.recoverTask(task.taskId,true)));
@@ -467,25 +536,42 @@ export class Coordinator {
    if (this.closing) return {task:compactTask(this.store.getTask(taskId)),attached:false,reason:'Daemon is shutting down'};
    const observation = observeSnapshot(task,session,snapshot);
    if (observation.kind === 'unknown') return {...this.inspection(taskId,observation.reason!),nativePhase:snapshot.phase,nativeTurnState:observation.header?.state??'unknown'};
+   if (observation.kind==='terminal' && observation.header!.state==='failed') this.recordFailure(taskId,task.currentCommandId,classifyTurnFailure(record(snapshot.raw),observation.header!));
    if (!attach) {
     if (observation.kind === 'terminal') {
      this.store.markInterrupted(taskId,{reason:'Recovered terminal native turn; configured verification was not run',nativeTurnState:observation.header!.state});
-     task = this.store.observeExecutionStopped(taskId,{kind:'history_stopped',evidence:`Fresh snapshot command ${task.requestId}: ${observation.header!.state}, no active work`});
+     task = this.store.observeExecutionStopped(taskId,{kind:'history_stopped',evidence:`Fresh snapshot command ${task.currentCommandId}: ${observation.header!.state}, no active work`});
      if (!this.store.getResult(taskId)) this.store.recordResult(taskId,{summary:taskSummary(task,snapshot,observation.header!),blockers:['Recovered native completion by read-only reconciliation; configured verification was not run. Review workspace before continuing.']});
     }
     return {task:compactTask(this.store.getTask(taskId)),attached:false,nativePhase:snapshot.phase,nativeTurnState:observation.header!.state,executionStopped:observation.kind==='terminal',canResume:observation.kind==='active'};
    }
-   const turn: TurnRef = {...session,turnId:task.requestId,commandId:task.requestId};
+   const turn: TurnRef = {...session,turnId:task.currentCommandId,commandId:task.currentCommandId};
    const active: Active = {connection,session,turn,accountAlias:worker.accountAlias};
    if (observation.kind === 'terminal') {
-    const proof: StopProof = {kind:'history_stopped',evidence:`Fresh snapshot command ${task.requestId}: ${observation.header!.state}, no active work`};
+    const proof: StopProof = {kind:'history_stopped',evidence:`Fresh snapshot command ${task.currentCommandId}: ${observation.header!.state}, no active work`};
+    this.store.recordAttemptTerminal(taskId,task.currentCommandId,observation.header!.state,proof);
     if (observation.header!.state === 'completedInterrupted') {
      task = this.store.transitionTask(taskId,'cancelled',{executionStopped:proof});
      return {task:compactTask(task),attached:false,executionStopped:true};
     }
-    this.store.transitionTask(taskId,'verifying',{executionStopped:proof,detail:{reason:'Recovered original terminal native turn; completing verification and snapshot'}});
     this.active.set(taskId,active);
     transferred = true;
+    const attempt = this.store.getCurrentAttempt(taskId);
+    if (observation.header!.state==='failed' && attempt?.busyRetryEligible && !attempt.continuationBlocked
+      && task.cancelRequestedAt===null && task.busyRetryCount<taskPolicy(task).busyRetryLimit) {
+     this.startJob(taskId,async()=>{
+      if (await this.continueBusyTask(taskId,active,snapshot,observation.header)) {
+       // Start at the pre-send snapshot, so even a terminal buffered before ACK
+       // is consumed while old attempts are filtered by their command identity.
+       await this.consumeEvents(taskId,active,snapshot.cursor);
+       return;
+      }
+      this.store.transitionTask(taskId,'verifying',{executionStopped:proof});
+      await this.finishTask(taskId,active,'turn_failed',proof);
+     });
+     return {task:compactTask(this.store.getTask(taskId)),attached:true,executionStopped:false};
+    }
+    this.store.transitionTask(taskId,'verifying',{executionStopped:proof,detail:{reason:'Recovered current terminal native turn; completing verification and snapshot'}});
     this.startJob(taskId,()=>this.finishTask(taskId,active,observation.header!.state==='failed'?'turn_failed':'turn_completed',proof));
     return {task:compactTask(this.store.getTask(taskId)),attached:false,executionStopped:true,finalizing:true};
    }
@@ -504,6 +590,7 @@ export class Coordinator {
    transferred = true;
    // The initial snapshot has already been inspected and its own approvals published. Skip its historical output.
    this.startJob(taskId,()=>this.consumeEvents(taskId,active,snapshot.cursor));
+   if (task.cancelRequestedAt!==null) await active.connection.cancel(turn);
    return {task:compactTask(this.store.getTask(taskId)),attached:true,executionStopped:false,pendingApprovals,pendingApprovalCount:approvals.length,pendingApprovalsTruncated:approvals.length>20,...(snapshot.pendingApprovals.length>approvals.length?{requiresInspection:true,reason:'Some native approvals cannot be attributed to this task; review them in local ZCode'}:{})};
   } catch {
    // Native errors can contain prompts or unmarked credentials. Only a fixed control

@@ -71,6 +71,13 @@ function fields(source: Row, names: readonly string[], kind: 'control' | 'text' 
 function logAction(taskId: unknown, cursor: unknown = 0): Row {
   return { tool: 'zcode_get_logs', arguments: { task_id: control(taskId), cursor: integer(cursor) ?? 0, limit: 1 } };
 }
+function busyRetry(value: unknown): Row | undefined {
+  const source = object(value);
+  const used = integer(source.used);
+  const max = integer(source.max);
+  if (source.reason !== 'model_busy' || used === undefined || max === undefined || used > max) return undefined;
+  return { used, max, reason: 'model_busy' };
+}
 
 function approval(value: unknown, taskId?: unknown, fallbackCursor?: unknown): Row | undefined {
   const source = object(value);
@@ -97,11 +104,13 @@ function task(value: unknown, brief = false): Row {
   const source = object(value);
   const detail = object(source.detail);
   const taskId = control(source.taskId);
+  const retry = busyRetry(source.retry ?? detail.retry);
   const projected: Row = {
     ...fields(source, ['taskId', ...(brief ? [] : ['workspaceId', 'workerId'])]),
     ...fields(source, ['status'], 'text'),
     ...fields(source, ['revision'], 'number'),
     ...fields(source, ['leaseHeld', 'executionStopped'], 'boolean'),
+    ...(retry ? { retry } : {}),
   };
   const pendingCount = integer(source.pendingApprovalCount ?? detail.pendingApprovalCount);
   if (pendingCount !== undefined) projected.pendingApprovalCount = pendingCount;
@@ -114,10 +123,16 @@ function task(value: unknown, brief = false): Row {
     ...(detail.decision !== undefined ? fields(detail, ['approvalId']) : {}),
     ...fields(detail, ['category', 'nativeState', 'nativeTurnState', 'decision'], 'text'),
     ...fields(detail, ['executionUncertain', 'requiresInspection', 'truncated'], 'boolean'),
-    ...(text(detail.reason, 160) ? { reason: text(detail.reason, 160) } : {}),
+    ...(retry ? (detail.reason === 'model_busy' ? { reason: 'model_busy' } : {}) : (text(detail.reason, 160) ? { reason: text(detail.reason, 160) } : {})),
   };
   if (Object.keys(safeDetail).length) projected.detail = safeDetail;
   if (typeof detail.message === 'string' || typeof detail.error === 'string') projected.diagnostic = diagnostic(detail);
+  if (retry && detail.requiresInspection === true) {
+    if (!projected.diagnostic || object(projected.diagnostic).code === 'REQUEST_FAILED') {
+      projected.diagnostic = { code: 'RECOVERY_REQUIRED', message: ERROR_MESSAGES.RECOVERY_REQUIRED };
+    }
+    projected.nextAction = 'Inspect local task records and native session state before resuming. Do not dispatch the task again.';
+  }
   const pending = array(source.pendingApprovals ?? detail.pendingApprovals);
   const one = detail.decision === undefined ? approval(detail, taskId, detail.approvalLogCursor) : undefined;
   const approvals = pending.map(entry => approval(entry, taskId, detail.approvalLogCursor)).filter(Boolean);
@@ -275,6 +290,8 @@ function approvalReview(detail: Row, taskId: unknown, revision: unknown): Row {
 function event(value: unknown): Row {
   const source = object(value);
   const detail = object(source.detail);
+  const retry = busyRetry(detail.retry);
+  const busyContinuation = retry !== undefined || (typeof source.type === 'string' && source.type.startsWith('busy_continue_'));
   const projected = {
     ...fields(source, ['taskId']),
     ...fields(source, ['revision', 'createdAt'], 'number'),
@@ -287,7 +304,8 @@ function event(value: unknown): Row {
     ...(detail.decision !== undefined ? fields(detail, ['approvalId', 'respondedApprovalId']) : {}),
     ...fields(detail, ['category', 'nativeState', 'nativeTurnState', 'decision'], 'text'),
     ...fields(detail, ['executionUncertain', 'requiresInspection', 'truncated'], 'boolean'),
-    ...(text(detail.reason, 256) ? { reason: text(detail.reason, 256) } : {}),
+    ...(busyContinuation ? (detail.reason === 'model_busy' ? { reason: 'model_busy' } : {}) : (text(detail.reason, 256) ? { reason: text(detail.reason, 256) } : {})),
+    ...(retry ? { retry } : {}),
   };
   return { ...projected, ...(Object.keys(safe).length ? { detail: safe } : {}),
     ...(source.type === 'error' || typeof detail.message === 'string' || typeof detail.error === 'string' ? { diagnostic: diagnostic(detail) } : {}),
@@ -454,7 +472,7 @@ function safeReturnedControls(value: unknown): Row {
 
 export type McpErrorKind = 'INVALID_ARGUMENT' | 'UNSUPPORTED_METHOD' | 'DAEMON_UNAVAILABLE' | 'REQUEST_FAILED' | 'PRESENTATION_FAILED'
   | 'WORKSPACE_BUSY' | 'WORKER_BUSY' | 'REQUEST_CONFLICT' | 'NOT_FOUND' | 'WORKER_UNAVAILABLE' | 'APPROVAL_UNAVAILABLE'
-  | 'RECOVERY_REQUIRED' | 'RATE_LIMITED' | 'AUTH_INVALID' | 'RISK_BLOCKED' | 'NATIVE_SERVER_ERROR' | 'MODEL_SELECTION_MISMATCH';
+  | 'RECOVERY_REQUIRED' | 'MODEL_BUSY' | 'RATE_LIMITED' | 'AUTH_INVALID' | 'RISK_BLOCKED' | 'NATIVE_SERVER_ERROR' | 'MODEL_SELECTION_MISMATCH';
 const ERROR_MESSAGES: Record<McpErrorKind, string> = {
   INVALID_ARGUMENT: 'Invalid tool parameters. Check the tool input schema and retry.',
   UNSUPPORTED_METHOD: 'This tool has no supported safe MCP view; no daemon request was made.',
@@ -468,6 +486,7 @@ const ERROR_MESSAGES: Record<McpErrorKind, string> = {
   WORKER_UNAVAILABLE: 'The worker is not ready. Inspect its local status and probe it before dispatching.',
   APPROVAL_UNAVAILABLE: 'The approval is no longer pending or does not support this decision. Refresh task state and inspect its current approval.',
   RECOVERY_REQUIRED: 'The task lacks a confirmed live attachment or stopped execution. Use reconcile_task/resume_task before another control action.',
+  MODEL_BUSY: 'The native model reported temporary overload. Inspect task state for bounded same-session continuation progress.',
   RATE_LIMITED: 'The native service reported a rate limit. Wait and inspect task state; do not automatically resend an uncertain dispatch.',
   AUTH_INVALID: 'Native authentication is invalid or unavailable. Inspect local account health and credentials before dispatching.',
   RISK_BLOCKED: 'The native service blocked the account for a risk check. Inspect local account health; do not rotate credentials to retry this task.',
@@ -494,6 +513,7 @@ export function classifyMcpError(value: unknown): McpErrorKind {
   if (/^Official session selected a different/.test(message)) return 'MODEL_SELECTION_MISMATCH';
   if (category === 'risk_blocked') return 'RISK_BLOCKED';
   if (category === 'auth_invalid' || /^Account (?:unavailable|is unavailable)|^Official server ingress authentication required/.test(message)) return 'AUTH_INVALID';
+  if (category === 'model_busy') return 'MODEL_BUSY';
   if (category === 'rate_limited') return 'RATE_LIMITED';
   if (category === 'server_error') return 'NATIVE_SERVER_ERROR';
   return 'REQUEST_FAILED';

@@ -203,6 +203,64 @@ test('persisted native errors give fixed actionable diagnostics without echoing 
   assert.doesNotMatch(logs.text, /PRIVATE-NATIVE-CONTEXT/);
 });
 
+test('busy retry polling exposes only counts and the fixed reason in every task view', () => {
+  const retry = { used: 2, max: 3, reason: 'model_busy', error: forbidden, raw: forbidden, prompt: forbidden, context: forbidden, commandId: forbidden };
+  const own = task({ retry, detail: { reason: forbidden, error: forbidden, category: 'model_busy', retry } });
+  const responses = [
+    view('overview', { tasks: [own] }),
+    view('wait', { tasks: [own], changedTaskIds: ['task-1'] }),
+    view('get_result', { task: own, result: null }),
+    view('dispatch_task', { task: own, created: true }),
+    view('resume_task', { task: own }), view('reconcile_task', { task: own }),
+  ];
+  for (const response of responses) {
+    const projected = response.value.task ?? response.value.tasks[0];
+    assert.deepEqual(projected.retry, { used: 2, max: 3, reason: 'model_busy' });
+    assert.equal(projected.diagnostic.code, 'MODEL_BUSY');
+    assert.doesNotMatch(response.text, /PRIVATE-NATIVE-CONTEXT|"context"|"prompt"|"raw"|"commandId"/);
+    assert.ok(Buffer.byteLength(response.text) < MCP_COMPACT_TARGET_BYTES);
+  }
+  const unused = view('wait', { tasks: [task()], changedTaskIds: [] });
+  assert.equal(unused.value.tasks[0].retry, undefined);
+  for (const invalid of [
+    { used: -1, max: 3, reason: 'model_busy' }, { used: 4, max: 3, reason: 'model_busy' },
+    { used: 1.5, max: 3, reason: 'model_busy' }, { used: 1, max: 3, reason: forbidden },
+  ]) assert.equal(view('wait', { tasks: [task({ retry: invalid })] }).value.tasks[0].retry, undefined);
+});
+
+test('busy continuation logs retain counts without native context or failure text', () => {
+  const logs = view('get_logs', { events: [{ taskId: 'task-1', revision: 8, type: 'busy_continue_intent', detail: {
+    retry: { used: 1, max: 3, reason: 'model_busy', raw: forbidden, context: forbidden },
+    reason: forbidden, error: forbidden, previousCommandId: forbidden, commandId: forbidden,
+  } }] }, { task_id: 'task-1', cursor: 7 });
+  assert.deepEqual(logs.value.events[0].detail, { retry: { used: 1, max: 3, reason: 'model_busy' } });
+  assert.equal(logs.value.events[0].detailOmitted, true);
+  assert.equal(logs.value.nextCursor, 8);
+  assert.doesNotMatch(logs.text, /PRIVATE-NATIVE-CONTEXT|"context"|"raw"|"previousCommandId"|"commandId"/);
+});
+
+test('busy retry tasks retain fixed inspection guidance after recovery becomes uncertain', () => {
+  const retry = { used: 1, max: 3, reason: 'model_busy' };
+  for (const detail of [
+    { requiresInspection: true, reason: forbidden },
+    { requiresInspection: true, reason: forbidden, message: forbidden },
+  ]) {
+    const waited = view('wait', { tasks: [task({ retry, detail })], changedTaskIds: ['task-1'] });
+    const projected = waited.value.tasks[0];
+    assert.equal(projected.detail.requiresInspection, true);
+    assert.equal(projected.diagnostic.code, 'RECOVERY_REQUIRED');
+    assert.match(projected.nextAction, /Inspect local task records/);
+    assert.deepEqual(projected.retry, retry);
+    assert.doesNotMatch(waited.text, /PRIVATE-NATIVE-CONTEXT/);
+  }
+  const failed = view('get_result', { task: task({ retry, detail: {
+    requiresInspection: true, category: 'auth_invalid', message: forbidden, reason: forbidden,
+  } }), result: null });
+  assert.equal(failed.value.task.diagnostic.code, 'AUTH_INVALID');
+  assert.match(failed.value.task.nextAction, /Inspect local task records/);
+  assert.doesNotMatch(failed.text, /PRIVATE-NATIVE-CONTEXT/);
+});
+
 test('log budget returns only complete events and advances to the last delivered revision', () => {
   const sourceEvents = Array.from({ length: 12 }, (_, index) => ({ taskId: 'task-1', revision: index + 11, type: 'approval_requested', detail: {
     approvalId: `approval-${index}`, payload: { kind: 'permission', toolName: 'Edit', summary: 'Review change',

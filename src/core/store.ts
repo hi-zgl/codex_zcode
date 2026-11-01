@@ -11,6 +11,7 @@ import {
   type StopProof,
   type StoreOptions,
   type Task,
+  type TaskAttempt,
   type TaskEvent,
   type TaskResult,
   type TaskStatus,
@@ -53,6 +54,10 @@ interface TaskRow {
   session_mode: 'continue' | 'new';
   session_id: string | null;
   turn_id: string | null;
+  current_command_id: string;
+  busy_retry_count: number;
+  cancel_requested_at: number | null;
+  runtime_binding: string;
   execution_policy: string;
   status: TaskStatus;
   revision: number;
@@ -77,6 +82,12 @@ interface WorkspaceRow {
 }
 
 interface ResultRow { payload: string; created_at: number }
+interface AttemptRow {
+  task_id: string; attempt_index: number; command_id: string; session_id: string | null;
+  turn_id: string | null; intent_at: number; acknowledged_at: number | null;
+  terminal_state: TaskAttempt['terminalState']; stop_proof: string | null;
+  failure_category: string | null; busy_retry_eligible: number; continuation_blocked: number;
+}
 interface EventRow {
   revision: number;
   task_id: string;
@@ -131,12 +142,21 @@ function taskFromRow(row: TaskRow): Task {
     taskId: row.task_id, requestId: row.request_id, workspaceId: row.workspace_id,
     prompt: row.prompt, requestedWorkerId: row.requested_worker_id, workerId: row.worker_id,
     session: row.session_mode, sessionId: row.session_id, turnId: row.turn_id,
+    currentCommandId: row.current_command_id, busyRetryCount: row.busy_retry_count,
+    cancelRequestedAt: row.cancel_requested_at, runtimeBinding: JSON.parse(row.runtime_binding) as JsonValue,
     executionPolicy: JSON.parse(row.execution_policy) as JsonValue, status: row.status,
     revision: row.revision, leaseHeld: row.lease_held === 1, dispatchAttemptedAt: row.dispatch_attempted_at,
     executionStopped: row.execution_stopped === 1,
     stopProof: row.stop_proof === null ? null : JSON.parse(row.stop_proof) as StopProof,
     detail: JSON.parse(row.detail) as JsonValue, createdAt: row.created_at, updatedAt: row.updated_at,
   };
+}
+
+function attemptFromRow(row: AttemptRow): TaskAttempt {
+  return {taskId:row.task_id,index:row.attempt_index,commandId:row.command_id,sessionId:row.session_id,
+    turnId:row.turn_id,intentAt:row.intent_at,acknowledgedAt:row.acknowledged_at,terminalState:row.terminal_state,
+    stopProof:row.stop_proof===null?null:JSON.parse(row.stop_proof) as StopProof,
+    failureCategory:row.failure_category,busyRetryEligible:row.busy_retry_eligible===1,continuationBlocked:row.continuation_blocked===1};
 }
 
 function workspaceFromRow(row: WorkspaceRow): Workspace {
@@ -183,7 +203,7 @@ function validateArtifact(artifact: ArtifactMetadata): void {
 
 /**
  * The durable boundary before any runtime side effect. Call beginDispatch once,
- * commit it, and only then send to the runtime. Recovery never sends a turn.
+ * commit it, and only then send to the runtime. An uncertain command is never replayed.
  */
 export class DurableTaskStore {
   private readonly db: DatabaseSync;
@@ -212,11 +232,14 @@ export class DurableTaskStore {
   }
 
   private initializeSchema(): void {
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+    // Recheck after acquiring the write lock: another process may have migrated
+    // between opening this connection and obtaining schema ownership.
     const version = this.db.prepare('PRAGMA user_version').get() as { user_version: number };
-    if (version.user_version > 1) fail('UNSUPPORTED_SCHEMA', `State schema ${version.user_version} is newer than this program`);
-    if (version.user_version === 1) return;
-    this.db.exec(`
-      BEGIN IMMEDIATE;
+    if (version.user_version > 2) fail('UNSUPPORTED_SCHEMA', `State schema ${version.user_version} is newer than this program`);
+    if (version.user_version === 2) {this.db.exec('COMMIT');return;}
+    if (version.user_version === 0) this.db.exec(`
       CREATE TABLE IF NOT EXISTS workspaces (
         workspace_id TEXT PRIMARY KEY,
         repository_path TEXT NOT NULL,
@@ -269,8 +292,38 @@ export class DurableTaskStore {
       CREATE TRIGGER IF NOT EXISTS immutable_task_results_delete BEFORE DELETE ON task_results
         BEGIN SELECT RAISE(ABORT, 'Task results are immutable'); END;
       PRAGMA user_version = 1;
-      COMMIT;
     `);
+    this.db.exec(`
+      ALTER TABLE tasks ADD COLUMN current_command_id TEXT NOT NULL DEFAULT '';
+      ALTER TABLE tasks ADD COLUMN busy_retry_count INTEGER NOT NULL DEFAULT 0 CHECK (busy_retry_count >= 0);
+      ALTER TABLE tasks ADD COLUMN cancel_requested_at INTEGER;
+      ALTER TABLE tasks ADD COLUMN runtime_binding TEXT NOT NULL DEFAULT 'null';
+      UPDATE tasks SET current_command_id = request_id;
+      CREATE TABLE task_attempts (
+        task_id TEXT NOT NULL REFERENCES tasks(task_id),
+        attempt_index INTEGER NOT NULL CHECK (attempt_index >= 0),
+        command_id TEXT NOT NULL UNIQUE,
+        session_id TEXT,
+        turn_id TEXT,
+        intent_at INTEGER NOT NULL,
+        acknowledged_at INTEGER,
+        terminal_state TEXT CHECK (terminal_state IN ('completedSuccess','failed','completedInterrupted')),
+        stop_proof TEXT,
+        failure_category TEXT,
+        busy_retry_eligible INTEGER NOT NULL DEFAULT 0 CHECK (busy_retry_eligible IN (0,1)),
+        continuation_blocked INTEGER NOT NULL DEFAULT 0 CHECK (continuation_blocked IN (0,1)),
+        PRIMARY KEY (task_id,attempt_index)
+      ) STRICT;
+      INSERT INTO task_attempts(task_id,attempt_index,command_id,session_id,turn_id,intent_at,acknowledged_at,stop_proof)
+        SELECT task_id,0,request_id,session_id,turn_id,dispatch_attempted_at,
+          CASE WHEN turn_id IS NOT NULL THEN updated_at END,stop_proof FROM tasks WHERE dispatch_attempted_at IS NOT NULL;
+      PRAGMA user_version = 2;
+    `);
+    this.db.exec('COMMIT');
+    } catch (error) {
+      try {this.db.exec('ROLLBACK');} catch { /* Preserve the original migration failure. */ }
+      throw error;
+    }
   }
 
   private ensureOpen(): void {
@@ -361,9 +414,14 @@ export class DurableTaskStore {
     const session = input.session ?? 'continue';
     if (session !== 'continue' && session !== 'new') fail('INVALID_ARGUMENT', 'session must be continue or new');
     const executionPolicy = canonicalJson(input.executionPolicy ?? null);
+    const idempotencyPolicy = JSON.parse(executionPolicy) as JsonValue;
+    // Adding an opt-out with the default enabled policy must preserve pre-upgrade
+    // request identity. The original execution policy and payload stay immutable.
+    if (idempotencyPolicy && typeof idempotencyPolicy==='object' && !Array.isArray(idempotencyPolicy)
+      && idempotencyPolicy.busyRetryLimit===3) delete idempotencyPolicy.busyRetryLimit;
     const payload = canonicalJson({
       workspaceId: input.workspaceId, prompt: input.prompt, workerId: input.workerId ?? null,
-      session, executionPolicy: JSON.parse(executionPolicy) as JsonValue,
+      session, executionPolicy: idempotencyPolicy,
     });
     return this.write(() => {
       const duplicate = this.db.prepare('SELECT * FROM tasks WHERE request_id = ?').get(input.requestId) as unknown as TaskRow | undefined;
@@ -378,9 +436,9 @@ export class DurableTaskStore {
       const taskId = `task_${randomUUID()}`;
       const at = this.now();
       this.db.prepare(`INSERT INTO tasks(task_id,request_id,workspace_id,payload,prompt,requested_worker_id,worker_id,
-        session_mode,execution_policy,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,'queued',?,?)`)
+        session_mode,execution_policy,current_command_id,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,'queued',?,?)`)
         .run(taskId, input.requestId, input.workspaceId, payload, input.prompt, input.workerId ?? null,
-          input.workerId ?? null, session, executionPolicy, at, at);
+          input.workerId ?? null, session, executionPolicy, input.requestId, at, at);
       this.event(taskId, 'task_created', 'queued', null, at);
       return { task: this.getTask(taskId), created: true };
     });
@@ -392,7 +450,7 @@ export class DurableTaskStore {
     if (holder) fail('WORKER_BUSY', `Worker ${workerId} is held by task ${holder.task_id}`);
   }
 
-  beginDispatch(taskId: string, input: { workerId?: string; sessionId?: string } = {}): Task {
+  beginDispatch(taskId: string, input: { workerId?: string; sessionId?: string; runtimeBinding?: JsonValue } = {}): Task {
     if (input.workerId !== undefined) requiredString(input.workerId, 'workerId');
     if (input.sessionId !== undefined) requiredString(input.sessionId, 'sessionId');
     return this.write(() => {
@@ -404,8 +462,10 @@ export class DurableTaskStore {
       if (row.requested_worker_id !== null && workerId !== row.requested_worker_id) fail('WORKER_MISMATCH', 'Cannot silently change the requested worker');
       this.assertWorkerAvailable(workerId, taskId);
       const at = this.now();
-      this.db.prepare(`UPDATE tasks SET status = 'dispatching', worker_id = ?, session_id = ?, dispatch_attempted_at = ? WHERE task_id = ?`)
-        .run(workerId, input.sessionId ?? null, at, taskId);
+      this.db.prepare(`UPDATE tasks SET status = 'dispatching', worker_id = ?, session_id = ?, dispatch_attempted_at = ?, runtime_binding = ? WHERE task_id = ?`)
+        .run(workerId, input.sessionId ?? null, at, canonicalJson(input.runtimeBinding ?? null), taskId);
+      this.db.prepare('INSERT INTO task_attempts(task_id,attempt_index,command_id,session_id,intent_at) VALUES(?,0,?,?,?)')
+        .run(taskId,row.current_command_id,input.sessionId ?? null,at);
       this.event(taskId, 'dispatch_intent', 'dispatching', { workerId, sessionId: input.sessionId ?? null }, at);
       return this.getTask(taskId);
     });
@@ -425,6 +485,8 @@ export class DurableTaskStore {
       if (row.status !== 'dispatching' || row.execution_stopped === 1) fail('INVALID_TRANSITION', 'Only a pending dispatch can be acknowledged');
       this.db.prepare("UPDATE tasks SET status = 'running', session_id = ?, turn_id = ? WHERE task_id = ?")
         .run(refs.sessionId ?? row.session_id, refs.turnId ?? row.turn_id, taskId);
+      this.db.prepare('UPDATE task_attempts SET session_id = ?, turn_id = ?, acknowledged_at = ? WHERE task_id = ? AND command_id = ?')
+        .run(refs.sessionId ?? row.session_id,refs.turnId ?? row.turn_id,this.now(),taskId,row.current_command_id);
       const detail: JsonValue = { sessionId: refs.sessionId ?? row.session_id, turnId: refs.turnId ?? row.turn_id };
       this.event(taskId, 'dispatch_acknowledged', 'running', detail, this.now());
       return this.getTask(taskId);
@@ -442,7 +504,96 @@ export class DurableTaskStore {
         return taskFromRow(row);
       }
       this.db.prepare('UPDATE tasks SET session_id = ? WHERE task_id = ?').run(sessionId, taskId);
+      this.db.prepare('UPDATE task_attempts SET session_id = ? WHERE task_id = ? AND command_id = ?')
+        .run(sessionId,taskId,row.current_command_id);
       this.event(taskId, 'session_bound', row.status, { sessionId }, this.now());
+      return this.getTask(taskId);
+    });
+  }
+
+  listAttempts(taskId: string): TaskAttempt[] {
+    this.taskRow(taskId);
+    return (this.db.prepare('SELECT * FROM task_attempts WHERE task_id = ? ORDER BY attempt_index').all(taskId) as unknown as AttemptRow[]).map(attemptFromRow);
+  }
+
+  getCurrentAttempt(taskId: string): TaskAttempt | null {
+    const task = this.taskRow(taskId);
+    const row = this.db.prepare('SELECT * FROM task_attempts WHERE task_id = ? AND command_id = ?')
+      .get(taskId,task.current_command_id) as unknown as AttemptRow | undefined;
+    return row ? attemptFromRow(row) : null;
+  }
+
+  /** Only explicitly attributed failure evidence is supplied here by the native adapter. */
+  recordAttemptFailure(taskId: string, commandId: string, input: {category: string; busyRetryEligible: boolean}): TaskAttempt {
+    requiredString(commandId,'commandId');requiredString(input.category,'category');
+    return this.write(() => {
+      const row = this.taskRow(taskId);
+      if (row.current_command_id !== commandId || !this.getCurrentAttempt(taskId)) fail('RUNTIME_REFERENCE_CONFLICT','Failure evidence must identify the current native command');
+      const eligible = input.category === 'model_busy' && input.busyRetryEligible;
+      const current = this.getCurrentAttempt(taskId)!;
+      // A disqualifying owned failure is never erased by a later busy diagnostic.
+      const blocked = current.continuationBlocked || !eligible;
+      if (current.failureCategory===input.category && current.busyRetryEligible===eligible && current.continuationBlocked===blocked) return current;
+      this.db.prepare('UPDATE task_attempts SET failure_category = ?, busy_retry_eligible = ?, continuation_blocked = ? WHERE task_id = ? AND command_id = ?')
+        .run(input.category,eligible?1:0,blocked?1:0,taskId,commandId);
+      this.event(taskId,'attempt_failure_observed',row.status,{commandId,category:input.category,busyRetryEligible:eligible,continuationBlocked:blocked},this.now());
+      return this.getCurrentAttempt(taskId)!;
+    });
+  }
+
+  /** Record termination for this attempt without releasing the task's lease or entering verification. */
+  recordAttemptTerminal(taskId: string, commandId: string, state: NonNullable<TaskAttempt['terminalState']>, proof: StopProof): TaskAttempt {
+    if (!['completedSuccess','failed','completedInterrupted'].includes(state)) fail('INVALID_ARGUMENT','Invalid attempt terminal state');
+    return this.write(() => {
+      const row = this.taskRow(taskId);
+      const attempt = this.getCurrentAttempt(taskId);
+      if (row.current_command_id !== commandId || !attempt) fail('RUNTIME_REFERENCE_CONFLICT','Terminal proof must identify the current native command');
+      if (attempt.terminalState && attempt.terminalState !== state) fail('RUNTIME_REFERENCE_CONFLICT','Observed native terminal state cannot change');
+      if (attempt.terminalState === state && attempt.stopProof?.kind === proof.kind) return attempt;
+      const normalized = this.normalizeProof(row,proof);
+      this.db.prepare('UPDATE task_attempts SET terminal_state = ?, stop_proof = ? WHERE task_id = ? AND command_id = ?')
+        .run(state,canonicalJson(normalized),taskId,commandId);
+      this.event(taskId,'attempt_terminal_observed',row.status,{commandId,state,proof:normalized as unknown as JsonValue},this.now());
+      return this.getCurrentAttempt(taskId)!;
+    });
+  }
+
+  /** Commit a fresh continuation intent exactly once. A committed command is never sent again. */
+  beginBusyContinuation(taskId: string, expectedCommandId: string, maxContinuations: number): Task {
+    nonnegativeInteger(maxContinuations,'maxContinuations');
+    if (maxContinuations > 10) fail('INVALID_ARGUMENT','maxContinuations must not exceed 10');
+    return this.write(() => {
+      const row = this.taskRow(taskId);
+      const attempt = this.getCurrentAttempt(taskId);
+      if (row.current_command_id !== expectedCommandId || !attempt) fail('RUNTIME_REFERENCE_CONFLICT','Continuation must follow the current native command');
+      if (row.cancel_requested_at !== null) fail('CANCEL_REQUESTED','Cancellation prevents any further continuation');
+      if (row.busy_retry_count >= maxContinuations) fail('BUSY_RETRY_LIMIT','Busy continuation limit reached');
+      if (!row.session_id || row.lease_held !== 1 || row.execution_stopped !== 0
+        || !['dispatching','running','waiting_approval','interrupted'].includes(row.status)
+        || attempt.terminalState !== 'failed' || !attempt.busyRetryEligible || attempt.continuationBlocked
+        || attempt.stopProof?.kind !== 'history_stopped' || row.runtime_binding === 'null'
+        || this.hasEnteredVerification(taskId) || this.getResult(taskId)) {
+        fail('INVALID_TRANSITION','Continuation requires an attributed busy terminal with checked inactive native work and the original runtime binding');
+      }
+      const commandId = `continue_${randomUUID()}`;
+      const index = row.busy_retry_count+1;
+      const at = this.now();
+      this.db.prepare('INSERT INTO task_attempts(task_id,attempt_index,command_id,session_id,intent_at) VALUES(?,?,?,?,?)')
+        .run(taskId,index,commandId,row.session_id,at);
+      this.db.prepare("UPDATE tasks SET status = 'dispatching', current_command_id = ?, turn_id = NULL, busy_retry_count = ?, execution_stopped = 0, stop_proof = NULL, detail = ? WHERE task_id = ?")
+        .run(commandId,index,canonicalJson({reason:'model_busy',retry:{used:index,max:maxContinuations,reason:'model_busy'}}),taskId);
+      this.event(taskId,'busy_continue_intent','dispatching',{commandId,previousCommandId:expectedCommandId,retry:{used:index,max:maxContinuations,reason:'model_busy'}},at);
+      return this.getTask(taskId);
+    });
+  }
+
+  requestCancellation(taskId: string): Task {
+    return this.write(() => {
+      const row = this.taskRow(taskId);
+      if (row.cancel_requested_at !== null || FINAL_STATUSES.has(row.status)) return taskFromRow(row);
+      const at = this.now();
+      this.db.prepare('UPDATE tasks SET cancel_requested_at = ? WHERE task_id = ?').run(at,taskId);
+      this.event(taskId,'cancellation_requested',row.status,{currentCommandId:row.current_command_id},at);
       return this.getTask(taskId);
     });
   }
@@ -467,6 +618,8 @@ export class DurableTaskStore {
       if (row.status === refs.status && row.turn_id === refs.turnId && row.detail === detail) return taskFromRow(row);
       this.db.prepare('UPDATE tasks SET status = ?, turn_id = ?, detail = ? WHERE task_id = ?')
         .run(refs.status, refs.turnId, detail, taskId);
+      this.db.prepare('UPDATE task_attempts SET turn_id = ?, acknowledged_at = COALESCE(acknowledged_at,?) WHERE task_id = ? AND command_id = ?')
+        .run(refs.turnId,this.now(),taskId,row.current_command_id);
       this.event(taskId, 'execution_reattached', refs.status, JSON.parse(detail) as JsonValue, this.now());
       return this.getTask(taskId);
     });

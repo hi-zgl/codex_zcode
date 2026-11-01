@@ -19,7 +19,7 @@ coordinator=new Coordinator(root,store);
 void coordinator.recoverTasks().then(results=>{
  const attached=results.filter(result=>result.attached).length;
  const inspection=results.filter(result=>result.requiresInspection).length;
- if(results.length) console.error(`zcode-pool recovery: ${attached} attached, ${inspection} require inspection; no turns resent`);
+ if(results.length) console.error(`zcode-pool recovery: ${attached} attached, ${inspection} require inspection; uncertain commands are never resent`);
 }).catch(()=>console.error('zcode-pool recovery could not finish; occupancy retained, inspect task status'));
 console.error('zcode-pool daemon ready');
 let stopping=false;

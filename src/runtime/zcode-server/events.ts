@@ -17,14 +17,90 @@ export function redact<T>(value: T): T {
   return walk(value, 0) as T;
 }
 
+/** Read error fields, never prompt/body text or tool output from an arbitrary row. */
 export function classifyError(value: unknown): ErrorCategory {
-  const object = value instanceof Error ? { message: value.message, ...record(value) } : value;
-  const data = JSON.stringify(object ?? '').toLowerCase();
-  if (/3012|unusual activity|risk.block|风控|异常活动/.test(data)) return 'risk_blocked';
+  const root = record(value);
+  if (root.kind && !['error', 'turnHeader'].includes(root.kind)) return 'unknown';
+  const parts: string[] = [];
+  const visited = new Set<object>();
+  let toolError = false;
+  let retryAfter = false;
+  const scalarFields = ['code', 'errorCode', 'providerErrorCode', 'status', 'statusCode', 'status_code', 'httpStatus', 'message', 'reason', 'detail', 'details', 'underlyingErrorMessage', 'underlyingErrorDetail', 'type'];
+  function read(entry: unknown, depth = 0): void {
+    if (depth > 8) return;
+    if (typeof entry === 'string' || typeof entry === 'number') { parts.push(String(entry).toLowerCase()); return; }
+    if (!entry || typeof entry !== 'object' || visited.has(entry)) return;
+    visited.add(entry);
+    const source = entry instanceof Error ? { ...record(entry), message: entry.message, cause: entry.cause } : record(entry);
+    if (source.source === 'tool' || source.toolCallId !== undefined || source.toolName !== undefined) toolError = true;
+    if (['retryAfter', 'retry_after', 'retry-after', 'nextRetryAt'].some(key => source[key] !== undefined)) retryAfter = true;
+    if (record(source.headers)['retry-after'] !== undefined) retryAfter = true;
+    for (const key of scalarFields) if (source[key] !== undefined) read(source[key], depth + 1);
+    for (const key of ['error', 'cause', 'attribution', 'response', 'data', 'body']) if (source[key] && typeof source[key] === 'object') read(source[key], depth + 1);
+    if (typeof source.error === 'string') read(source.error, depth + 1);
+  }
+  read(value);
+  const data = parts.join('\n');
+  if (/\b3012\b|unusual activity|risk[._ -]?block|风控|异常活动/.test(data)) return 'risk_blocked';
   if (/\b401\b|\b403\b|unauthori[sz]ed|token.{0,30}(?:invalid|expired)|invalid.{0,20}(?:token|credential|identity)|鉴权|登录失效|未登录|身份无效/.test(data)) return 'auth_invalid';
-  if (/\b429\b|rate.?limit|too many|繁忙|并发限制|请求过于频繁/.test(data)) return 'rate_limited';
-  if (/\b50[0-9]\b|\b52[0-9]\b|econnreset|timed? ?out|timeout|upstream|service unavailable|服务.{0,10}(?:异常|不可用)/.test(data)) return 'server_error';
+  // Quota exhaustion and a provider's explicit wait instruction are not an immediate busy retry.
+  if (retryAfter || /retry[ -]?after|retry in \d|insufficient[ _-]?(?:quota|balance|credit)|quota[ _-]?(?:exceeded|exhausted)|billing|额度.{0,12}(?:不足|耗尽|用尽)|余额不足|配额.{0,12}(?:不足|耗尽|用尽)/.test(data)) return 'rate_limited';
+  const busyCode = /\b(?:model_busy|model_overloaded|server_busy|server_overloaded|provider_busy|provider_overloaded|overloaded_error|model_at_capacity)\b/.test(data);
+  const busyMessage = /\b(?:model|inference(?: server)?|server|service|provider)\s+(?:(?:is|are|currently|temporarily|too|very)\s+)*(?:busy|overloaded|at capacity)\b|\b(?:overloaded|busy)\s+(?:model|inference|server|service|provider)\b|(?:模型|服务|服务器|上游|系统).{0,8}(?:繁忙|过载|负载过高)/.test(data);
+  if (!toolError && (busyCode || busyMessage)) return 'model_busy';
+  if (/\b429\b|rate[._ -]?limit|too many requests|concurrency[ _-]?(?:limit|exceeded)|并发限制|请求过于频繁|限流/.test(data)) return 'rate_limited';
+  if (/\b5[0-9]{2}\b|econnreset|timed? ?out|timeout|upstream|service unavailable|服务.{0,10}(?:异常|不可用)/.test(data)) return 'server_error';
   return 'unknown';
+}
+
+export interface TurnFailureClassification {
+  category: ErrorCategory;
+  errorAttribution: 'turn' | 'unattributed';
+  busyRetryEligible: boolean;
+  error?: Record<string, any>;
+}
+
+function timestamp(value: unknown): value is number { return typeof value === 'number' && Number.isFinite(value) && value > 0; }
+function turnHeaders(snapshot: Record<string, any>): Array<Record<string, any>> {
+  return (Array.isArray(snapshot.rows?.window) ? snapshot.rows.window : []).filter((row: any) => row.kind === 'turnHeader');
+}
+function attributedToTurn(error: Record<string, any>, header: Record<string, any>, snapshot: Record<string, any>, owner?: Record<string, any>): boolean {
+  let explicit = false;
+  const identities: Array<{ key: string; value: string }> = [];
+  for (const source of [owner, error, record(error.attribution)]) {
+    if (!source) continue;
+    for (const [key, expected] of [['sourceCommandId', header.sourceCommandId], ['commandId', header.sourceCommandId], ['turnId', header.turnId], ['runtimeTurnId', header.turnId]] as const) {
+      if (source[key] === undefined) continue;
+      if (typeof source[key] !== 'string' || !expected || source[key] !== expected) return false;
+      explicit = true;
+      identities.push({ key, value: source[key] });
+    }
+  }
+  if (explicit) return turnHeaders(snapshot).filter(row => identities.every(({ key, value }) =>
+    (['sourceCommandId', 'commandId'].includes(key) ? row.sourceCommandId : row.turnId) === value)).length === 1;
+  // Official 3.16.3 onTurnError sets lastError.at and failed header.endedAt from
+  // the same event.timestamp.getTime(). Do not guess a time window or units.
+  return timestamp(error.at) && timestamp(header.startedAt) && timestamp(header.endedAt)
+    && header.startedAt <= header.endedAt && error.at === header.endedAt
+    && turnHeaders(snapshot).filter(row => row.state === 'failed' && row.endedAt === error.at).length === 1;
+}
+
+/** Shared by live terminal events and cold snapshot recovery. Tool rows are never failure evidence. */
+export function classifyTurnFailure(snapshot: Record<string, any>, header: Record<string, any>): TurnFailureClassification {
+  const unknown: TurnFailureClassification = { category: 'unknown', errorAttribution: 'unattributed', busyRetryEligible: false };
+  if (header.kind !== 'turnHeader' || header.state !== 'failed' || typeof header.sourceCommandId !== 'string' || !header.sourceCommandId
+    || typeof header.turnId !== 'string' || !header.turnId) return unknown;
+  const candidates: Array<{ error: Record<string, any>; owner?: Record<string, any> }> = [];
+  if (header.error && typeof header.error === 'object') candidates.push({ error: record(header.error), owner: header });
+  for (const row of Array.isArray(snapshot.rows?.window) ? snapshot.rows.window : []) {
+    if (row.kind === 'error') candidates.push({ error: { ...row, ...record(row.error) }, owner: row });
+  }
+  if (snapshot.control?.lastError && typeof snapshot.control.lastError === 'object') candidates.push({ error: record(snapshot.control.lastError) });
+  const matched = candidates.filter(candidate => attributedToTurn(candidate.error, header, snapshot, candidate.owner));
+  if (!matched.length) return unknown;
+  const categories = matched.map(candidate => classifyError(candidate.error));
+  const category = (['risk_blocked', 'auth_invalid', 'rate_limited', 'server_error', 'unknown', 'model_busy'] as const).find(category => categories.includes(category))!;
+  return { category, errorAttribution: 'turn', busyRetryEligible: category === 'model_busy', error: matched[categories.indexOf(category)]!.error };
 }
 
 /** A logical frame can span multiple RPC notifications. Reject incomplete or corrupt payloads. */
@@ -76,7 +152,6 @@ export class ConversationProjection {
   private usage = '';
   private interactions = new Set<string>();
   private serial = 0;
-  private frameError?: Record<string, any>;
   readonly history: RuntimeEvent[] = [];
   constructor(readonly sessionId: string, private readonly emit: (event: RuntimeEvent) => void, private readonly maxEvents = 10_000) {}
 
@@ -97,7 +172,6 @@ export class ConversationProjection {
       const snapshot = record(payload.snapshot);
       if (snapshot.sessionId !== this.sessionId || snapshot.logEpoch !== (subscriptionLogEpoch ?? frame.logEpoch ?? snapshot.logEpoch) || snapshot.seq !== frame.toSeq) throw new Error('Conversation snapshot identity or sequence mismatch');
       this.snapshot = structuredClone(snapshot);
-      this.frameError = snapshot.control?.lastError ?? undefined;
       this.event('session_snapshot', { phase: snapshot.control?.phase, revision: snapshot.revision, logEpoch: snapshot.logEpoch, seq: snapshot.seq, tailRows: snapshot.rows?.window?.length ?? 0 });
       for (const row of snapshot.rows?.window ?? []) if (row.kind === 'turnHeader' && row.sourceCommandId) this.rowCommands.set(row.turnId, row.sourceCommandId);
       for (const row of snapshot.rows?.window ?? []) this.row(record(row));
@@ -107,7 +181,7 @@ export class ConversationProjection {
     if (payload.kind !== 'deltas' || !Array.isArray(payload.deltas) || !this.snapshot) throw new Error('Conversation deltas arrived without a snapshot');
     if ((subscriptionLogEpoch ?? frame.logEpoch ?? this.snapshot.logEpoch) !== this.snapshot.logEpoch || frame.fromSeq !== this.snapshot.seq || frame.toSeq < frame.fromSeq) throw new Error('Conversation sequence gap; reconcile before continuing');
     let rows = this.snapshot.rows.window as Array<Record<string, any>>;
-    this.frameError = payload.deltas.filter((delta: any) => delta.op === 'state.updated' && delta.patch?.control).at(-1)?.patch?.control?.lastError ?? undefined;
+    const transitions: Array<() => void> = [];
     for (const value of payload.deltas) {
       const delta = record(value);
       if (delta.op === 'row.appended' || delta.op === 'row.upserted') {
@@ -115,7 +189,8 @@ export class ConversationProjection {
         const index = rows.findIndex((row) => row.rowId === next.rowId);
         if (index < 0) rows.push(next); else rows[index] = next;
         rows.sort((a, b) => a.rowId - b.rowId);
-        this.row(next);
+        const observed = structuredClone(next);
+        transitions.push(() => this.row(observed));
       } else if (delta.op === 'row.delta') {
         const row = rows.find((entry) => entry.rowId === delta.rowId);
         if (!row || typeof delta.append !== 'string') throw new Error('Conversation delta targets a missing row');
@@ -124,19 +199,26 @@ export class ConversationProjection {
           if (path === 'output.text') {
             row.output = { ...record(row.output), text: (typeof row.output?.text === 'string' ? row.output.text : '') + delta.append };
           } else row[path] = (typeof row[path] === 'string' ? row[path] : '') + delta.append;
-          if (row.kind === 'assistantText' && path === 'text') this.event('assistant_message', { rowId: row.rowId, text: delta.append, delta: true, runtimeTurnId: row.turnId }, this.turn(row));
+          if (row.kind === 'assistantText' && path === 'text') {
+            const observed = { rowId: row.rowId, text: delta.append, delta: true, runtimeTurnId: row.turnId };
+            const owner = { sourceCommandId: row.sourceCommandId, turnId: row.turnId };
+            transitions.push(() => this.event('assistant_message', observed, this.turn(owner)));
+          }
         }
       } else if (delta.op === 'row.removed') {
         this.snapshot.rows.window = rows = rows.filter((row) => row.rowId < delta.fromRowId);
         for (const id of this.rowStates.keys()) if (id >= delta.fromRowId) { this.rowStates.delete(id); this.terminalStates.delete(id); }
       } else if (delta.op === 'state.updated') {
         Object.assign(this.snapshot, structuredClone(record(delta.patch)));
-        this.state(record(delta.patch));
+        transitions.push(() => this.state(record(delta.patch)));
       }
     }
     this.snapshot.seq = frame.toSeq;
     // Revision changes are authoritative state patches when present; sequence is independent.
     if (typeof frame.revision === 'number') this.snapshot.revision = frame.revision;
+    // Official onTurnError emits the header before control.lastError in one batch.
+    // Observe the checked complete batch before emitting any terminal transition.
+    for (const transition of transitions) transition();
   }
   private turn(row: Record<string, any>): string | undefined { return row.sourceCommandId ?? this.rowCommands.get(row.turnId); }
   private row(row: Record<string, any>): void {
@@ -153,22 +235,30 @@ export class ConversationProjection {
       if (row.state !== 'running' && this.terminalStates.get(row.rowId) !== row.state) {
         this.terminalStates.set(row.rowId, row.state);
         if (row.state === 'completedSuccess') this.event('turn_completed', data, turnId, row.endedAt);
-        if (row.state === 'failed') this.event('turn_failed', { ...data, ...(this.frameError ? { error: this.frameError, category: classifyError(this.frameError) } : {}) }, turnId, row.endedAt);
+        if (row.state === 'failed') this.event('turn_failed', { ...data, ...classifyTurnFailure(this.snapshot!, row) }, turnId, row.endedAt);
         if (row.state === 'completedInterrupted') this.event('turn_cancelled', data, turnId, row.endedAt);
       }
     } else if (row.kind === 'assistantText') this.event('assistant_message', { ...data, delta: false }, turnId);
     else if (row.kind === 'toolCall') this.event(['success', 'error', 'cancelled'].includes(row.status) ? 'tool_result' : 'tool_call', data, turnId);
-    else if (row.kind === 'error') this.event('error', { ...data, category: classifyError(row) }, turnId);
+    else if (row.kind === 'error') {
+      const headers = turnHeaders(this.snapshot!).filter(header => attributedToTurn({ ...row, ...record(row.error) }, header, this.snapshot!, row));
+      const owner = headers.length === 1 ? headers[0] : undefined;
+      const category = classifyError(row);
+      this.event('error', { ...data, category, errorAttribution: owner ? 'turn' : 'unattributed', busyRetryEligible: !!owner && category === 'model_busy' }, owner ? this.turn(owner) : undefined);
+    }
   }
   private state(state: Record<string, any>): void {
     if (state.runtimeInitialization) this.event('runtime_status', state.runtimeInitialization);
     const lastError = state.control?.lastError;
+    if (state.control && Object.hasOwn(state.control, 'lastError') && !lastError) this.lastError = '';
     if (lastError) {
       const signature = JSON.stringify(lastError);
       if (signature !== this.lastError) {
         this.lastError = signature;
-        const latest = (this.snapshot?.rows?.window ?? []).filter((row: any) => row.kind === 'turnHeader').at(-1);
-        this.event('error', { ...lastError, category: classifyError(lastError) }, latest ? this.turn(latest) : undefined);
+        const headers = turnHeaders(this.snapshot!).filter(header => header.state === 'failed' && attributedToTurn(record(lastError), header, this.snapshot!));
+        const owner = headers.length === 1 ? headers[0] : undefined;
+        const category = classifyError(lastError);
+        this.event('error', { ...lastError, category, errorAttribution: owner ? 'turn' : 'unattributed', busyRetryEligible: !!owner && category === 'model_busy' }, owner ? this.turn(owner) : undefined);
       }
     }
     if (state.usage) {

@@ -41,6 +41,8 @@ MCP 是本地调度器的精简控制面。Codex 接收任务状态、必要控�
 
 `get_diff` 的 `offset` / `nextOffset` 是 JavaScript UTF-16 字符位置，沿用 daemon 定义，**不是 UTF-8 字节位置**。客户端应直接使用返回的 `nextOffset`。按字节裁剪时不会拆开 emoji 的代理对，也不会在文本里插入省略号。涉及凭据脱敏时，`sourceCharacters` 表示本页消耗的原始 UTF-16 字符数，游标依此推进；此时输出文本长度可能与原文不同。
 
+模型繁忙自动续跑只补充 `retry: {used, max, reason: "model_busy"}`，不返回续跑上下文或原始错误。由 daemon 管理立即继续，主会话无需逐次派发；参见 [繁忙自动续跑](busy-recovery.md)。
+
 ## 推荐调用流程
 
 1. 开始时读一次 `overview`，选定 workspace、worker 和本次 `request_id`。

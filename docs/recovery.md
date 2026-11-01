@@ -2,7 +2,7 @@
 
 [开发与运行](development.md) · [架构设计](design/architecture.md)
 
-重新附着恢复的是已有原生回合的观察连接，不创建模型回合。任何恢复路径都不调用 `sendTurn`，不自动发送“继续”，也不重启 Worker 或刷新账号。
+重新附着恢复的是已有原生回合的观察连接，不重新发送状态未知的命令。唯一的自动新回合例外是：确认当前回合因模型繁忙失败、没有活动执行且满足次数与身份约束时，在原会话立即发送“继续”。详见 [繁忙自动续跑](busy-recovery.md)。恢复不重启 Worker 或刷新账号。
 
 ## daemon 启动后的行为
 
@@ -12,7 +12,7 @@
 
 - Worker 的现有进程和端点可由 supervisor 验证；恢复不启动 Worker。
 - `openSession` 传入既有 sessionId，不传模型或模式配置。当前适配器对此只订阅既有会话，不创建会话或修改配置；返回的 sessionId 和工作区路径仍须匹配。
-- 新连接的原生快照中恰有一个 `sourceCommandId` 等于原任务 requestId 的 turnHeader，且具有产品 turnId。
+- 新连接的原生快照中恰有一个 `sourceCommandId` 等于当前尝试的命令 ID（首次为 requestId） 的 turnHeader，且具有产品 turnId。
 - 活动回合必须是 running，且唯一 activeWork 的 sourceCommandId 等于原命令；activeWork 提供 turnId 时也必须一致。终止回合则要求原回合为 completedSuccess、failed 或 completedInterrupted，且 activeWorks 为空。
 
 缺少会话标识、历史尾部不包含原回合、身份冲突、其他回合仍活动、Worker 不可达时，返回 requiresInspection 和固定控制原因，保留任务、Worker 和工作区占用。原生错误文本不放进默认恢复响应。没有持久化派发意图的任务可证明从未发出，会释放占用，且不会重新派发。
@@ -23,11 +23,11 @@
 npm run cli -- resume_task '{"task_id":"替换为taskId"}'
 ```
 
-该方法也可以恢复 ACK 丢失但已保存 sessionId 的任务。并发 resume/reconcile 会按任务串行；已有运行或核验操作不会启动第二个完成链路。
+该方法也可以恢复 ACK 丢失但已保存 sessionId 的任务；有续跑记录时核对持久化的当前命令 ID，而非最初的任务 requestId。并发 resume/reconcile 会按任务串行；已有运行或核验操作不会启动第二个完成链路。
 
 ## 结果、核验与占用
 
-安全确认原回合成功终止且尚未开始过核验时，resume_task 会进入 verifying，运行该任务原先配置的本地核验命令并生成现有格式的不可变 diff/未跟踪文件快照；未配置命令时仍只有 `git diff --check`。核验和快照全部完成前一直持有工作区占用。原生失败不自动重试，原生取消需观察到终止才能释放占用。
+安全确认原回合成功终止且尚未开始过核验时，resume_task 会进入 verifying，运行该任务原先配置的本地核验命令并生成现有格式的不可变 diff/未跟踪文件快照；未配置命令时仍只有 `git diff --check`。核验和快照全部完成前一直持有工作区占用。非繁忙的原生失败不自动重试，原生取消需观察到终止才能释放占用。
 
 如果任务以前进入过 verifying，daemon 崩溃或后续完成步骤失败后，恢复拒绝重跑核验或直接释放占用。判断使用持久事件，不依赖可能被后续恢复说明替换的 detail。原因是本地核验命令可能有副作用，也可能留下仍运行的子进程。当前没有强制解锁或核验重试接口；此类任务需人工检查本地进程和工作区，不能把原生模型已停止等同于所有本地操作已停止。
 

@@ -63,6 +63,10 @@ npm run cli -- get_result '{"task_id":"替换为taskId"}'
 
 停止 daemon 可使用 `npm run cli -- daemon-stop`；它不会主动停止官方 Worker。
 
+## 模型繁忙时立即继续
+
+派发参数 `busy_retry_limit` 默认 3，可设为 0 关闭，上限 10。确认当前回合因模型繁忙终止且无活动执行后，调度器保留原会话、账号、模型及工作区，立即发送“继续”，不添加退避等待，也不重发原任务全文。频率限制、额度不足、风控、鉴权和未知错误不触发。发送状态不明时仅对账，不重复发送。见 [繁忙自动续跑](busy-recovery.md)。
+
 ## 中断与恢复
 
 MCP 关闭不会关闭 daemon；daemon 退出不会主动停止 Worker。重新启动 daemon 后，未确认的任务先进入 interrupted，再尝试核对并重新订阅原回合；没有足够证据时保留占用且不重新派发。

@@ -12,6 +12,7 @@
 ## 等待与上下文预算
 
 - 用一次 `zcode_wait` 等待多个 taskId，携带已有的 revision，避免反复读取未变化的状态。
+- 模型繁忙的有界自动“继续”由 daemon 管理；主会话只读取 `retry.used/max`。不要在它续跑时另派发相同任务；需要停下时调用 `zcode_cancel_task`。
 - 运行期间以状态变化为依据，不循环拉取 `zcode_get_logs`，不把每条工具事件转述给主会话。
 - 完成后读取一次 `zcode_get_result`。按需检查 `zcode_get_diff`；日志只用于定位具体失败或审批原因。
 - 分页时使用工具返回的 nextCursor / nextOffset，不自行猜测下一页位置。被省略或截断的内容不视为已审查。

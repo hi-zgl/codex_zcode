@@ -8,6 +8,7 @@ import { createInterface } from 'node:readline';
 import { DatabaseSync } from 'node:sqlite';
 import test, { type TestContext } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { setTimeout as delay } from 'node:timers/promises';
 import { CoreError, DurableTaskStore, MAX_WAIT_MS, type DispatchInput, type TaskResult } from '../../src/core/index.js';
 
 async function fixture(t: TestContext) {
@@ -75,6 +76,71 @@ test('request IDs are durable, compare normalized payloads, and never create dup
   assert.equal(reopened.getTask(first.task.taskId).revision, reopened.listEvents(first.task.taskId)[0]!.revision);
 });
 
+function downgradeToVersionOne(databasePath: string): void {
+  const database = new DatabaseSync(databasePath);
+  try {
+    database.exec(`BEGIN IMMEDIATE;
+      DROP TABLE task_attempts;
+      ALTER TABLE tasks DROP COLUMN current_command_id;
+      ALTER TABLE tasks DROP COLUMN busy_retry_count;
+      ALTER TABLE tasks DROP COLUMN cancel_requested_at;
+      ALTER TABLE tasks DROP COLUMN runtime_binding;
+      PRAGMA user_version = 1;
+      COMMIT;`);
+  } finally {database.close();}
+}
+
+test('version-one migration preserves leases, immutable results, original request payloads and safe legacy bindings',async t=>{
+  const {store,databasePath}=await fixture(t);workspace(store);workspace(store,'finished-workspace');
+  const policy={mode:'build',modelId:'GLM-5.3-Flash',verifyCommands:[]};
+  const input={requestId:'legacy',workspaceId:'workspace',workerId:'worker',prompt:'Legacy original',executionPolicy:policy};
+  const pending=store.dispatch(input).task;store.beginDispatch(pending.taskId);store.bindSession(pending.taskId,'native');
+  const done=dispatch(store,{requestId:'finished',workspaceId:'finished-workspace',workerId:'finished-worker'});
+  store.beginDispatch(done.taskId);store.transitionTask(done.taskId,'verifying',{executionStopped:{kind:'runtime_terminal',evidence:'Finished'}});
+  store.completeTask(done.taskId,{summary:'Immutable old result'},{status:'succeeded'});const result=store.getResult(done.taskId);
+  store.close();downgradeToVersionOne(databasePath);
+  const raw=new DatabaseSync(databasePath);const before=raw.prepare('SELECT payload FROM tasks WHERE task_id = ?').get(pending.taskId);raw.close();
+  const migrated=new DurableTaskStore(databasePath);t.after(()=>migrated.close());
+  assert.equal(migrated.getTask(pending.taskId).leaseHeld,true);assert.equal(migrated.getTask(pending.taskId).currentCommandId,'legacy');
+  assert.equal(migrated.getTask(pending.taskId).runtimeBinding,null);assert.equal(migrated.getCurrentAttempt(pending.taskId)!.commandId,'legacy');
+  assert.deepEqual(migrated.getResult(done.taskId),result);assert.equal(migrated.getTask(done.taskId).leaseHeld,false);
+  assert.equal(migrated.dispatch({...input,executionPolicy:{...policy,busyRetryLimit:3}}).created,false,'new default must not invalidate old request identity');
+  assert.throws(()=>migrated.dispatch({...input,executionPolicy:{...policy,busyRetryLimit:0}}),code('IDEMPOTENCY_CONFLICT'));
+  migrated.recordAttemptFailure(pending.taskId,'legacy',{category:'model_busy',busyRetryEligible:true});
+  migrated.recordAttemptTerminal(pending.taskId,'legacy','failed',{kind:'history_stopped',evidence:'Exact stopped busy turn'});
+  assert.throws(()=>migrated.beginBusyContinuation(pending.taskId,'legacy',3),code('INVALID_TRANSITION'),'legacy provider/account identity must never be guessed');
+  const check=new DatabaseSync(databasePath);try{assert.deepEqual(check.prepare('SELECT payload FROM tasks WHERE task_id = ?').get(pending.taskId),before);}finally{check.close();}
+});
+
+test('concurrent processes recheck version one under the migration write lock',async t=>{
+  const {store,databasePath}=await fixture(t);workspace(store);dispatch(store);store.close();downgradeToVersionOne(databasePath);
+  const blocker=new DatabaseSync(databasePath);blocker.exec('BEGIN IMMEDIATE');
+  const first=child(databasePath,'open');const second=child(databasePath,'open');
+  t.after(async()=>{await kill(first.process);await kill(second.process);});
+  await delay(100);blocker.exec('COMMIT');blocker.close();
+  assert.deepEqual(JSON.parse(await first.line()),{tasks:1});assert.deepEqual(JSON.parse(await second.line()),{tasks:1});
+  const migrated=new DurableTaskStore(databasePath);t.after(()=>migrated.close());assert.equal(migrated.listTasks().length,1);
+});
+
+test('busy continuation intent, attempt identity and cancellation survive reopen without releasing occupancy',async t=>{
+  const {store,databasePath}=await fixture(t);workspace(store);
+  const task=dispatch(store,{executionPolicy:{busyRetryLimit:3}});
+  store.beginDispatch(task.taskId,{runtimeBinding:{accountAlias:'original',providerId:'account:zai-start-plan',modelId:'GLM-5.3-Flash'}});store.bindSession(task.taskId,'native');
+  store.acknowledgeDispatch(task.taskId,{sessionId:'native',turnId:'request'});
+  store.recordAttemptFailure(task.taskId,'request',{category:'model_busy',busyRetryEligible:true});
+  store.recordAttemptTerminal(task.taskId,'request','failed',{kind:'history_stopped',evidence:'Current native failed with no active work'});
+  const next=store.beginBusyContinuation(task.taskId,'request',3);assert.equal(next.requestId,'request');assert.notEqual(next.currentCommandId,'request');assert.equal(next.turnId,null);
+  assert.equal(next.leaseHeld,true);assert.equal(store.hasEnteredVerification(task.taskId),false);assert.equal(store.getResult(task.taskId),null);
+  assert.throws(()=>store.beginBusyContinuation(task.taskId,'request',3),code('RUNTIME_REFERENCE_CONFLICT'));
+  store.requestCancellation(task.taskId);store.close();const reopened=new DurableTaskStore(databasePath);t.after(()=>reopened.close());reopened.recoverInterruptedTasks();
+  const persisted=reopened.getTask(task.taskId);assert.equal(persisted.currentCommandId,next.currentCommandId);assert.equal(persisted.busyRetryCount,1);assert.notEqual(persisted.cancelRequestedAt,null);
+  assert.equal(reopened.listAttempts(task.taskId).length,2);assert.equal(reopened.getCurrentAttempt(task.taskId)!.acknowledgedAt,null);assert.equal(persisted.leaseHeld,true);
+  assert.throws(()=>reopened.beginDispatch(task.taskId),code('DISPATCH_ALREADY_ATTEMPTED'));
+  reopened.recordAttemptFailure(task.taskId,next.currentCommandId,{category:'model_busy',busyRetryEligible:true});
+  reopened.recordAttemptTerminal(task.taskId,next.currentCommandId,'failed',{kind:'history_stopped',evidence:'Exact continuation stopped'});
+  assert.throws(()=>reopened.beginBusyContinuation(task.taskId,next.currentCommandId,3),code('CANCEL_REQUESTED'));
+});
+
 test('workspace and worker leases are transactional and uncertain tasks retain them', async (t) => {
   const { store, databasePath } = await fixture(t);
   workspace(store);
@@ -119,6 +185,20 @@ test('a committed dispatch intent survives SIGKILL and recovery never permits re
   assert.equal(duplicate.task.taskId, taskId);
   assert.deepEqual(reopened.listEvents(taskId).map((event) => event.type), ['task_created', 'dispatch_intent', 'recovery_interrupted']);
   assert.equal(reopened.getTask(taskId).revision, reopened.listEvents(taskId).at(-1)!.revision);
+});
+
+test('a committed continuation intent survives SIGKILL without replaying the stopped busy attempt',async t=>{
+  const {store,databasePath}=await fixture(t);workspace(store);store.close();
+  const fixtureChild=child(databasePath,'continue-intent');t.after(()=>kill(fixtureChild.process));
+  const {taskId}=JSON.parse(await fixtureChild.line()) as {taskId:string};await kill(fixtureChild.process);
+  const reopened=new DurableTaskStore(databasePath);t.after(()=>reopened.close());
+  const before=reopened.getTask(taskId);assert.equal(before.status,'dispatching');assert.equal(before.requestId,'request');assert.notEqual(before.currentCommandId,'request');assert.equal(before.busyRetryCount,1);
+  reopened.recoverInterruptedTasks();const task=reopened.getTask(taskId);
+  assert.equal(task.currentCommandId,before.currentCommandId);assert.equal(task.leaseHeld,true);assert.equal(task.turnId,null);assert.equal(task.executionStopped,false);assert.equal(reopened.hasEnteredVerification(taskId),false);
+  assert.equal(reopened.listAttempts(taskId).length,2);assert.equal(reopened.getCurrentAttempt(taskId)!.acknowledgedAt,null);assert.equal(reopened.getResult(taskId),null);
+  assert.throws(()=>reopened.beginDispatch(taskId),code('DISPATCH_ALREADY_ATTEMPTED'));assert.throws(()=>reopened.beginBusyContinuation(taskId,'request',3),code('RUNTIME_REFERENCE_CONFLICT'));
+  assert.equal(reopened.dispatch({requestId:'request',workspaceId:'workspace',workerId:'worker',prompt:'Durability fixture'}).created,false);
+  assert.equal(reopened.listEvents(taskId).filter(event=>event.type==='busy_continue_intent').length,1);
 });
 
 test('racing processes can claim a workspace only once', async (t) => {

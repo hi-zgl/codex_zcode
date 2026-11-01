@@ -68,8 +68,11 @@ test('recorded permission/error normalize and terminal metadata updates do not c
   const failures = received.filter((event) => event.type === 'turn_failed');
   assert.equal(failures.length, 1);
   assert.equal(failures[0].turnId, 'command');
-  assert.equal(failures[0].data.error.code, 'invalid_model_request');
-  assert.equal(received.find((event) => event.type === 'error').turnId, 'command');
+  assert.equal(failures[0].data.error, undefined, 'the recorded at:0 is redacted and cannot prove turn ownership');
+  assert.equal(failures[0].data.errorAttribution, 'unattributed');
+  assert.equal(failures[0].data.busyRetryEligible, false);
+  assert.equal(received.find((event) => event.type === 'error').data.code, 'invalid_model_request');
+  assert.equal(received.find((event) => event.type === 'error').turnId, undefined);
 });
 
 test('adapter follows official handshake, buffers events, and waits for authoritative terminal', async () => {

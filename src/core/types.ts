@@ -54,6 +54,13 @@ export interface Task {
   session: 'continue' | 'new';
   sessionId: string | null;
   turnId: string | null;
+  /** Current native command; requestId remains the immutable client idempotency key. */
+  currentCommandId: string;
+  /** Number of busy continuations whose send intent has been durably committed. */
+  busyRetryCount: number;
+  cancelRequestedAt: number | null;
+  /** Immutable account/provider/model binding selected before the original dispatch. */
+  runtimeBinding: JsonValue;
   executionPolicy: JsonValue;
   status: TaskStatus;
   /** Last committed event sequence, monotonic across the whole store. */
@@ -65,6 +72,22 @@ export interface Task {
   detail: JsonValue;
   createdAt: number;
   updatedAt: number;
+}
+
+/** One native command, including an uncertain send. An intent must never be replayed. */
+export interface TaskAttempt {
+  taskId: string;
+  index: number;
+  commandId: string;
+  sessionId: string | null;
+  turnId: string | null;
+  intentAt: number;
+  acknowledgedAt: number | null;
+  terminalState: 'completedSuccess' | 'failed' | 'completedInterrupted' | null;
+  stopProof: StopProof | null;
+  failureCategory: string | null;
+  busyRetryEligible: boolean;
+  continuationBlocked: boolean;
 }
 
 export interface ArtifactMetadata {

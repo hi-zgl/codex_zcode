@@ -1,4 +1,4 @@
-export type ErrorCategory = 'rate_limited' | 'server_error' | 'risk_blocked' | 'auth_invalid' | 'unknown';
+export type ErrorCategory = 'model_busy' | 'rate_limited' | 'server_error' | 'risk_blocked' | 'auth_invalid' | 'unknown';
 
 /** The ingress secret is read locally and never included in returned status. */
 export interface WorkerEndpoint {

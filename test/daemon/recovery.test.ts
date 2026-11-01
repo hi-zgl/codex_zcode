@@ -32,11 +32,11 @@ async function fixture(t:TestContext,verifyCommands:{command:string;args:string[
  const databasePath=join(root,'scheduler','state.db');const store=new DurableTaskStore(databasePath);
  store.registerWorkspace({workspaceId:'workspace',repositoryPath:repo,worktreePath:repo,branch:'trunk',baseCommit});
  const task=store.dispatch({requestId:'request',workspaceId:'workspace',workerId:'worker',prompt:'Do not replay this original prompt',executionPolicy:{mode:'build',modelId:'GLM-5.3-Flash',verifyCommands}}).task;
- store.beginDispatch(task.taskId);store.bindSession(task.taskId,'native-session');store.acknowledgeDispatch(task.taskId,{sessionId:'native-session',turnId:'request'});store.close();
+ store.beginDispatch(task.taskId,{runtimeBinding:{accountAlias:'account-fixture',providerId:'account:zai-start-plan',modelId:'GLM-5.3-Flash'}});store.bindSession(task.taskId,'native-session');store.acknowledgeDispatch(task.taskId,{sessionId:'native-session',turnId:'request'});store.close();
  const children:ChildProcess[]=[];
  t.after(async()=>{await Promise.all(children.map(child=>kill(child)));await rm(root,{recursive:true,force:true});});
  return {root,repo,databasePath,taskId:task.taskId,children,
-  async native(state:string,version=0,pendingApprovals:Record<string,unknown>[]=[]){const path=join(root,'native-state.json');await writeFile(path+'.tmp',JSON.stringify({state,version,pendingApprovals}));await rename(path+'.tmp',path);},
+  async native(state:string,version=0,pendingApprovals:Record<string,unknown>[]=[],commandId='request'){const path=join(root,'native-state.json');await writeFile(path+'.tmp',JSON.stringify({state,version,pendingApprovals,commandId}));await rename(path+'.tmp',path);},
   daemon(fake=true){let stderr='';const child=spawn(process.execPath,['--import',loader,fake?fakeEntry:actualEntry],{env:{...process.env,ZCODE_POOL_HOME:root},stdio:['ignore','ignore','pipe']});child.stderr!.on('data',chunk=>{stderr+=String(chunk);});children.push(child);const exited=once(child,'exit');return {child,exited,stderr:()=>stderr};},
   task(){const reader=new DurableTaskStore(databasePath);try{return reader.getTask(task.taskId);}finally{reader.close();}},
  };
@@ -60,6 +60,23 @@ test('real daemon subprocesses automatically reattach the original task after SI
  const actions=(await readFile(join(f.root,'actions'),'utf8')).trim().split('\n').map(line=>JSON.parse(line));
  assert.deepEqual(actions.map(action=>[action.type,action.commandId]),[['approval','request'],['cancel','request']]);
  assert.equal(actions[0].approvalId,'approval-original');
+ await rpcCall('daemon_stop',{}, {root:f.root});await second.exited;assert.equal(second.child.exitCode,0,second.stderr());
+});
+
+test('daemon SIGKILL recovery observes the persisted continuation command and verifies exactly once without another send',{timeout:15000},async t=>{
+ const f=await fixture(t,[{command:process.execPath,args:['-e',"require('node:fs').appendFileSync('verification-count','once\\n')"],timeout_ms:1000}]);
+ const setup=new DurableTaskStore(f.databasePath);setup.recordAttemptFailure(f.taskId,'request',{category:'model_busy',busyRetryEligible:true});
+ setup.recordAttemptTerminal(f.taskId,'request','failed',{kind:'history_stopped',evidence:'Busy original command stopped with no native active work'});
+ const continuation=setup.beginBusyContinuation(f.taskId,'request',3);setup.close();assert.notEqual(continuation.currentCommandId,'request');
+ await f.native('running',0,[],continuation.currentCommandId);const first=f.daemon();await readyTask(f.root,f.taskId,'running');
+ assert.equal(f.task().turnId,continuation.currentCommandId);assert.equal(f.task().leaseHeld,true);await kill(first.child);
+ await f.native('completedSuccess',1,[],continuation.currentCommandId);const second=f.daemon();await readyTask(f.root,f.taskId,'succeeded');
+ const reader=new DurableTaskStore(f.databasePath);try {
+  assert.equal(reader.getTask(f.taskId).requestId,'request');assert.equal(reader.getTask(f.taskId).currentCommandId,continuation.currentCommandId);assert.equal(reader.getTask(f.taskId).busyRetryCount,1);
+  assert.equal(reader.listEvents(f.taskId).filter(event=>event.type==='task_completed').length,1);assert.equal(reader.listAttempts(f.taskId).length,2);assert.equal(reader.getResult(f.taskId)!.summary,'Recovered fixture result');
+ } finally {reader.close();}
+ assert.equal(await readFile(join(f.repo,'verification-count'),'utf8'),'once\n');assert.equal(await exists(join(f.root,'unexpected-send')),false);
+ assert.equal((await readFile(join(f.root,'subscriptions'),'utf8')).trim().split('\n').length,2);
  await rpcCall('daemon_stop',{}, {root:f.root});await second.exited;assert.equal(second.child.exitCode,0,second.stderr());
 });
 

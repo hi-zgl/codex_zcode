@@ -4,6 +4,12 @@ const [databasePath, action, workspaceId = 'workspace', workerId = 'worker', req
 if (!databasePath || !action) throw new Error('Missing fixture arguments');
 const store = new DurableTaskStore(databasePath);
 
+if (action === 'open') {
+  process.stdout.write(`${JSON.stringify({tasks:store.listTasks().length})}\n`);
+  store.close();
+  process.exit(0);
+}
+
 const execute = (): void => {
   try {
     const { task } = store.dispatch({ requestId, workspaceId, workerId, prompt: 'Durability fixture' });
@@ -19,6 +25,14 @@ const execute = (): void => {
           artifacts: [{ kind: 'patch', path: '/immutable.patch', sizeBytes: 12, sha256: 'a'.repeat(64) }],
         }, { status: 'succeeded' });
       }
+    }
+    if (action === 'continue-intent') {
+      store.beginDispatch(task.taskId,{runtimeBinding:{accountAlias:'original-account',providerId:'account:zai-start-plan',modelId:'GLM-5.3-Flash'}});
+      store.bindSession(task.taskId,'native-session');
+      store.acknowledgeDispatch(task.taskId,{sessionId:'native-session',turnId:requestId});
+      store.recordAttemptFailure(task.taskId,requestId,{category:'model_busy',busyRetryEligible:true});
+      store.recordAttemptTerminal(task.taskId,requestId,'failed',{kind:'history_stopped',evidence:'Exact busy turn failed; activeWorks empty'});
+      store.beginBusyContinuation(task.taskId,requestId,3);
     }
     process.stdout.write(`${JSON.stringify({ taskId: task.taskId })}\n`);
   } catch (error) {
