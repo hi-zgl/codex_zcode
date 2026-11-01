@@ -14,11 +14,12 @@
 | CLI、MCP、daemon、状态持久化、测试核验、差异快照 | 已实现；本地自动测试与双账号 daemon 实测通过 |
 | 同会话续接、审批、未知执行状态保留与显式对账 | 已实现；真实续接和审批恢复已验证 |
 | 自动合并/清理、账号续期、自动队列调度、完整跨账号交接 | 尚未实现 |
-| daemon 重启后自动恢复事件订阅、长任务和大规模稳定性 | 尚未完成；当前不自动重放未知任务 |
+| 原任务重新附着、MCP 输出预算、systemd 用户服务配置 | 已实现；恢复不重发提示词，具体边界见运行指南 |
+| 长任务、大规模并发及真实异常恢复验证 | 尚未完成 |
 
 ## 开发入口
 
-[安装、运行与当前限制](docs/development.md) · [首版实测记录](docs/validation/2026-11-01.md) · `npm run typecheck` · `npm test`
+[安装、运行与当前限制](docs/development.md) · [主会话调度约定](docs/codex-workflow.md) · [上下文输出策略](docs/context-policy.md) · [首版实测记录](docs/validation/2026-11-01.md) · [本轮验证（100 项测试）](docs/validation/2026-11-01-recovery-context.md) · `npm run typecheck` · `npm test`
 
 ## 阅读入口
 

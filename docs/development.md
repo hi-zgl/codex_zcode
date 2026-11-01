@@ -65,15 +65,15 @@ npm run cli -- get_result '{"task_id":"替换为taskId"}'
 
 ## 中断与恢复
 
-MCP 关闭不会关闭 daemon；daemon 退出不会主动停止 Worker。重新启动 daemon 后，未确认的任务进入 interrupted，保留占用且不重新派发。
+MCP 关闭不会关闭 daemon；daemon 退出不会主动停止 Worker。重新启动 daemon 后，未确认的任务先进入 interrupted，再尝试核对并重新订阅原回合；没有足够证据时保留占用且不重新派发。
 
 ```bash
 npm run cli -- reconcile_task '{"task_id":"替换为taskId"}'
 ```
 
-对账使用新连接上的原生会话快照。只有匹配原命令的终止回合且没有活动执行时才释放占用。历史窗口没有该回合、服务不可达或缺少会话标识时继续保留现场。当前不自动恢复旧任务的实时事件泵，不因超时或 502 自动发送“继续”。
+对账使用新连接上的原生会话快照。只有匹配原命令的终止回合且没有活动执行时才释放占用。历史窗口没有该回合、服务不可达或缺少会话标识时继续保留现场。`resume_task` 可以重新附着已核实的原活动回合；启动时也会尝试恢复。原回合已终止且从未进入本地核验时，可完成核验与快照。曾进入核验后中断的任务需检查本地进程与工作区，不自动重跑命令。详见 [任务恢复](recovery.md)。不因超时或 502 自动发送“继续”。
 
-`cancel_task` 发起取消后仍需等待终止事件；`stop_worker` 在存在活动或未知执行任务时拒绝停止。守护服务单实例锁遇到崩溃遗留时会拒绝启动并给出检查提示，不自动删除可能仍被使用的 socket/锁。
+`cancel_task` 发起取消后仍需等待终止事件；`stop_worker` 在存在活动或未知执行任务时拒绝停止。守护服务仅在能证明旧进程已退出、socket 属于旧进程且没有活动监听时回收遗留锁；无法证明时拒绝启动并给出检查提示。后台部署支持生成与安装 systemd 用户 unit，见 [后台服务](service.md)。
 
 ## MCP 接入
 
@@ -85,12 +85,14 @@ node --import tsx src/mcp/main.ts
 
 stdio 仅承载 MCP 协议；诊断输出使用 stderr。实际 Codex 配置可将 node、tsx loader 和入口文件写为绝对路径；所有入口使用相同 `ZCODE_POOL_HOME`。本项目不会自动修改用户的 Codex 全局配置。
 
-工具名以 `zcode_` 开头，当前包括 overview、start_worker、stop_worker、probe_worker、create_workspace、dispatch_task、wait、get_result、get_diff、get_logs、respond_approval、cancel_task、reconcile_task。
+工具名以 `zcode_` 开头，当前包括 overview、start_worker、stop_worker、probe_worker、create_workspace、dispatch_task、wait、get_result、get_diff、get_logs、respond_approval、cancel_task、reconcile_task、resume_task。
+
+MCP 返回独立的白名单精简视图，不直接回传 daemon 原始对象或完整会话。默认仅提供控制状态、简短结果和核验信息；日志与差异按需读取。具体预算见 [上下文输出策略](context-policy.md)，使用流程见 [主会话调度约定](codex-workflow.md)。
 
 ## 当前限制
 
 - Linux `/proc` 用于核验 PID、启动时间、进程组、路径和实例标记；尚不支持 Windows/macOS 进程管理。
-- 账号刷新、队列自动调度、跨账号交接、自动合并、后台任务重新附着仍需后续实现。
+- 账号刷新、队列自动调度、跨账号交接与自动合并仍需后续实现；重启重新附着已有实现，真实长任务与异常恢复仍需进一步验证。
 - 分支/worktree 防止无意覆盖，不构成文件访问沙箱。
 - 原生会话快照是当前尾部窗口，不保证覆盖完整历史；无法证明停止时不释放占用。
 - 帐号凭据、运行产物和日志只保存在本地忽略目录中；不要提交它们。

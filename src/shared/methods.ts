@@ -14,6 +14,7 @@ export const methods = {
   get_logs: {description:'Read a bounded page of persisted, redacted events.',schema:z.object({task_id:id,cursor:z.number().int().nonnegative().default(0),limit:z.number().int().min(1).max(50).default(10)})},
   get_diff: {description:'Read a bounded page of the task snapshot patch; unavailable before snapshot.',schema:z.object({task_id:id,offset:z.number().int().nonnegative().default(0),limit:z.number().int().min(1).max(8000).default(4000)})},
   reconcile_task: {description:'Inspect an uncertain task against a fresh native session snapshot. Never resends. Releases occupancy only when that exact turn is terminal and no native active work remains.',schema:z.object({task_id:id})},
+  resume_task: {description:'Safely restore observation of the original native task without sending a turn. Exact terminal turns can finish configured verification and snapshot; interrupted verification is never retried automatically.',schema:z.object({task_id:id})},
   cancel_task: {description:'Request cancellation; occupancy remains until termination is observed.',schema:z.object({task_id:id})},
   respond_approval: {description:'Respond to a pending native approval in the executing task.',schema:z.object({task_id:id,approval_id:id,decision:z.enum(['accept','decline','cancel'])})},
 } satisfies Record<string, {description:string;schema:z.ZodTypeAny}>;

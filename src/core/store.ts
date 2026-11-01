@@ -447,6 +447,63 @@ export class DurableTaskStore {
     });
   }
 
+  /** Reattach only after the coordinator has observed this exact existing native command. */
+  reattachTask(taskId: string, refs: {
+    sessionId: string; turnId: string; status: 'running' | 'waiting_approval' | 'blocked'; detail?: JsonValue;
+  }): Task {
+    requiredString(refs.sessionId, 'sessionId');
+    requiredString(refs.turnId, 'turnId');
+    if (!['running', 'waiting_approval', 'blocked'].includes(refs.status)) fail('INVALID_ARGUMENT', 'Invalid attachment status');
+    return this.write(() => {
+      const row = this.taskRow(taskId);
+      if (row.dispatch_attempted_at === null || row.session_id === null || row.lease_held !== 1 || row.execution_stopped === 1
+        || !['dispatching', 'running', 'waiting_approval', 'blocked', 'interrupted'].includes(row.status)) {
+        fail('INVALID_TRANSITION', 'Only an occupied, uncertain dispatched task can reattach to observed native execution');
+      }
+      if (row.session_id !== refs.sessionId || (row.turn_id !== null && row.turn_id !== refs.turnId)) {
+        fail('RUNTIME_REFERENCE_CONFLICT', 'Runtime session/turn identity cannot be changed');
+      }
+      const detail = canonicalJson(refs.detail ?? null);
+      if (row.status === refs.status && row.turn_id === refs.turnId && row.detail === detail) return taskFromRow(row);
+      this.db.prepare('UPDATE tasks SET status = ?, turn_id = ?, detail = ? WHERE task_id = ?')
+        .run(refs.status, refs.turnId, detail, taskId);
+      this.event(taskId, 'execution_reattached', refs.status, JSON.parse(detail) as JsonValue, this.now());
+      return this.getTask(taskId);
+    });
+  }
+
+  /** Verification commands may have side effects, including child processes surviving a crash. */
+  hasEnteredVerification(taskId: string): boolean {
+    this.taskRow(taskId);
+    return this.db.prepare("SELECT 1 FROM task_events WHERE task_id = ? AND status = 'verifying' LIMIT 1").get(taskId) !== undefined;
+  }
+
+  /** Preserve occupancy when verification cannot be completed or safely retried. */
+  interruptVerification(taskId: string, detail: JsonValue): Task {
+    return this.write(() => {
+      const row = this.taskRow(taskId);
+      if (row.status !== 'verifying' || row.lease_held !== 1 || row.execution_stopped !== 1) {
+        fail('INVALID_TRANSITION', 'Only occupied verification can be interrupted without releasing its lease');
+      }
+      this.db.prepare("UPDATE tasks SET status = 'interrupted', detail = ? WHERE task_id = ?")
+        .run(canonicalJson(detail), taskId);
+      this.event(taskId, 'verification_interrupted', 'interrupted', detail, this.now());
+      return this.getTask(taskId);
+    });
+  }
+
+  /** Report inspection requirements without inferring termination or releasing occupancy. */
+  recordRecoveryInspection(taskId: string, detail: JsonValue): Task {
+    return this.write(() => {
+      const row = this.taskRow(taskId);
+      const encoded = canonicalJson(detail);
+      if (row.detail === encoded) return taskFromRow(row);
+      this.db.prepare('UPDATE tasks SET detail = ? WHERE task_id = ?').run(encoded, taskId);
+      this.event(taskId, 'recovery_requires_inspection', row.status, detail, this.now());
+      return this.getTask(taskId);
+    });
+  }
+
   private normalizeProof(row: TaskRow, proof: StopProof): StopProof {
     if (!['runtime_terminal', 'process_exited', 'history_stopped', 'not_dispatched'].includes(proof?.kind)) fail('INVALID_ARGUMENT', 'Invalid execution stop proof kind');
     requiredString(proof.evidence, 'stopProof.evidence');

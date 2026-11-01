@@ -16,11 +16,18 @@ const rpc=await serveRpc(root,async(method,params)=>{
 const store=new DurableTaskStore(join(root,'scheduler','state.db'));
 store.recoverInterruptedTasks();
 coordinator=new Coordinator(root,store);
+void coordinator.recoverTasks().then(results=>{
+ const attached=results.filter(result=>result.attached).length;
+ const inspection=results.filter(result=>result.requiresInspection).length;
+ if(results.length) console.error(`zcode-pool recovery: ${attached} attached, ${inspection} require inspection; no turns resent`);
+}).catch(()=>console.error('zcode-pool recovery could not finish; occupancy retained, inspect task status'));
 console.error('zcode-pool daemon ready');
 let stopping=false;
 async function shutdown(){
  if(stopping)return;stopping=true;
- await rpc.close(); await coordinator!.close(); store.close();
+ // Keep the daemon ownership lock until all attached tasks and local verification
+ // jobs have drained; a successor must not race their database/worktree writes.
+ await coordinator!.close(); await rpc.close(); store.close();
  process.exit(0);
 }
 process.on('SIGTERM',()=>{void shutdown();});

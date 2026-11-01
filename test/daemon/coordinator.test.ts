@@ -8,6 +8,7 @@ import { promisify } from 'node:util';
 import test, { type TestContext } from 'node:test';
 import { CoreError, DurableTaskStore, type Task } from '../../src/core/index.js';
 import { Coordinator } from '../../src/daemon/coordinator.js';
+import { presentMcpResult } from '../../src/shared/presentation.js';
 import type {
   OpenSessionInput, RuntimeConnection, RuntimeEvent, RuntimeInfo, SessionRef,
   SessionSnapshot, TurnInput, TurnRef,
@@ -77,16 +78,17 @@ class BufferedFake implements RuntimeConnection {
     if (this.historyError) throw this.historyError;
     return {
       ...session, phase: this.nativeState, revision: 1, cursor: '2', summary: 'Fixture completed', pendingApprovals: [],
-      raw: { control: { phase: this.nativeState, activeWorks: this.activeWorks }, rows: { window: [
-        { kind: 'turnHeader', sourceCommandId: this.sourceCommandId ?? this.current?.commandId ?? 'request', state: this.nativeState },
+      raw: { sessionId: session.sessionId, control: { phase: this.nativeState, activeWorks: this.activeWorks }, rows: { window: [
+        { kind: 'turnHeader', rowId: 1, turnId: 'product-turn', sourceCommandId: this.sourceCommandId ?? this.current?.commandId ?? 'request', state: this.nativeState },
+        { kind: 'assistantText', rowId: 2, turnId: 'product-turn', text: 'Fixture completed' },
       ] } },
     };
   }
 
   async queryCommand(): Promise<'unknown'> { return 'unknown'; }
   async quota(): Promise<Record<string, unknown>> { return {}; }
-  async respondApproval(): Promise<void> {}
-  async cancel(): Promise<void> {}
+  async respondApproval(_turn: TurnRef, _approvalId: string, _decision: unknown): Promise<void> {}
+  async cancel(_turn: TurnRef): Promise<void> {}
   async close(): Promise<void> { this.closed = true; this.release(); }
 }
 
@@ -104,7 +106,7 @@ async function fixture(t: TestContext) {
   const coordinator = new Coordinator(root, store);
   const fake = new BufferedFake();
   Object.defineProperty(coordinator.supervisor, 'status', { value: async () => ({ workerId: 'worker', accountAlias: 'account-fixture', state: 'ready', endpoint: { baseUrl: 'http://127.0.0.1:1' } }), configurable: true });
-  Object.defineProperty(coordinator.vault, 'load', { value: async () => ({ alias: 'account-fixture', provider: 'zai', health: 'available' }) });
+  Object.defineProperty(coordinator.vault, 'load', { value: async () => ({ alias: 'account-fixture', provider: 'zai', health: 'available' }), configurable: true });
   Object.defineProperty(coordinator.adapter, 'connect', { value: async () => fake, configurable: true });
   t.after(async () => {
     fake.release();
@@ -233,7 +235,7 @@ test('a stream ending without a terminal event becomes interrupted and retains o
   assert.equal(fake.sendCalls, 1);
 });
 
-test('a failed history read preserves the terminal stop observation', async (t) => {
+test('a failed history read preserves terminal proof and retains verification occupancy for inspection', async (t) => {
   const { store, coordinator, fake } = await fixture(t);
   fake.historyError = new Error('History unavailable after authoritative completion');
   const result = await dispatch(coordinator);
@@ -241,7 +243,7 @@ test('a failed history read preserves the terminal stop observation', async (t) 
   assert.equal(task.status, 'interrupted');
   assert.equal(task.executionStopped, true);
   assert.equal(task.stopProof!.kind, 'runtime_terminal');
-  assert.equal(task.leaseHeld, false);
+  assert.equal(task.leaseHeld, true);
 });
 
 test('different workspaces cannot dispatch concurrent tasks to the same worker', async (t) => {
@@ -339,4 +341,259 @@ test('successive task snapshots include cumulative workspace delivery and preser
   assert.deepEqual(store.getResult(first.task.taskId), firstResult);
   assert.equal(fake.sendCalls, 2);
   assert.equal(fake.opened[1]!.sessionId, 'native-session');
+});
+
+class RecoveryFake extends BufferedFake {
+  pending: Record<string, unknown>[] = [];
+  readonly replies: {approvalId: string; decision: unknown}[] = [];
+  readonly cancellations: TurnRef[] = [];
+  readonly cursors: (string | undefined)[] = [];
+  snapshotPatch?: (snapshot: SessionSnapshot) => void;
+  private serial = 0;
+  private queued: RuntimeEvent[] = [];
+  private wake?: () => void;
+  constructor() {
+    super();
+    this.nativeState = 'running';
+    this.sourceCommandId = 'request';
+    this.activeWorks = [{sourceCommandId:'request',turnId:'product-turn',foregroundExecutionId:'foreground'}];
+  }
+  override async syncHistory(session: SessionRef): Promise<SessionSnapshot> {
+    const snapshot = await super.syncHistory(session);
+    snapshot.cursor = String(this.serial);
+    snapshot.pendingApprovals = this.pending;
+    (snapshot.raw.rows as any).window.push({kind:'toolCall',rowId:3,turnId:'product-turn',toolName:'Edit'});
+    this.snapshotPatch?.(snapshot);
+    return snapshot;
+  }
+  emit(type: RuntimeEvent['type'], data: Record<string, unknown> = {}, commandId: string | undefined = 'request'): void {
+    if (commandId === 'request' && ['turn_completed','turn_failed','turn_cancelled'].includes(type)) {
+      this.nativeState = type==='turn_completed'?'completedSuccess':type==='turn_failed'?'failed':'completedInterrupted';
+      this.activeWorks = [];
+      this.pending = [];
+    }
+    const cursor = String(++this.serial);
+    this.queued.push({id:`recovered:${cursor}`,cursor,type,data,sessionId:'native-session',turnId:commandId,timestamp:Date.now()});
+    this.wake?.();
+  }
+  override async *events(_session?: SessionRef, cursor?: string): AsyncIterable<RuntimeEvent> {
+    this.cursors.push(cursor);
+    let after = Number(cursor ?? 0);
+    while (!this.closed) {
+      const events = this.queued.filter(event=>Number(event.cursor)>after);
+      for (const event of events) {after=Number(event.cursor);yield event;}
+      if (this.closed) break;
+      await new Promise<void>(resolve=>{this.wake=resolve;if(this.closed||this.queued.some(event=>Number(event.cursor)>after))resolve();});
+    }
+  }
+  override async respondApproval(_turn: TurnRef, approvalId: string, decision: unknown): Promise<void> {
+    this.replies.push({approvalId,decision});
+    this.pending = this.pending.filter(value=>value.interactionId!==approvalId);
+  }
+  override async cancel(turn: TurnRef): Promise<void> {this.cancellations.push(turn);}
+  override async close(): Promise<void> {await super.close();this.wake?.();}
+}
+
+function interruptedTask(store: DurableTaskStore, verifyCommands: {command:string;args:string[];timeout_ms:number}[] = []) {
+  const task = store.dispatch({requestId:'request',workspaceId:'workspace',workerId:'worker',prompt:'Original task only',executionPolicy:{mode:'build',modelId:'GLM-5.3-Flash',verifyCommands}}).task;
+  store.beginDispatch(task.taskId);
+  store.bindSession(task.taskId,'native-session');
+  store.recoverInterruptedTasks();
+  return store.getTask(task.taskId);
+}
+function recoveryConnection(coordinator: Coordinator, fake: RuntimeConnection) {
+  Object.defineProperty(coordinator.adapter,'connect',{value:async()=>fake,configurable:true});
+}
+
+test('startup recovery restores only original approvals, supports reply and targeted cancellation, and never sends again', async t => {
+  const {store,coordinator} = await fixture(t);
+  const fake = new RecoveryFake();
+  const longSummary = '审批摘要🙂'.repeat(3000);
+  fake.pending = [{interactionId:'approval-original',kind:'permission',anchorRowId:3,payload:{toolName:'Edit',summary:longSummary,detail:{file_path:'/fixture/file',new_string:'large'.repeat(3000)}}}];
+  recoveryConnection(coordinator,fake);
+  const task = interruptedTask(store);
+  const [recovered] = await coordinator.recoverTasks();
+  assert.equal(recovered!.attached,true);
+  assert.equal(store.getTask(task.taskId).status,'waiting_approval');
+  assert.equal(store.getTask(task.taskId).leaseHeld,true);
+  const approval = recovered!.pendingApprovals![0]!;
+  assert.equal(approval.approvalId,'approval-original');
+  assert.ok(Buffer.byteLength(approval.summary!)<=384);
+  assert.equal(approval.truncated,true);
+  assert.equal(approval.reviewComplete,false);
+  assert.equal((store.getTask(task.taskId).detail as any).approvalId,'approval-original');
+  const logs = store.listEvents(task.taskId,{afterRevision:approval.approvalLogCursor!,limit:1});
+  assert.equal((logs[0]!.detail as any).approvalId,'approval-original','large native args cannot erase the actionable ID');
+  assert.equal((logs[0]!.detail as any).detail.truncated,true);
+  assert.equal(store.listEvents(task.taskId).some(event=>event.type==='assistant_message'),false,'initial historical content is not replayed');
+  await coordinator.call('respond_approval',{task_id:task.taskId,approval_id:'approval-original',decision:'accept'});
+  assert.deepEqual(fake.replies,[{approvalId:'approval-original',decision:'accept'}]);
+  const cancellation = await coordinator.call('cancel_task',{task_id:task.taskId}) as {terminationConfirmed:boolean};
+  assert.equal(cancellation.terminationConfirmed,false);
+  assert.equal(fake.cancellations[0]!.commandId,'request');
+  assert.equal(store.getTask(task.taskId).leaseHeld,true,'cancellation ACK is not stop proof');
+  fake.emit('turn_cancelled');
+  assert.equal((await completed(store,coordinator,task.taskId)).status,'cancelled');
+  assert.equal(store.getTask(task.taskId).leaseHeld,false);
+  assert.equal(fake.sendCalls,0);
+  assert.deepEqual(fake.opened,[{workspacePath:store.getWorkspace('workspace').worktreePath,sessionId:'native-session'}]);
+  assert.deepEqual(fake.cursors,['0']);
+});
+
+test('a recovered event stream ignores another command and completes verification and immutable snapshot once', async t => {
+  const {root,repo,store,coordinator} = await fixture(t);
+  const fake = new RecoveryFake();
+  recoveryConnection(coordinator,fake);
+  const marker = join(root,'verification-count');
+  const task = interruptedTask(store,[{command:process.execPath,args:['-e',`require('node:fs').appendFileSync(${JSON.stringify(marker)},'once\\n')`],timeout_ms:1000}]);
+  assert.equal((await coordinator.call('resume_task',{task_id:task.taskId}) as any).attached,true);
+  await writeFile(join(repo,'code.txt'),'after recovery\n');
+  fake.emit('turn_completed',{},'foreign-command');
+  await delay(10);
+  assert.equal(store.getTask(task.taskId).status,'running');
+  assert.equal(store.getTask(task.taskId).leaseHeld,true);
+  fake.snapshotPatch = snapshot => {
+    (snapshot.raw.rows as any).window.push({kind:'assistantText',rowId:50,turnId:'foreign-product-turn',text:'Do not leak a different task history'});
+    snapshot.summary='Do not leak a different task history';
+  };
+  fake.emit('turn_completed');
+  fake.emit('turn_completed');
+  assert.equal((await completed(store,coordinator,task.taskId)).status,'succeeded');
+  const result = store.getResult(task.taskId)!;
+  assert.equal(result.summary,'Fixture completed');
+  assert.equal(await readFile(marker,'utf8'),'once\n');
+  assert.match(await readFile(result.artifacts[0]!.path,'utf8'),/\+after recovery/);
+  const revision = store.getTask(task.taskId).revision;
+  await Promise.all([coordinator.call('resume_task',{task_id:task.taskId}),coordinator.call('reconcile_task',{task_id:task.taskId})]);
+  assert.equal(store.getTask(task.taskId).revision,revision);
+  assert.deepEqual(store.getResult(task.taskId),result);
+  assert.equal(store.listEvents(task.taskId).filter(event=>event.type==='task_completed').length,1);
+  assert.equal(fake.sendCalls,0);
+});
+
+test('terminal recovery holds its lease through verification and concurrent resume/reconcile cannot finish it twice', async t => {
+  const {root,store,coordinator} = await fixture(t);
+  const fake = new RecoveryFake();
+  fake.nativeState='completedSuccess';fake.activeWorks=[];
+  recoveryConnection(coordinator,fake);
+  const marker=join(root,'verification-count');const gate=join(root,'release-verification');
+  const command=`const fs=require('node:fs');fs.appendFileSync(${JSON.stringify(marker)},'once\\n');const timer=setInterval(()=>{if(fs.existsSync(${JSON.stringify(gate)}))clearInterval(timer)},5);setTimeout(()=>process.exit(2),2000).unref()`;
+  const task=interruptedTask(store,[{command:process.execPath,args:['-e',command],timeout_ms:3000}]);
+  const recovery=await coordinator.call('resume_task',{task_id:task.taskId}) as any;
+  assert.equal(recovery.finalizing,true);
+  await waitFor(()=>store.getTask(task.taskId).status==='verifying');
+  await waitFor(()=>store.listEvents(task.taskId).some(event=>event.status==='verifying'));
+  const concurrently=await Promise.all([coordinator.call('resume_task',{task_id:task.taskId}),coordinator.call('reconcile_task',{task_id:task.taskId})]) as any[];
+  assert.equal(concurrently.every(result=>result.operationInProgress===true),true);
+  assert.equal(store.getTask(task.taskId).leaseHeld,true);
+  await assert.rejects(dispatch(coordinator,{request_id:'too-soon'}),error=>error instanceof CoreError&&error.code==='WORKSPACE_BUSY');
+  await writeFile(gate,'');
+  assert.equal((await completed(store,coordinator,task.taskId)).status,'succeeded');
+  assert.equal(await readFile(marker,'utf8'),'once\n');
+  assert.equal(store.listEvents(task.taskId).filter(event=>event.type==='task_completed').length,1);
+  assert.equal(fake.sendCalls,0);
+});
+
+test('recovery refuses missing, conflicting, or ambiguous native identities without freeing occupancy', async t => {
+  const cases: {name:string;patch:(fake:RecoveryFake)=>void}[] = [
+    {name:'another command header',patch:fake=>{fake.sourceCommandId='foreign';}},
+    {name:'another active work',patch:fake=>{fake.activeWorks=[{sourceCommandId:'foreign',turnId:'foreign-turn'}];}},
+    {name:'conflicting product turn',patch:fake=>{fake.activeWorks=[{sourceCommandId:'request',turnId:'foreign-turn'}];}},
+    {name:'missing active work proof',patch:fake=>{fake.snapshotPatch=snapshot=>{delete (snapshot.raw.control as any).activeWorks;};}},
+    {name:'ambiguous command header',patch:fake=>{fake.snapshotPatch=snapshot=>{(snapshot.raw.rows as any).window.push({...((snapshot.raw.rows as any).window[0]),rowId:9});};}},
+    {name:'snapshot session mismatch',patch:fake=>{fake.snapshotPatch=snapshot=>{snapshot.sessionId='foreign-session';};}},
+    {name:'snapshot workspace mismatch',patch:fake=>{fake.snapshotPatch=snapshot=>{snapshot.workspacePath='/foreign/workspace';};}},
+    {name:'openSession identity mismatch',patch:fake=>{fake.openSession=async input=>({sessionId:'foreign-session',workspacePath:input.workspacePath});}},
+  ];
+  for(const scenario of cases) await t.test(scenario.name,async child=>{
+    const {store,coordinator}=await fixture(child);const fake=new RecoveryFake();scenario.patch(fake);recoveryConnection(coordinator,fake);
+    const task=interruptedTask(store);
+    const result=await coordinator.call('resume_task',{task_id:task.taskId}) as any;
+    assert.equal(result.requiresInspection,true);assert.equal(result.attached,false);
+    assert.equal(store.getTask(task.taskId).leaseHeld,true);assert.equal(fake.sendCalls,0);assert.equal(fake.closed,true);
+    await assert.rejects(coordinator.call('stop_worker',{worker_id:'worker'}),/active or uncertain/);
+  });
+});
+
+test('unattributed and blocked approvals cannot be accepted while safe cancellation remains available', async t => {
+  const {store,coordinator}=await fixture(t);const fake=new RecoveryFake();recoveryConnection(coordinator,fake);
+  fake.pending=[{interactionId:'unattributed',kind:'permission',payload:{toolName:'Edit'}},{interactionId:'foreign',sourceCommandId:'other',anchorRowId:3},{interactionId:'owned',kind:'permission',anchorRowId:3}];
+  Object.defineProperty(coordinator.vault,'load',{value:async()=>({alias:'account-fixture',provider:'zai',health:'blocked'}),configurable:true});
+  const task=interruptedTask(store);const result=await coordinator.call('resume_task',{task_id:task.taskId}) as any;
+  assert.equal(result.attached,true);assert.equal(result.requiresInspection,true);assert.equal(result.task.status,'blocked');
+  assert.deepEqual(result.pendingApprovals.map((value:any)=>value.approvalId),['owned']);
+  for(const approvalId of ['unattributed','foreign','owned']) await assert.rejects(coordinator.call('respond_approval',{task_id:task.taskId,approval_id:approvalId,decision:'accept'}),/attributed|blocked/);
+  assert.equal(fake.replies.length,0);
+  await coordinator.call('respond_approval',{task_id:task.taskId,approval_id:'owned',decision:'decline'});
+  await coordinator.call('cancel_task',{task_id:task.taskId});
+  assert.equal(fake.replies[0]!.decision,'decline');assert.equal(fake.cancellations.length,1);assert.equal(store.getTask(task.taskId).leaseHeld,true);
+});
+
+test('verification inspection survives repeated recovery even after its original restart detail is replaced', async t => {
+  const {store,coordinator}=await fixture(t);const fake=new RecoveryFake();recoveryConnection(coordinator,fake);
+  const task=interruptedTask(store);
+  store.transitionTask(task.taskId,'verifying',{executionStopped:{kind:'history_stopped',evidence:'Exact turn stopped before crash'}});
+  store.recoverInterruptedTasks();
+  for(let restart=0;restart<2;restart++) {
+    const [resumed,reconciled]=await Promise.all([coordinator.call('resume_task',{task_id:task.taskId}),coordinator.call('reconcile_task',{task_id:task.taskId})]) as any[];
+    assert.equal(resumed.requiresInspection,true);assert.equal(reconciled.requiresInspection,true);
+    assert.equal(store.getTask(task.taskId).leaseHeld,true);assert.equal(store.hasEnteredVerification(task.taskId),true);
+    store.recoverInterruptedTasks();
+  }
+  assert.equal(fake.opened.length,0);assert.equal(fake.sendCalls,0);assert.equal(store.getResult(task.taskId),null);
+});
+
+test('read-only reconciliation and explicit attachment serialize without closing the attached connection', async t => {
+  const {store,coordinator}=await fixture(t);const connections:RecoveryFake[]=[];
+  Object.defineProperty(coordinator.adapter,'connect',{value:async()=>{const fake=new RecoveryFake();connections.push(fake);return fake;},configurable:true});
+  const task=interruptedTask(store);
+  const [reconciled,resumed]=await Promise.all([coordinator.call('reconcile_task',{task_id:task.taskId}),coordinator.call('resume_task',{task_id:task.taskId})]) as any[];
+  assert.equal(reconciled.canResume,true);assert.equal(resumed.attached,true);assert.equal(connections.length,2);
+  assert.equal(connections[0]!.closed,true);assert.equal(connections[1]!.closed,false);
+  const again=await coordinator.call('reconcile_task',{task_id:task.taskId}) as any;
+  assert.equal(again.attached,true);assert.equal(connections[1]!.closed,false);assert.equal(store.getTask(task.taskId).leaseHeld,true);
+});
+
+test('unmarked native exception text cannot cross the successful recovery or MCP presentation boundary', async t => {
+  const {store,coordinator}=await fixture(t);
+  const secret='PRIVATE_NATIVE_PROMPT_WITH_UNMARKED_SECRET';
+  Object.defineProperty(coordinator.adapter,'connect',{value:async()=>{throw new Error(secret);},configurable:true});
+  const task=interruptedTask(store);
+  const result=await coordinator.call('resume_task',{task_id:task.taskId}) as any;
+  assert.equal(result.requiresInspection,true);assert.equal(store.getTask(task.taskId).leaseHeld,true);
+  assert.equal(JSON.stringify(result).includes(secret),false);
+  assert.equal(presentMcpResult('resume_task',result,{task_id:task.taskId}).text.includes(secret),false);
+});
+
+test('multiple approvals preserve the next pending item, wait for native removal, and serialize concurrent replies', async t => {
+  const {store,coordinator}=await fixture(t);const fake=new RecoveryFake();recoveryConnection(coordinator,fake);
+  fake.pending=[{interactionId:'first',kind:'permission',anchorRowId:3,payload:{toolName:'Edit',summary:'First edit'}},{interactionId:'second',kind:'permission',anchorRowId:3,payload:{toolName:'Edit',summary:'Second edit'}}];
+  const task=interruptedTask(store);await coordinator.call('resume_task',{task_id:task.taskId});
+  let release!:()=>void;const gate=new Promise<void>(resolve=>{release=resolve;});
+  fake.respondApproval=async(_turn,approvalId,decision)=>{fake.replies.push({approvalId,decision});await gate;};
+  const first=coordinator.call('respond_approval',{task_id:task.taskId,approval_id:'first',decision:'accept'});
+  await waitFor(()=>fake.replies.length===1);
+  const duplicate=coordinator.call('respond_approval',{task_id:task.taskId,approval_id:'first',decision:'accept'});
+  const conflicting=coordinator.call('respond_approval',{task_id:task.taskId,approval_id:'first',decision:'decline'});
+  const replies=Promise.allSettled([first,duplicate,conflicting]);
+  await delay(10);assert.equal(fake.replies.length,1);release();
+  const results=await replies;
+  assert.equal(results[0]!.status,'fulfilled');assert.equal(results[1]!.status,'fulfilled');assert.equal(results[2]!.status,'rejected');
+  assert.equal((results[0] as PromiseFulfilledResult<any>).value.awaitingNativeRevision,true);
+  assert.equal(store.getTask(task.taskId).status,'waiting_approval');
+  assert.equal((store.getTask(task.taskId).detail as any).approvalId,'first');
+  assert.equal((store.getTask(task.taskId).detail as any).approvalResponsePending,true);
+  assert.equal((store.getTask(task.taskId).detail as any).pendingApprovalCount,2);
+  fake.pending=fake.pending.slice(1);
+  await waitFor(()=>(store.getTask(task.taskId).detail as any).approvalId==='second');
+  assert.equal(store.getTask(task.taskId).status,'waiting_approval');
+  const detail=store.getTask(task.taskId).detail as any;
+  assert.equal(detail.pendingApprovalCount,1);assert.equal(detail.approvalResponsePending,false);assert.equal(detail.summary,'Second edit');
+  assert.equal((store.listEvents(task.taskId,{afterRevision:detail.approvalLogCursor,limit:1})[0]!.detail as any).approvalId,'second');
+  fake.respondApproval=async(_turn,approvalId,decision)=>{fake.replies.push({approvalId,decision});fake.pending=[];};
+  await coordinator.call('respond_approval',{task_id:task.taskId,approval_id:'second',decision:'decline'});
+  assert.equal(store.getTask(task.taskId).status,'running');assert.equal((store.getTask(task.taskId).detail as any).approvalId,undefined);
+  assert.equal((store.getTask(task.taskId).detail as any).pendingApprovalCount,0);
+  assert.deepEqual(fake.replies.map(value=>[value.approvalId,value.decision]),[['first','accept'],['second','decline']]);
+  await coordinator.close();const revision=store.getTask(task.taskId).revision;await delay(150);assert.equal(store.getTask(task.taskId).revision,revision);
 });
