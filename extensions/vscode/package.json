@@ -179,6 +179,12 @@
         "title": "启动后台并连接",
         "category": "ZCode Pool",
         "icon": "$(play)"
+      },
+      {
+        "command": "zcodePool.setupCodex",
+        "title": "连接 Codex / 生成 MCP 配置",
+        "category": "ZCode Pool",
+        "icon": "$(plug)"
       }
     ],
     "menus": {
@@ -196,7 +202,7 @@
         {
           "command": "zcodePool.newTask",
           "when": "view == zcodePool.tasks && zcodePool.canMutate",
-          "group": "navigation@3"
+          "group": "advanced"
         },
         {
           "command": "zcodePool.connect",
@@ -258,13 +264,13 @@
           "type": "string",
           "default": "",
           "scope": "machine",
-          "description": "后台使用的 Node.js 24+ 可执行文件绝对路径；留空从执行侧 PATH 查找 node。仅手动启动后台时使用。"
+          "description": "后台使用的 Node.js 24+ 可执行文件绝对路径；留空从执行侧 PATH 查找 node。用于后台启动及生成 Codex MCP 配置。"
         },
         "zcodePool.daemonCliPath": {
           "type": "string",
           "default": "",
           "scope": "machine",
-          "description": "已安装的 zcode-pool CLI 绝对路径；留空使用 ~/.local/share/zcode-pool-app/node_modules/zcode-pool/bin/zcode-pool.mjs。不会执行工作区脚本或自动安装。"
+          "description": "高级覆盖：已安装后台 CLI 的绝对路径；留空使用插件随附后台。通常无需设置。"
         }
       }
     }

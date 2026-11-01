@@ -73,7 +73,7 @@ async function installedCli(path: string): Promise<{ entry: string; directory: s
     if (!declared.startsWith(`${directory}/`) || await realpath(declared) !== entry) throw new Error();
     return { entry, directory };
   } catch {
-    throw new HostError('INVALID_DAEMON_CLI', 'Set zcodePool.daemonCliPath to the bin entry of a separately installed zcode-pool package. Install the daemon outside the development checkout first.');
+    throw new HostError('INVALID_DAEMON_CLI', 'The prepared backend CLI is unavailable. Reinstall the extension, or set zcodePool.daemonCliPath to the bin entry of an installed zcode-pool package.');
   }
 }
 
@@ -87,9 +87,13 @@ function runNode(options: DaemonLaunchOptions, nodePath: string, args: string[],
       : 'Daemon startup did not complete. Inspect scheduler/daemon.log in the selected pool, then Connect before trying again.', !version);
     let child: ChildProcess;
     try {
+      const env: NodeJS.ProcessEnv = { ...process.env, ZCODE_POOL_HOME: options.poolHome };
+      // This action already captured a concrete, guarded pool selection.
+      // A profile inherited by VS Code must not override that selected target.
+      delete env.ZCODE_POOL_CONNECTION_FILE;
       child = spawn(nodePath, args, {
         cwd, shell: false,
-        env: { ...process.env, ZCODE_POOL_HOME: options.poolHome },
+        env,
         stdio: ['ignore', version ? 'pipe' : 'ignore', 'ignore'],
       });
     } catch { reject(failure()); return; }
@@ -118,6 +122,14 @@ function runNode(options: DaemonLaunchOptions, nodePath: string, args: string[],
 }
 
 /** Explicit user action only. Reuses the installed CLI's existing lifecycle. */
+export async function validateNode24(nodePath:string,isCurrent:()=>boolean=()=>true):Promise<void>{
+  requirePath(nodePath,'zcodePool.daemonNodePath');
+  const canonical=await executable(nodePath);
+  const options:DaemonLaunchOptions={poolHome:dirname(canonical),nodePath:canonical,cliPath:canonical,trusted:()=>true,isCurrent};
+  const version=(await runNode(options,canonical,['--version'],dirname(canonical),true)).trim();
+  if(!/^v(\d+)\.\d+\.\d+(?:-[\w.-]+)?$/.test(version)||Number(version.slice(1).split('.')[0])<24)throw new HostError('INVALID_DAEMON_NODE','The selected executable must be Node.js 24 or later. Check zcodePool.daemonNodePath.');
+  requireCurrent(options);
+}
 export async function startInstalledDaemon(options: DaemonLaunchOptions): Promise<void> {
   if (process.platform !== 'linux') throw new HostError('UNSUPPORTED_PLATFORM', 'Starting a daemon requires a Linux extension host.');
   requireCurrent(options);

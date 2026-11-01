@@ -262,6 +262,31 @@ test('different workspaces cannot dispatch concurrent tasks to the same worker',
   assert.equal(fake.sendCalls, 1);
 });
 
+test('RPC pool policy is shared by overview and admission and lowering it never stops a running task', async t => {
+  const {root,store,coordinator,fake}=await fixture(t);
+  const original=store.getWorkspace('workspace');
+  store.registerWorkspace({...original,workspaceId:'second',worktreePath:join(root,'second'),branch:'second'});
+  const capabilities=await coordinator.call('ui_capabilities',{bootstrapVersion:1,client:{name:'test',version:'1'},supportedApiMajors:[1]}) as any;
+  assert.equal(capabilities.capabilities.poolPolicy.version,1);
+  assert.deepEqual(await coordinator.call('get_pool_policy',{}),{maxConcurrentTasks:null,occupiedSlots:0,availableSlots:null});
+  await coordinator.call('set_pool_policy',{max_concurrent_tasks:1});fake.hold();
+  const first=await dispatch(coordinator);await waitFor(()=>store.getTask(first.task.taskId).status==='running');
+  const running=store.getTask(first.task.taskId);
+  const paused={maxConcurrentTasks:0,occupiedSlots:1,availableSlots:0};
+  assert.deepEqual(await coordinator.call('set_pool_policy',{max_concurrent_tasks:0}),paused);
+  assert.deepEqual(store.getTask(running.taskId),running);assert.equal(fake.closed,false);
+  assert.equal((await dispatch(coordinator)).created,false);
+  await assert.rejects(dispatch(coordinator,{request_id:'second',workspace_id:'second',worker_id:'second'}),
+    (error:unknown)=>error instanceof CoreError&&error.code==='POOL_CAPACITY_REACHED');
+  assert.equal(store.listTasks().length,1);assert.equal(fake.sendCalls,1);
+  assert.deepEqual((await coordinator.call('overview',{}) as any).poolPolicy,paused);
+  await assert.rejects(coordinator.call('set_pool_policy',{max_concurrent_tasks:65}),/Invalid parameters/);
+  await assert.rejects(coordinator.call('set_pool_policy',{}),/Invalid parameters/);
+  fake.release();assert.equal((await completed(store,coordinator,running.taskId)).status,'succeeded');
+  assert.deepEqual(await coordinator.call('get_pool_policy',{}),{maxConcurrentTasks:0,occupiedSlots:0,availableSlots:0});
+  assert.deepEqual(await coordinator.call('set_pool_policy',{max_concurrent_tasks:null}),{maxConcurrentTasks:null,occupiedSlots:0,availableSlots:null});
+});
+
 test('dispatch waits for a pending worker stop before acquiring occupancy or sending', async (t) => {
   const { store, coordinator, fake } = await fixture(t);
   let releaseStop!: () => void;

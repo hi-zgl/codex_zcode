@@ -1,14 +1,20 @@
 import { z } from 'zod';
+import { MAX_POOL_CONCURRENT_TASKS } from './pool-policy.js';
+export { MAX_POOL_CONCURRENT_TASKS } from './pool-policy.js';
 const id = z.string().min(1).max(150);
+const poolLimit = z.number().int().min(0).max(MAX_POOL_CONCURRENT_TASKS).nullable();
+export const poolPolicySchema = z.object({maxConcurrentTasks:poolLimit,occupiedSlots:z.number().int().nonnegative().safe(),availableSlots:z.number().int().nonnegative().safe().nullable()});
 export const methods = {
   daemon_stop: {description:'Stop this daemon gracefully without stopping official workers.',schema:z.object({})},
   overview: {description:'List local account aliases, worker states and compact task summaries.', schema:z.object({})},
+  get_pool_policy: {description:'Read the persisted pool concurrency policy and held task slots. Occupancy includes approvals, verification and uncertain execution.',schema:z.object({}).strict()},
+  set_pool_policy: {description:`Set the persisted pool concurrency limit (0-${MAX_POOL_CONCURRENT_TASKS}). Zero pauses new dispatches; null allows unlimited dispatches. Existing tasks continue and rejected dispatches are not queued.`,schema:z.object({max_concurrent_tasks:poolLimit}).strict()},
   import_accounts: {description:'Import local account export files into the encrypted local vault.', schema:z.object({files:z.array(z.string().min(1)).min(1).max(100)})},
   start_worker: {description:'Start an isolated official ZCode Server for one account.', schema:z.object({worker_id:id, account_id:id})},
   stop_worker: {description:'Stop an owned worker only when no active or uncertain task holds it.', schema:z.object({worker_id:id})},
   probe_worker: {description:'Read authenticated version/protocol status without starting a model turn.', schema:z.object({worker_id:id})},
   create_workspace: {description:'Create a dedicated git branch and worktree from a clean repository.', schema:z.object({repository:z.string().min(1),base_ref:z.string().min(1)})},
-  dispatch_task: {description:'Dispatch asynchronously to an explicit worker. Confirmed model-busy failures may continue in the same session up to busy_retry_limit; uncertain commands are never replayed.', schema:z.object({workspace_id:id,worker_id:id,prompt:z.string().min(1).max(100_000),request_id:id,session:z.enum(['continue','new']).default('continue'),mode:z.enum(['build','edit','plan','yolo','guarded']).default('build'),model_id:z.string().min(1).default('GLM-5.3-Flash'),busy_retry_limit:z.number().int().min(0).max(10).default(3),verify_commands:z.array(z.object({command:z.string().min(1),args:z.array(z.string()).default([]),timeout_ms:z.number().int().min(100).max(300_000).default(60_000)})).max(10).default([])})},
+  dispatch_task: {description:'Dispatch asynchronously to an explicit worker, subject to the shared pool concurrency policy; full pools reject without queuing. Confirmed model-busy failures may continue in the same session up to busy_retry_limit; uncertain commands are never replayed.', schema:z.object({workspace_id:id,worker_id:id,prompt:z.string().min(1).max(100_000),request_id:id,session:z.enum(['continue','new']).default('continue'),mode:z.enum(['build','edit','plan','yolo','guarded']).default('build'),model_id:z.string().min(1).default('GLM-5.3-Flash'),busy_retry_limit:z.number().int().min(0).max(10).default(3),verify_commands:z.array(z.object({command:z.string().min(1),args:z.array(z.string()).default([]),timeout_ms:z.number().int().min(100).max(300_000).default(60_000)})).max(10).default([])})},
   wait: {description:'Wait for persisted task revisions. Completed tasks return immediately. Maximum 25 seconds.', schema:z.object({task_ids:z.array(id).min(1).max(50),after_revision:z.union([z.number().int().nonnegative(),z.record(z.number().int().nonnegative())]).optional(),timeout_sec:z.number().min(0).max(25).default(25)})},
   get_result: {description:'Get compact immutable task results and verification status.',schema:z.object({task_id:id})},
   get_logs: {description:'Read a bounded page of persisted, redacted events.',schema:z.object({task_id:id,cursor:z.number().int().nonnegative().default(0),limit:z.number().int().min(1).max(50).default(10)})},

@@ -28,6 +28,7 @@ export interface TaskDraft {
 }
 export interface UiActionState { key: string; phase: 'pending' | 'succeeded' | 'unknown' | 'failed'; message: string; requestId?: string; taskId?: string; error?: UiError }
 export interface UiSnapshot {
+  poolPolicy: {maxConcurrentTasks:number|null;occupiedSlots:number;availableSlots:number|null}|null;
   preferredRepositoryId?: string | null;
   connection: UiConnection;
   tasks: UiTask[]; scope: 'recent_50_loaded' | 'all_matching_tasks'; total: number | null; listNextCursor: string | null;

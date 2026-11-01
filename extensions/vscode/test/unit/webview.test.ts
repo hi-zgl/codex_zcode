@@ -30,7 +30,7 @@ function snapshot(selected = 'task-approval'): UiSnapshot {
     tasks: Object.values(details), scope: 'recent_50_loaded', total: null, listNextCursor: null, selectedTaskId: detail?.taskId ?? null, detail,
     resources: { accounts: structuredClone(fixture.overview.accounts), workers: fixture.overview.workers.map((worker: object) => ({ ...worker, leaseTaskIds: [] })), workspaces: structuredClone(fixture.overview.workspaces), quotas: {} },
     approvals: null, delivery: { manifest, files: manifest?.manifestSha256 ? structuredClone(fixture.files[manifest.manifestSha256]) as UiArtifactFile[] : [], nextCursor: null, reviewed: false },
-    draft: { workspaceId: 'workspace-demo', workerId: 'worker-demo', prompt: '', session: 'continue', mode: 'build', modelId: 'GLM-5.3-Flash', busyRetryLimit: 3, verifyCommands: [], submitToken: 'draft-token' }, actions: [], overviewIntervalSeconds: 30, notice: null,
+    draft: { workspaceId: 'workspace-demo', workerId: 'worker-demo', prompt: '', session: 'continue', mode: 'build', modelId: 'GLM-5.3-Flash', busyRetryLimit: 3, verifyCommands: [], submitToken: 'draft-token' }, actions: [], overviewIntervalSeconds: 30, poolPolicy: null, notice: null,
   };
 }
 function review(): UiApprovalReview { const value = structuredClone(fixture.reviews['approval-demo']) as UiApprovalReview; value.expiresAtMs = Date.now() + 300_000; return value; }
@@ -105,6 +105,91 @@ test('disconnected welcome exposes direct directory selection and gates explicit
   assert.match(choose(dom, 'daemon.start').getAttribute('aria-label')!, /信任/);
   s.connection.trusted = true; s.connection.supported = false; applySnapshot(state, s); dom = renderApp({ state, action: () => {} });
   assert.equal(choose(dom, 'daemon.start').disabled, true);
+});
+
+test('task monitoring leads with Codex setup and keeps manual dispatch under advanced actions', () => {
+  const s = snapshot(); s.connection.mode = 'real'; const state = createState(); applySnapshot(state, s);
+  const dom = renderApp({ state, action: () => {} });
+  assert.ok(choose(dom, 'connection.codexSetup').classList.contains('primary'));
+  const manual = choose(dom, 'compose.open');
+  assert.equal(manual.classList.contains('primary'), false);
+  const advanced = manual.closest('details'); assert.ok(advanced); assert.equal(advanced.open, false);
+  assert.match(dom.textContent!, /由 Codex 拆分、派发和验收任务/);
+  assert.match(dom.textContent!, /额度与资源/);
+});
+
+test('Codex setup is explicit and generates configuration without claiming a connected Codex', async () => {
+  const s = snapshot(); s.connection.mode = 'real'; s.connection.state = 'disconnected'; s.tasks = []; s.detail = null; s.selectedTaskId = null;
+  const h = harness(s); h.push(s);
+  assert.equal(h.sent.length, 0);
+  assert.equal(choose(h.root as unknown as ParentNode, 'connection.codexSetup').disabled, false, 'daemon connection is not needed to generate setup');
+  let finish!: (value: unknown) => void;
+  h.reply(request => { assert.equal(request.type, 'connection.codexSetup'); assert.deepEqual(request.payload, {}); return new Promise(resolve => { finish = resolve; }); });
+  const generating = h.app.action('connection.codexSetup');
+  await h.app.action('connection.codexSetup');
+  assert.equal(h.sent.length, 1, 'pending setup is not duplicated');
+  finish({ opened: true }); await generating;
+  assert.equal(h.app.state.snapshot!.connection.state, 'disconnected');
+  assert.match(h.app.state.message, /已生成 MCP 配置.*在 Codex 中启用/);
+  assert.doesNotMatch(h.app.state.message, /已连接/);
+  assert.equal(h.sent.some(request => ['connect', 'daemon.start', 'dispatch'].includes(request.type)), false);
+  h.app.state.message = ''; h.reply(() => ({ cancelled: true })); await h.app.action('connection.codexSetup');
+  assert.equal(h.app.state.message, '', 'a cancelled native setup does not claim success');
+});
+
+test('Codex setup is unavailable for mock, untrusted and unsupported execution hosts', () => {
+  for (const reason of ['mock', 'untrusted', 'unsupported'] as const) {
+    const s = snapshot(); s.connection.mode = 'real';
+    if (reason === 'mock') s.connection.mode = 'mock';
+    if (reason === 'untrusted') s.connection.trusted = false;
+    if (reason === 'unsupported') s.connection.supported = false;
+    const state = createState(); applySnapshot(state, s);
+    const dom = renderApp({ state, action: () => {} }); assert.equal(choose(dom, 'connection.codexSetup').disabled, true, reason);
+  }
+});
+
+test('concurrency settings validate explicit limits and send only the shared pool policy', async () => {
+  const s = snapshot(); s.poolPolicy = { maxConcurrentTasks: null, occupiedSlots: 2, availableSlots: null }; s.connection.capabilities.poolPolicy = { version: 1 };
+  const h = harness(s); h.push(s); await h.app.action('page', { page: 'settings' });
+  const setLimit = (value: string) => {
+    const control = h.root.querySelector('[data-field="settingsConcurrency"]') as unknown as HTMLInputElement;
+    control.value = value; control.dispatchEvent(new browser.Event('input', { bubbles: true }) as unknown as Event);
+  };
+  h.reply(request => {
+    assert.equal(request.type, 'pool.policy.set');
+    const value = (request.payload as { maxConcurrentTasks: number | null }).maxConcurrentTasks;
+    s.poolPolicy = { maxConcurrentTasks: value, occupiedSlots: 2, availableSlots: value === null ? null : Math.max(0, value - 2) };
+    h.push(s); return { policy: s.poolPolicy };
+  });
+  for (const invalid of ['-1', '1.5', '65']) { setLimit(invalid); await h.app.action('pool.policy.set'); assert.equal(h.sent.length, 0); assert.ok(h.app.state.validation.settingsConcurrency); }
+  for (const [input, value] of [['0', 0], ['3', 3], ['', null]] as const) {
+    setLimit(input); await h.app.action('pool.policy.set');
+    assert.deepEqual(h.sent.at(-1)!.payload, { maxConcurrentTasks: value });
+    assert.equal(h.app.state.settingsConcurrency, input);
+    assert.equal(h.app.state.policyDirty, false);
+  }
+  assert.equal(h.sent.length, 3);
+  assert.ok(h.sent.every(request => request.type === 'pool.policy.set'));
+  assert.match(h.root.textContent!, /降低上限不会停止已有任务/);
+  assert.equal(h.app.state.snapshot!.poolPolicy!.occupiedSlots, 2);
+});
+
+test('refreshes preserve an unsaved concurrency limit, and policy writes require a current capable trusted connection', async () => {
+  const s = snapshot(); s.poolPolicy = { maxConcurrentTasks: 4, occupiedSlots: 2, availableSlots: 2 }; s.connection.capabilities.poolPolicy = { version: 1 };
+  const h = harness(s); h.push(s); await h.app.action('page', { page: 'settings' });
+  const control = h.root.querySelector('[data-field="settingsConcurrency"]') as unknown as HTMLInputElement;
+  control.value = '1'; control.dispatchEvent(new browser.Event('input', { bubbles: true }) as unknown as Event);
+  h.push(s); assert.equal(h.app.state.settingsConcurrency, '1'); assert.equal(h.app.state.policyDirty, true);
+  for (const reason of ['capability', 'trust', 'stale', 'policy'] as const) {
+    const changed = structuredClone(s);
+    if (reason === 'capability') delete changed.connection.capabilities.poolPolicy;
+    if (reason === 'trust') changed.connection.trusted = false;
+    if (reason === 'stale') changed.connection.stale = true;
+    if (reason === 'policy') changed.poolPolicy = null;
+    h.push(changed); assert.equal(choose(h.root as unknown as ParentNode, 'pool.policy.set').disabled, true, reason);
+  }
+  const changedPool = structuredClone(s); changedPool.connection.poolHome = '/another/pool'; h.push(changedPool);
+  assert.equal(h.app.state.settingsConcurrency, '4'); assert.equal(h.app.state.policyDirty, false);
 });
 
 test('one approval click opens and validates the complete content without sending a decision', async () => {

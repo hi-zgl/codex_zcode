@@ -9,7 +9,7 @@ import { DatabaseSync } from 'node:sqlite';
 import test, { type TestContext } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
-import { CoreError, DurableTaskStore, MAX_WAIT_MS, type DispatchInput, type TaskResult } from '../../src/core/index.js';
+import { CoreError, DurableTaskStore, MAX_WAIT_MS, MAX_POOL_CONCURRENT_TASKS, type DispatchInput, type TaskResult } from '../../src/core/index.js';
 
 async function fixture(t: TestContext) {
   const directory = await mkdtemp(join(tmpdir(), 'zcode-core-'));
@@ -74,6 +74,60 @@ test('request IDs are durable, compare normalized payloads, and never create dup
   assert.equal(reopened.dispatch(input).task.taskId, first.task.taskId);
   assert.equal(reopened.listTasks().length, 1);
   assert.equal(reopened.getTask(first.task.taskId).revision, reopened.listEvents(first.task.taskId)[0]!.revision);
+});
+
+test('pool policy persists bounded limits and zero across reopen while null preserves unlimited admission', async t => {
+  const {store,databasePath}=await fixture(t);
+  assert.deepEqual(store.getPoolPolicy(),{maxConcurrentTasks:null,occupiedSlots:0,availableSlots:null});
+  store.setPoolPolicy({maxConcurrentTasks:MAX_POOL_CONCURRENT_TASKS});
+  assert.deepEqual(store.getPoolPolicy(),{maxConcurrentTasks:64,occupiedSlots:0,availableSlots:64});
+  for(const invalid of [-1,0.5,MAX_POOL_CONCURRENT_TASKS+1,Infinity,NaN,undefined,'2']) {
+    assert.throws(()=>store.setPoolPolicy({maxConcurrentTasks:invalid as number}),code('INVALID_ARGUMENT'));
+  }
+  store.setPoolPolicy({maxConcurrentTasks:0});store.close();
+  const reopened=new DurableTaskStore(databasePath);t.after(()=>reopened.close());
+  workspace(reopened);
+  assert.deepEqual(reopened.getPoolPolicy(),{maxConcurrentTasks:0,occupiedSlots:0,availableSlots:0});
+  assert.throws(()=>dispatch(reopened),code('POOL_CAPACITY_REACHED'));
+  assert.equal(reopened.listTasks().length,0);
+  reopened.setPoolPolicy({maxConcurrentTasks:null});dispatch(reopened);
+  assert.deepEqual(reopened.getPoolPolicy(),{maxConcurrentTasks:null,occupiedSlots:1,availableSlots:null});
+});
+
+test('lowering the pool limit preserves queued, approval, verification and uncertain task leases without adding a queue', async t => {
+  const {store}=await fixture(t);workspace(store);workspace(store,'second');workspace(store,'third');
+  const one=dispatch(store);
+  const two=dispatch(store,{requestId:'second',workspaceId:'second',workerId:'second'});
+  store.beginDispatch(one.taskId);store.acknowledgeDispatch(one.taskId,{sessionId:'native-one',turnId:'request'});
+  store.transitionTask(one.taskId,'waiting_approval');
+  store.beginDispatch(two.taskId);store.markInterrupted(two.taskId);
+  const before=store.listTasks(),revision=store.getRevision();
+  assert.deepEqual(store.setPoolPolicy({maxConcurrentTasks:1}),{maxConcurrentTasks:1,occupiedSlots:2,availableSlots:0});
+  assert.deepEqual(store.listTasks(),before);assert.equal(store.getRevision(),revision);
+  const next={requestId:'third',workspaceId:'third',workerId:'third'};
+  assert.throws(()=>dispatch(store,next),code('POOL_CAPACITY_REACHED'));
+  store.setPoolPolicy({maxConcurrentTasks:0});
+  assert.equal(store.dispatch({requestId:'request',workspaceId:'workspace',workerId:'worker',prompt:'Change code'}).created,false);
+  assert.throws(()=>store.dispatch({requestId:'request',workspaceId:'workspace',workerId:'worker',prompt:'Different'}),code('IDEMPOTENCY_CONFLICT'));
+  store.transitionTask(one.taskId,'verifying',{executionStopped:{kind:'runtime_terminal',evidence:'Observed exact terminal turn'}});
+  assert.equal(store.getPoolPolicy().occupiedSlots,2);
+  store.setPoolPolicy({maxConcurrentTasks:1});
+  store.completeTask(one.taskId,{summary:'Verified'},{status:'succeeded'});
+  assert.throws(()=>dispatch(store,next),code('POOL_CAPACITY_REACHED'));
+  assert.equal(store.findTaskByRequestId('third'),null);assert.equal(store.getWorkspace('third').activeTaskId,null);
+  store.transitionTask(two.taskId,'failed',{executionStopped:{kind:'history_stopped',evidence:'Exact original native turn stopped'}});
+  const admitted=dispatch(store,next);
+  assert.equal(admitted.status,'queued');
+  assert.deepEqual(store.getPoolPolicy(),{maxConcurrentTasks:1,occupiedSlots:1,availableSlots:0});
+  assert.throws(()=>dispatch(store,{requestId:'fourth',workspaceId:'workspace',workerId:'fourth'}),code('POOL_CAPACITY_REACHED'));
+});
+
+test('version-three migration preserves existing occupancy and defaults the new pool policy to unlimited',async t=>{
+  const {store,databasePath}=await fixture(t);workspace(store);const task=dispatch(store);const storeId=store.storeId;store.close();
+  const legacy=new DatabaseSync(databasePath);try{legacy.exec('DROP TABLE pool_policy; PRAGMA user_version = 3;');}finally{legacy.close();}
+  const migrated=new DurableTaskStore(databasePath);t.after(()=>migrated.close());
+  assert.equal(migrated.storeId,storeId);assert.equal(migrated.getTask(task.taskId).leaseHeld,true);
+  assert.deepEqual(migrated.getPoolPolicy(),{maxConcurrentTasks:null,occupiedSlots:1,availableSlots:null});
 });
 
 function downgradeToVersionOne(databasePath: string): void {
@@ -216,6 +270,21 @@ test('racing processes can claim a workspace only once', async (t) => {
   assert.equal(results.map((line) => JSON.parse(line)).filter((value) => value.error === 'WORKSPACE_BUSY').length, 1);
   assert.equal(store.listTasks().length, 1);
   assert.equal(store.listEvents(store.listTasks()[0]!.taskId).length, 1);
+});
+
+test('racing processes on different workspaces share one durable pool admission limit', async t => {
+  const {store,databasePath}=await fixture(t);workspace(store);workspace(store,'second');
+  store.setPoolPolicy({maxConcurrentTasks:1});
+  const first=child(databasePath,'race',['workspace','worker-one','request-one']);
+  const second=child(databasePath,'race',['second','worker-two','request-two']);
+  t.after(async()=>{await kill(first.process);await kill(second.process);});
+  assert.equal(await first.line(),'ready');assert.equal(await second.line(),'ready');
+  first.process.stdin!.write('go');second.process.stdin!.write('go');
+  const results=(await Promise.all([first.line(),second.line()])).map(line=>JSON.parse(line));
+  assert.equal(results.filter(value=>value.taskId).length,1);
+  assert.equal(results.filter(value=>value.error==='POOL_CAPACITY_REACHED').length,1);
+  assert.equal(store.listTasks().length,1);
+  assert.deepEqual(store.getPoolPolicy(),{maxConcurrentTasks:1,occupiedSlots:1,availableSlots:0});
 });
 
 test('worker selection acquires its lease before recording a dispatch intent', async (t) => {

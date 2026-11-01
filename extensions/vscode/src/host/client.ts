@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { z } from 'zod';
 import { uiMethods, uiErrorDataSchema, type UiMethodName, type UiRpcParams, type UiRpcResult } from '../../../../src/shared/ui-contract.js';
-import { methods } from '../../../../src/shared/methods.js';
+import { methods, poolPolicySchema } from '../../../../src/shared/methods.js';
 
 export class HostError extends Error {
   constructor(readonly code: string, message: string, readonly unknownOutcome = false, readonly rpcCode?: number) { super(message); }
@@ -78,7 +78,8 @@ const worker = z.object({workerId:id,accountAlias:id,state:z.string(),processOwn
 const result = z.object({summary:z.string(),changedFiles:z.array(z.string()).optional(),verification:z.array(z.object({command:z.string(),exitCode:z.number().nullable(),summary:z.string().optional()})).optional(),blockers:z.array(z.string()).optional()}).nullable();
 const action = z.object({task:task.optional(),taskId:id.optional(),cancelRequested:z.boolean().optional(),terminationConfirmed:z.boolean().optional(),attached:z.boolean().optional(),alreadyStopped:z.boolean().optional(),requiresInspection:z.boolean().optional(),executionStopped:z.boolean().optional(),operationInProgress:z.boolean().optional(),finalizing:z.boolean().optional(),canResume:z.boolean().optional()});
 const legacy = {
-  overview:z.object({tasks:z.array(task),accounts:z.array(account),workers:z.array(worker),workspaces:z.array(workspace)}),
+  overview:z.object({tasks:z.array(task),accounts:z.array(account),workers:z.array(worker),workspaces:z.array(workspace),poolPolicy:poolPolicySchema.optional()}),
+  get_pool_policy:poolPolicySchema,set_pool_policy:poolPolicySchema,
   wait:z.object({tasks:z.array(task),changedTaskIds:z.array(id),timedOut:z.boolean(),revision:z.number().int().nonnegative()}),
   get_result:z.object({task,result}),
   get_diff:z.object({available:z.boolean(),text:z.string().optional(),nextOffset:z.number().int().nonnegative().nullable().optional(),totalCharacters:z.number().int().nonnegative().optional()}),
@@ -103,7 +104,7 @@ export class TypedClient {
     return value.data as UiRpcResult<K>;
   }
   async legacy<K extends LegacyMethod>(method: K, params: LegacyParams<K>, signal?: AbortSignal): Promise<LegacyResult<K>> {
-    const mutation = !['overview','wait','get_result','get_logs','get_diff'].includes(method);
+    const mutation = !['overview','wait','get_result','get_logs','get_diff','get_pool_policy'].includes(method);
     const parsed = methods[method].schema.parse(params);
     const raw = await this.invoke(method,parsed,signal,method === 'wait' ? 30_000 : 10_000,mutation);
     const value = legacy[method].safeParse(raw);

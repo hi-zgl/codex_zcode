@@ -6,9 +6,13 @@ import { isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { poolRoot } from '../shared/rpc.js';
 
+// Replaced by the VSIX runtime build. Source/npm installations keep using tsx.
+declare const ZCODE_POOL_BUNDLED: boolean;
+
 export interface UserServiceOptions {
   name: string;
   nodePath: string;
+  /** Empty for a compiled runtime that Node can execute directly. */
   loaderPath: string;
   entryPath: string;
   workingDirectory: string;
@@ -16,12 +20,13 @@ export interface UserServiceOptions {
 }
 
 export function defaultUserServiceOptions(): UserServiceOptions {
+  const bundled = typeof ZCODE_POOL_BUNDLED !== 'undefined' && ZCODE_POOL_BUNDLED;
   return {
     name: 'zcode-pool.service',
     nodePath: process.execPath,
-    loaderPath: fileURLToPath(import.meta.resolve('tsx')),
-    entryPath: fileURLToPath(new URL('../daemon/main.ts', import.meta.url)),
-    workingDirectory: resolve(fileURLToPath(new URL('../../', import.meta.url))),
+    loaderPath: bundled ? '' : fileURLToPath(import.meta.resolve('tsx')),
+    entryPath: fileURLToPath(new URL(bundled ? './daemon.mjs' : '../daemon/main.ts', import.meta.url)),
+    workingDirectory: resolve(fileURLToPath(new URL(bundled ? './' : '../../', import.meta.url))),
     poolHome: poolRoot(),
   };
 }
@@ -39,6 +44,7 @@ function normalized(options: UserServiceOptions): UserServiceOptions {
   validateName(options.name);
   const checked = { ...options };
   for (const key of ['nodePath', 'loaderPath', 'entryPath', 'workingDirectory', 'poolHome'] as const) {
+    if (key === 'loaderPath' && options[key] === '') continue;
     checked[key] = absolutePath(options[key], key);
   }
   // systemd rejects these characters in the executable pathname even when C-escaped.
@@ -63,7 +69,7 @@ export function renderUserService(input: UserServiceOptions): string {
   const options = normalized(input);
   // --import takes a module URL. Encoding the filesystem path preserves #, ?, %, and
   // whitespace in loader names instead of interpreting them as URL fragments or queries.
-  const command = [options.nodePath, '--import', pathToFileURL(options.loaderPath).href, options.entryPath];
+  const command = [options.nodePath, ...(options.loaderPath ? ['--import', pathToFileURL(options.loaderPath).href] : []), options.entryPath];
   return [
     '[Unit]',
     'Description=ZCode Pool local orchestration daemon',
@@ -101,6 +107,7 @@ export function userUnitDirectory(env: NodeJS.ProcessEnv = process.env): string 
 
 async function validateRuntime(options: UserServiceOptions): Promise<void> {
   for (const key of ['nodePath', 'loaderPath', 'entryPath'] as const) {
+    if (key === 'loaderPath' && options[key] === '') continue;
     if (!(await stat(options[key])).isFile()) throw new Error(`${key} must name an existing file`);
     await access(options[key], key === 'nodePath' ? constants.X_OK : constants.R_OK);
   }

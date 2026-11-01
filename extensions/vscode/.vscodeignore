@@ -6,4 +6,10 @@
 !dist/host/extension.cjs
 !dist/webview/main.js
 !dist/webview/styles.css
+!dist/runtime/package.json
+!dist/runtime/manifest.json
+!dist/runtime/bin/zcode-pool.mjs
+!dist/runtime/cli.mjs
+!dist/runtime/daemon.mjs
+!dist/runtime/mcp.mjs
 !media/zcode-pool.svg

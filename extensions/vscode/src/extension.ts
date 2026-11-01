@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import { homedir, hostname } from 'node:os';
 import { isAbsolute, join, resolve, relative, sep } from 'node:path';
 import { realpath, lstat } from 'node:fs/promises';
+import { watch, type FSWatcher } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { ActionService, type NativeAdapter } from './host/actions.js';
 import { SocketTransport, HostError, safeError } from './host/client.js';
@@ -11,7 +12,10 @@ import { ResourceTree } from './host/resourceTree.js';
 import { Workbench } from './host/workbench.js';
 import { ArtifactDiffProvider } from './host/diffProvider.js';
 import { parseRequest, type RequestType, type WebviewRequest } from './host/protocol.js';
-import { findNodeExecutable, startInstalledDaemon } from './host/daemon-launcher.js';
+import { findNodeExecutable, startInstalledDaemon, validateNode24 } from './host/daemon-launcher.js';
+import { ensureBundledRuntime } from './host/runtime-installer.js';
+import { codexMcpConfig, codexSetupDocument } from './host/codex-setup.js';
+import { readConnectionProfile, writeConnectionProfile } from '../../../src/shared/connection.js';
 
 let activeDispose:(()=>void)|undefined;
 export async function activate(context:vscode.ExtensionContext):Promise<unknown>{
@@ -20,6 +24,20 @@ export async function activate(context:vscode.ExtensionContext):Promise<unknown>
   const authority=vscode.env.remoteName??'local';const host=`${hostname()}${vscode.env.remoteName?` (${vscode.env.remoteName})`:''}`;
   let service:ActionService;let workbench:Workbench;
   let useDebugPool=true;let startPromise:Promise<void>|undefined;let launchAbort:AbortController|undefined;let serviceRevision=0;
+  const storagePath=context.globalStorageUri?.fsPath;
+  const profilePath=storagePath?join(storagePath,'connection.json'):undefined;
+  let preferSettings=false;let profileRequired=false;let extensionDisposed=false;let profileWatcher:FSWatcher|undefined;let profileTimer:ReturnType<typeof setTimeout>|undefined;
+  function observeProfile(){
+    if(!profilePath||!storagePath||profileWatcher)return;
+    try{profileWatcher=watch(storagePath,(_event,file)=>{if(file?.toString()!=='connection.json')return;clearTimeout(profileTimer);profileTimer=setTimeout(()=>{void reloadProfile();},100);});profileWatcher.unref();}catch{/* Created on first explicit setup/connection. */}
+  }
+  async function reloadProfile(){
+    if(extensionDisposed)return;
+    try{const profile=profilePath?await readConnectionProfile(profilePath):null;if(profile&&profile.poolHome===service.snapshot().connection.poolHome)return;}catch{/* Rebuild into a visible configuration error. */}
+    if(extensionDisposed)return;useDebugPool=false;await rebuildService();
+  }
+  async function saveProfile(poolHome:string,isCurrent:()=>boolean=()=>!extensionDisposed){if(profilePath){await writeConnectionProfile(profilePath,poolHome,isCurrent);profileRequired=true;observeProfile();}}
+  async function bundledRuntime(){if(!storagePath)throw new HostError('STORAGE_UNAVAILABLE','Extension storage is unavailable.');return ensureBundledRuntime({extensionPath:context.extensionUri.fsPath,globalStoragePath:storagePath});}
   const diff=new ArtifactDiffProvider(()=>`${authority}|${service.snapshot().connection.poolHome}|${service.snapshot().connection.storeId}`);
   const taskTree=new TaskTree(()=>service.snapshot());const resourceTree=new ResourceTree(()=>service.snapshot());
   const status=vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left,20);status.command='zcodePool.openWorkbench';status.name='ZCode Pool';status.show();
@@ -52,18 +70,35 @@ export async function activate(context:vscode.ExtensionContext):Promise<unknown>
       if(path===undefined)return;
       if(!isAbsolute(path)||path.includes('\0'))throw new HostError('INVALID_POOL_HOME','请输入执行侧的绝对目录。');
       useDebugPool=false;
+      preferSettings=true;
       const previous=service;
       await vscode.workspace.getConfiguration('zcodePool').update('poolHome',path,vscode.ConfigurationTarget.Global);
       if(service===previous)await rebuildService();
     },
     startDaemon:()=>{if(!startPromise)startPromise=startBackend().finally(()=>{startPromise=undefined;});return startPromise;},
+    codexSetup:async()=>{
+      const target=service;const revision=serviceRevision;const poolHome=target.snapshot().connection.poolHome;
+      if(mode!=='real'||process.platform!=='linux'||!vscode.workspace.isTrusted||!profilePath)throw new HostError('ACTION_UNAVAILABLE','请在已信任的 Linux 执行侧配置 Codex。');
+      const configuredNode=vscode.workspace.getConfiguration('zcodePool').inspect<string>('daemonNodePath')?.globalValue??'';
+      const current=()=>service===target&&serviceRevision===revision&&vscode.workspace.isTrusted&&!extensionDisposed&&(vscode.workspace.getConfiguration('zcodePool').inspect<string>('daemonNodePath')?.globalValue??'')===configuredNode;
+      const nodePath=configuredNode||await findNodeExecutable(process.env.PATH);
+      if(!nodePath)throw new HostError('INVALID_DAEMON_NODE','未找到 Node.js 24+，请配置后台 Node 路径。');
+      await validateNode24(nodePath,current);
+      const runtime=await bundledRuntime();
+      if(!current())throw new HostError('STALE_CONNECTION','连接设置已改变，请重新生成配置。');
+      await saveProfile(poolHome,current);
+      const config=codexMcpConfig({nodePath,cliPath:runtime.cliPath,profilePath});
+      const document=await vscode.workspace.openTextDocument({content:codexSetupDocument({config,host,poolHome,version:runtime.version}),language:'markdown'});
+      await vscode.window.showTextDocument(document,{preview:false});
+      return {cancelled:false};
+    },
     saveInterval:async(value)=>{await vscode.workspace.getConfiguration('zcodePool').update('overviewIntervalSeconds',value,vscode.ConfigurationTarget.Global);},
     copyDiagnostics:async(value)=>{
       const doc=await vscode.workspace.openTextDocument({content:value,language:'json'});await vscode.window.showTextDocument(doc,{preview:true});
       const action=await vscode.window.showInformationMessage('Review this limited diagnostic preview. It contains host/pool identities and control IDs, with no prompt or native logs.','Copy diagnostic preview');
       if(action)await vscode.env.clipboard.writeText(value);
     },
-    guidance:async(topic)=>{const messages:Record<string,string>={connection:'先在执行侧安装独立后台，再选择连接目录。已有服务直接连接；尚未运行时点击“启动后台并连接”。此操作不启动执行器或模型。安装步骤见扩展 README。',approval:'Only complete supported permission snapshots can be answered. Missing or legacy sources remain read-only. Inspect the executing native session locally when needed.',workspace:'Create a separate worktree from a clean source repository. Source and execution directories are distinct. No merge or cleanup operation is provided.',recovery:'Reconcile inspects the original execution and may update records/release proved occupancy. Resume attaches observation and may finish verification or qualified bounded busy continuation. Inspect uncertain local processes first.'};await vscode.window.showInformationMessage(messages[topic]??messages.connection!);},
+    guidance:async(topic)=>{const messages:Record<string,string>={connection:'后台已随插件交付。选择连接目录后，生成 Codex MCP 配置即可由 Codex 调度；也可在面板启动后台并连接。执行侧需要 Node.js 24+ 和官方 ZCode runtime。',approval:'Only complete supported permission snapshots can be answered. Missing or legacy sources remain read-only. Inspect the executing native session locally when needed.',workspace:'Create a separate worktree from a clean source repository. Source and execution directories are distinct. No merge or cleanup operation is provided.',recovery:'Reconcile inspects the original execution and may update records/release proved occupancy. Resume attaches observation and may finish verification or qualified bounded busy continuation. Inspect uncertain local processes first.'};await vscode.window.showInformationMessage(messages[topic]??messages.connection!);},
   };
   async function startBackend():Promise<void>{
     const target=service;const revision=serviceRevision;const controller=new AbortController();launchAbort=controller;
@@ -79,7 +114,9 @@ export async function activate(context:vscode.ExtensionContext):Promise<unknown>
       const current=()=>selected()&&target.generation()===generation&&setting('daemonNodePath')===configuredNode&&setting('daemonCliPath')===configuredCli;
       const nodePath=configuredNode||await findNodeExecutable(process.env.PATH);
       if(!nodePath)throw new HostError('DAEMON_NOT_INSTALLED','未找到 Node.js。请在远程设置中配置 zcodePool.daemonNodePath，指向 Node.js 24+。');
-      const cliPath=configuredCli||join(homedir(),'.local','share','zcode-pool-app','node_modules','zcode-pool','bin','zcode-pool.mjs');
+      const cliPath=configuredCli||(await bundledRuntime()).cliPath;
+      if(!current())throw new HostError('ABORTED','连接设置已改变，启动已取消。');
+      await saveProfile(poolHome,current);
       await startInstalledDaemon({poolHome,nodePath,cliPath,trusted:()=>vscode.workspace.isTrusted,isCurrent:current,signal:controller.signal});
       if(!current())throw new HostError('STALE_CONNECTION','连接设置已改变，请连接当前选定目录。');
       await target.connect();
@@ -104,14 +141,17 @@ export async function activate(context:vscode.ExtensionContext):Promise<unknown>
     status.tooltip=`${host}\n${state.connection.poolHome}\nLoaded scope: ${state.scope}. Opening does not execute work.`;
   };
   async function createService(initialGeneration=0):Promise<ActionService>{
+    const creatingRevision=serviceRevision;
     // Machine-scope settings deliberately ignore workspace/folder overrides.
     const inspected=vscode.workspace.getConfiguration('zcodePool').inspect<string>('poolHome');
     const debugPoolHome=development&&mode==='real'&&useDebugPool?process.env.ZCODE_POOL_DEBUG_POOL_HOME:undefined;
-    const configured=debugPoolHome??inspected?.globalValue??'';
-    const configurationError=mode==='real'&&(configured!==''||debugPoolHome!==undefined)&&(!isAbsolute(configured)||configured.includes('\0'))?new HostError('INVALID_POOL_HOME',debugPoolHome!==undefined?'ZCODE_POOL_DEBUG_POOL_HOME must be an absolute path. Use 选择连接目录 or change host User/Remote Settings to correct it without restarting F5.':'Set zcodePool.poolHome to an absolute pool path without quotes or NUL characters in host User/Remote Settings, then Connect.'):undefined;
+    let configured=debugPoolHome??inspected?.globalValue??'';let profileError:HostError|undefined;
+    if(mode==='real'&&profilePath&&debugPoolHome===undefined&&!preferSettings){try{const profile=await readConnectionProfile(profilePath);if(profile){configured=profile.poolHome;profileRequired=true;}else if(profileRequired)throw new Error('missing');}catch{profileError=new HostError('INVALID_CONNECTION_PROFILE','连接资料缺失或损坏，请检查共享 connection.json。');}}
+    let configurationError=profileError??(mode==='real'&&(configured!==''||debugPoolHome!==undefined)&&(!isAbsolute(configured)||configured.includes('\0'))?new HostError('INVALID_POOL_HOME',debugPoolHome!==undefined?'ZCODE_POOL_DEBUG_POOL_HOME must be an absolute path. Use 选择连接目录 or change host User/Remote Settings to correct it without restarting F5.':'Set zcodePool.poolHome to an absolute pool path without quotes or NUL characters in host User/Remote Settings, then Connect.'):undefined);
     // Keep invalid input visible; never resolve it or substitute another pool.
     const requested=configurationError?configured:resolve(configured||join(homedir(),'.zcode_pool'));
     const poolHome=mode==='mock'?'/mock/zcode-pool':configurationError?requested:await realpath(requested).catch(()=>requested);
+    if(preferSettings&&mode==='real'&&!configurationError){try{await saveProfile(poolHome,()=>creatingRevision===serviceRevision&&!extensionDisposed);preferSettings=false;}catch{configurationError=new HostError('INVALID_CONNECTION_PROFILE','无法保存共享连接资料，请检查 connection.json 路径和写入权限。');}}
     return new ActionService({mode,poolHome,host,authority,native,configurationError,initialGeneration,onSnapshot:update,projectContext:()=>({workspaceFolderPaths:(vscode.workspace.workspaceFolders??[]).filter(folder=>['file','vscode-remote'].includes(folder.uri.scheme)).map(folder=>folder.uri.fsPath),activeFilePath:vscode.window.activeTextEditor&&['file','vscode-remote'].includes(vscode.window.activeTextEditor.document.uri.scheme)?vscode.window.activeTextEditor.document.uri.fsPath:null}),supported:mode==='mock'||process.platform==='linux',environmentReason:process.platform==='linux'?undefined:'Real daemon connections require a Linux workspace extension host.',overviewIntervalSeconds:vscode.workspace.getConfiguration('zcodePool').get('overviewIntervalSeconds',30),createTransport:async()=>{
       if(configurationError)throw configurationError;
       if(mode==='mock'){
@@ -123,6 +163,7 @@ export async function activate(context:vscode.ExtensionContext):Promise<unknown>
     }});
   }
   async function rebuildService():Promise<void>{
+    if(extensionDisposed)return;
     const revision=++serviceRevision;launchAbort?.abort();service.dispose();diff.clear();
     const replacement=await createService(service.generation()+1);
     if(revision!==serviceRevision){replacement.dispose();return;}
@@ -143,6 +184,7 @@ export async function activate(context:vscode.ExtensionContext):Promise<unknown>
   register('openWorkbench',()=>{workbench.show();const attention=service.snapshot().tasks.find(t=>t.status==='waiting_approval'||t.status==='interrupted');if(attention)return service.selectTask(attention.taskId);});
   register('connect',()=>execute('connect'));
   register('configureConnection',()=>execute('connection.configure'));
+  register('setupCodex',()=>execute('connection.codexSetup'));
   register('startDaemon',()=>execute('daemon.start'));
   register('disconnect',()=>{diff.clear();return execute('disconnect');});
   register('refresh',()=>execute('refresh'));
@@ -162,11 +204,11 @@ export async function activate(context:vscode.ExtensionContext):Promise<unknown>
     vscode.window.onDidChangeActiveTextEditor(()=>update()),vscode.workspace.onDidChangeWorkspaceFolders(()=>update()),
     vscode.workspace.onDidCloseTextDocument(doc=>diff.release(doc.uri)),
     vscode.workspace.onDidChangeConfiguration(async event=>{
-      if(event.affectsConfiguration('zcodePool.poolHome')){useDebugPool=false;await rebuildService();}
+      if(event.affectsConfiguration('zcodePool.poolHome')){useDebugPool=false;preferSettings=true;await rebuildService();}
       if(event.affectsConfiguration('zcodePool.daemonNodePath')||event.affectsConfiguration('zcodePool.daemonCliPath'))launchAbort?.abort();
       if(event.affectsConfiguration('zcodePool.overviewIntervalSeconds'))service.setOverviewInterval(vscode.workspace.getConfiguration('zcodePool').get('overviewIntervalSeconds',30));
     }),{dispose:()=>{launchAbort?.abort();service.dispose();}});
-  activeDispose=()=>{serviceRevision++;launchAbort?.abort();service.dispose();workbench.dispose();diff.dispose();};update();visible();
+  activeDispose=()=>{extensionDisposed=true;serviceRevision++;profileWatcher?.close();clearTimeout(profileTimer);launchAbort?.abort();service.dispose();workbench.dispose();diff.dispose();};observeProfile();update();visible();
   return {snapshot:()=>service.snapshot(),execute:async(request:WebviewRequest)=>service.execute(parseRequest(request)),show:()=>workbench.show()};
 }
 export function deactivate():void{activeDispose?.();activeDispose=undefined;}

@@ -103,6 +103,8 @@ try {
   await waitState(state => state.connection.state === 'connected');
   await action('task.select').waitFor();
   assert.ok(transport.calls.every(call => ['ui_capabilities', 'overview', 'ui_list_tasks', 'ui_get_task_detail'].includes(call.method)), 'initial connection is read-only');
+  assert.equal(await action('connection.codexSetup').isDisabled(), true, 'mock mode cannot generate real MCP configuration');
+  assert.equal(await page.locator('[data-details="task-advanced"]').getAttribute('open'), null, 'manual dispatch starts folded under advanced actions');
   report.push('Explicit connection and real Host/router bridge; no transport before click');
 
   // Test responsive geometry and themes using the actual bundled styles and browser layout.
@@ -143,6 +145,25 @@ try {
   trusted = true; service.trustChanged(); await delivery;
   report.push('Workspace trust change disables mutation UI');
 
+  await action('page', '[data-page="settings"]').click();
+  const concurrency = page.locator('[data-field="settingsConcurrency"]');
+  const mutationsBeforePolicy = transport.calls.filter(call => ['dispatch_task', 'cancel_task', 'start_worker', 'stop_worker'].includes(call.method)).length;
+  await concurrency.fill('65');
+  assert.equal(await action('pool.policy.set').isDisabled(), true);
+  await concurrency.fill('0'); await action('pool.policy.set').click();
+  await waitState(state => state.poolPolicy?.maxConcurrentTasks === 0);
+  assert.ok(service.snapshot().poolPolicy.occupiedSlots > 0, 'pausing dispatch retains existing task occupancy');
+  assert.equal(service.snapshot().poolPolicy.availableSlots, 0);
+  await concurrency.fill(''); await action('pool.policy.set').click();
+  await waitState(state => state.poolPolicy?.maxConcurrentTasks === null);
+  const policyWrites = transport.calls.filter(call => call.method === 'set_pool_policy');
+  assert.deepEqual(policyWrites.map(call => call.params.max_concurrent_tasks), [0, null]);
+  assert.equal(transport.calls.filter(call => ['dispatch_task', 'cancel_task', 'start_worker', 'stop_worker'].includes(call.method)).length, mutationsBeforePolicy, 'changing policy does not start or stop tasks');
+  await checkLayout('settings');
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.screenshot({ path: join(output, 'settings.png'), fullPage: true });
+  report.push('Shared concurrency policy: invalid limits gated, zero pauses new dispatch, empty removes limit and occupied tasks continue');
+
   await action('page', '[data-page="tasks"]').click();
   await action('task.select', '[data-task-id="task-approval"]').click();
   await action('tab', '[data-tab="approvals"]').click();
@@ -157,6 +178,7 @@ try {
   assert.equal(transport.calls.filter(call => call.method === 'ui_respond_approval').length, 1);
   report.push('One-click complete approval read, hash validation and single fingerprint-bound answer');
 
+  await page.locator('[data-details="task-advanced"] > summary').click();
   await action('compose.open').click();
   await checkLayout('compose');
   await page.screenshot({ path: join(output, 'compose.png'), fullPage: true });

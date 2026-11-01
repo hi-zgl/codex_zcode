@@ -58,6 +58,9 @@
       },
       "cancelTask": {
         "version": 1
+      },
+      "poolPolicy": {
+        "version": 1
       }
     },
     "limits": {

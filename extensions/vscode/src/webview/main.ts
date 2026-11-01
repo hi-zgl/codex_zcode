@@ -160,6 +160,12 @@ export class WorkbenchApp {
       if (this.draftTimer) { clearTimeout(this.draftTimer); this.draftTimer = null; }
       await this.run(name, () => this.bridge.request(name, {})); return;
     }
+    if (name === 'connection.codexSetup') {
+      await this.run(name, async () => {
+        const response = await this.bridge.request<'connection.codexSetup', { cancelled?: boolean }>(name, {});
+        if (!response?.cancelled) this.state.message = '已生成 MCP 配置，请在 Codex 中启用后开始调度任务。';
+      }); return;
+    }
     if (name === 'tasks.more' || name === 'tasks.reload') { await this.run('tasks.list', () => this.bridge.request('tasks.list', name === 'tasks.more' && snapshot?.listNextCursor ? { cursor: snapshot.listNextCursor } : this.listPayload())); return; }
     if (name === 'refresh' || name === 'resources.refresh' || name === 'settings.open' || name === 'diagnostics.copy') {
       await this.run(name, async () => { await this.bridge.request(name, {}); this.state.message = name === 'diagnostics.copy' ? '已复制脱敏诊断。' : name === 'settings.open' ? '已打开当前计算环境的 VS Code 设置。' : '已更新任务和资源。'; }); return;
@@ -169,6 +175,16 @@ export class WorkbenchApp {
       const value = Number(this.state.settingsInterval);
       if (!Number.isInteger(value) || value < 15 || value > 300) { this.state.validation.settingsInterval = '请输入 15–300 的整数。'; this.render(); this.focusInvalid(); return; }
       await this.run(name, async () => { await this.bridge.request('settings.save', { overviewIntervalSeconds: value }); this.state.message = '刷新间隔已保存；未发起连接或执行操作。'; }); return;
+    }
+    if (name === 'pool.policy.set') {
+      const raw = this.state.settingsConcurrency.trim(); const value = raw === '' ? null : Number(raw);
+      if (value !== null && (!Number.isInteger(value) || value < 0 || value > 64)) { this.state.validation.settingsConcurrency = '请输入 0–64 的整数，或留空不限制。'; this.render(); this.focusInvalid(); return; }
+      await this.run(name, async () => {
+        await this.bridge.request('pool.policy.set', { maxConcurrentTasks: value });
+        this.state.policyDirty = false;
+        this.state.settingsConcurrency = this.state.snapshot?.poolPolicy?.maxConcurrentTasks == null ? '' : String(this.state.snapshot.poolPolicy.maxConcurrentTasks);
+        this.state.message = value === 0 ? '已暂停新派发；正在运行的任务继续。' : value === null ? '已取消池级并发上限。' : `并发任务上限已设为 ${value}；正在运行的任务继续。`;
+      }); return;
     }
     if (name === 'accounts.import') {
       await this.run(name, async () => {
@@ -316,7 +332,8 @@ export class WorkbenchApp {
       }
       this.state.draftDirty = true; this.scheduleDraft(); if (changed) this.render(); return;
     }
-    if (['workerId', 'workerAccount', 'baseRef', 'settingsInterval', 'taskLookup'].includes(key)) {
+    if (key === 'settingsConcurrency') this.state.policyDirty = true;
+    if (['workerId', 'workerAccount', 'baseRef', 'settingsInterval', 'settingsConcurrency', 'taskLookup'].includes(key)) {
       (this.state as unknown as Record<string, unknown>)[key] = target.value; delete this.state.validation[key]; this.render();
     }
   }

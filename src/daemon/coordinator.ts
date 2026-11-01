@@ -199,7 +199,9 @@ export class Coordinator {
  private async handle(name: MethodName, p: any): Promise<unknown> {
   switch (name) {
    case 'daemon_stop': throw new Error('Daemon lifecycle is handled by the local server');
-   case 'overview': return {accounts:await this.vault.list(),workers:(await this.supervisor.list()).map(({endpoint,...w})=>w),workspaces:this.store.listWorkspaces(),tasks:this.store.listTasks().slice(-50).map(compactTask)};
+   case 'overview': return {accounts:await this.vault.list(),workers:(await this.supervisor.list()).map(({endpoint,...w})=>w),workspaces:this.store.listWorkspaces(),tasks:this.store.listTasks().slice(-50).map(compactTask),poolPolicy:this.store.getPoolPolicy()};
+   case 'get_pool_policy': return this.store.getPoolPolicy();
+   case 'set_pool_policy': return this.store.setPoolPolicy({maxConcurrentTasks:p.max_concurrent_tasks});
    case 'import_accounts': return this.vault.import(p.files);
    case 'start_worker': {
     if (this.store.listTasks().some(t=>t.workerId===p.worker_id&&t.leaseHeld)) throw new Error('Worker has an active or uncertain task');

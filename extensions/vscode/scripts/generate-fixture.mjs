@@ -2,7 +2,7 @@ import {writeFile} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
 const hash=s=>createHash('sha256').update(s).digest('hex');
 const time=1793491200000;
-const caps=Object.fromEntries(['taskDetail','taskLookupByRequest','taskList','quotaSnapshots','quotaProbe','approvalRead','approvalRespondFingerprint','artifactSnapshots','dispatchTask','createWorkspace','importAccounts','startWorker','stopWorker','reconcileTask','resumeTask','cancelTask'].map(k=>[k,{version:1}]));
+const caps=Object.fromEntries(['poolPolicy','taskDetail','taskLookupByRequest','taskList','quotaSnapshots','quotaProbe','approvalRead','approvalRespondFingerprint','artifactSnapshots','dispatchTask','createWorkspace','importAccounts','startWorker','stopWorker','reconcileTask','resumeTask','cancelTask'].map(k=>[k,{version:1}]));
 const workspaces=[['workspace-demo','/demo/project','/demo/pool/worktrees/demo','zcode/demo','abc123',null],['workspace-review','/demo/project','/demo/pool/worktrees/review','zcode/review','abc123','task-approval'],['workspace-unknown','/demo/other','/demo/pool/worktrees/unknown','zcode/unknown','def456','task-unknown']].map(([workspaceId,repositoryPath,worktreePath,branch,baseCommit,activeTaskId])=>({workspaceId,repositoryPath,worktreePath,branch,baseCommit,activeTaskId,state:'active'}));
 const worker=(workerId,accountAlias,n=0)=>({workerId,accountAlias,state:'ready',processOwned:true,runningTaskCount:n,version:'3.16.3'});
 const accounts=[{alias:'account-demo',provider:'zai',health:'available',plan:'demo'},{alias:'account-review',provider:'zai',health:'available'},{alias:'account-unknown',provider:'bigmodel',health:'unknown'}];

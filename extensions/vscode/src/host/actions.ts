@@ -18,6 +18,7 @@ export interface NativeAdapter {
   openCurrentFile?(worktreePath:string,relativePath:string):Promise<void>;
   openSettings(): Promise<void>;
   configureConnection?(): Promise<void>;
+  codexSetup?(): Promise<{cancelled?:boolean}>;
   startDaemon?(): Promise<void>;
   saveInterval(value: number): Promise<void>;
   copyDiagnostics(value: string): Promise<void>;
@@ -60,7 +61,7 @@ export class ActionService implements RouterTarget {
   constructor(private readonly options: ServiceOptions) {
     this.state = {
       connection:{state:options.configurationError?'error':'disconnected',mode:options.mode,generation:options.initialGeneration??0,host:options.host,poolHome:options.poolHome,trusted:options.native.trusted(),lastReceivedAtMs:null,stale:false,storeId:null,instanceId:null,daemonVersion:null,capabilities:{},error:options.configurationError?safeError(options.configurationError):null,supported:options.supported??true,environmentReason:options.environmentReason??null},
-      tasks:[],scope:'recent_50_loaded',total:null,listNextCursor:null,selectedTaskId:null,detail:null,
+      poolPolicy:null,tasks:[],scope:'recent_50_loaded',total:null,listNextCursor:null,selectedTaskId:null,detail:null,
       resources:{accounts:[],workers:[],workspaces:[],quotas:{}},approvals:null,delivery:{manifest:null,files:[],nextCursor:null,reviewed:false},draft:blankDraft(),actions:[],overviewIntervalSeconds:options.overviewIntervalSeconds??30,notice:null,
     };
     this.poll = new PollCoordinator(signal=>this.refreshSnapshot(signal),signal=>this.wait(signal),()=>this.state.overviewIntervalSeconds*1000,error=>{this.state.connection.stale=true;this.state.connection.error=safeError(error);this.emit();});
@@ -111,7 +112,7 @@ export class ActionService implements RouterTarget {
     this.poll.setVisible(false);this.poll.reset();this.connectionAbort.abort();this.selectionAbort.abort();this.connectionAbort=new AbortController();this.selectionAbort=new AbortController();this.client?.dispose();this.client=undefined;
     this.state.connection={...this.state.connection,state:this.options.configurationError?'error':'disconnected',generation:this.generation()+1,stale:this.state.tasks.length>0,error:this.options.configurationError?safeError(this.options.configurationError):null,storeId:null,instanceId:null,capabilities:{}};
     this.state.detail=null;this.state.selectedTaskId=null;this.state.legacyResult=null;this.state.approvals=null;this.state.delivery={manifest:null,files:[],nextCursor:null,reviewed:false};this.state.resources.quotas={};this.reviews.clear();this.taskCache.clear();this.deliveryOpened.clear();this.viewedFiles.clear();this.listSequence++;this.selectionSequence++;
-    this.state.tasks=[];this.state.total=null;this.state.listNextCursor=null;this.historicalPagesLoaded=false;this.listFilter=undefined;
+    this.state.poolPolicy=null;this.state.tasks=[];this.state.total=null;this.state.listNextCursor=null;this.historicalPagesLoaded=false;this.listFilter=undefined;
     if(emit)this.emit();
   }
   refresh(signal=this.connectionAbort.signal): Promise<void> {return this.poll.requestRefresh(false,signal);}
@@ -124,6 +125,7 @@ export class ActionService implements RouterTarget {
       return pending;
     };
     this.state.resources.accounts=overview.accounts;
+    this.state.poolPolicy=this.state.connection.capabilities.poolPolicy?.version===1?overview.poolPolicy??null:null;
     this.state.resources.workspaces=overview.workspaces;
     this.state.resources.workers=overview.workers.map(worker=>({...worker,leaseTaskIds:overview.tasks.filter(task=>task.workerId===worker.workerId&&task.leaseHeld).map(task=>task.taskId)}));
     if(this.state.connection.capabilities.taskList?.version){
@@ -348,6 +350,17 @@ export class ActionService implements RouterTarget {
     if(request.type!=='ready'&&request.generation!==this.generation())throw new HostError('STALE_CONNECTION','Reload the current workbench state.');
     switch(request.type){
       case 'ready':this.emit();return this.snapshot();
+      case 'connection.codexSetup':{
+        if(!this.options.native.trusted())throw new HostError('WORKSPACE_UNTRUSTED','Trust this workspace before preparing Codex integration.');
+        if(this.options.mode!=='real'||this.state.connection.supported===false)throw new HostError('ACTION_UNAVAILABLE','Codex setup requires a real Linux connection.');
+        if(this.options.configurationError)throw this.options.configurationError;
+        if(!this.options.native.codexSetup)throw new HostError('ACTION_UNAVAILABLE','Codex setup is unavailable in this Host.');
+        return this.options.native.codexSetup();
+      }
+      case 'pool.policy.set':{
+        this.requireCapability('poolPolicy',true);
+        return this.mutate('pool.policy.set',()=>this.requireConnection().legacy('set_pool_policy',{max_concurrent_tasks:request.payload.maxConcurrentTasks},this.connectionAbort.signal));
+      }
       case 'connection.configure':{
         if(!this.options.native.configureConnection)throw new HostError('ACTION_UNAVAILABLE','Connection configuration is unavailable in this Host.');
         await this.options.native.configureConnection();return {configured:true};

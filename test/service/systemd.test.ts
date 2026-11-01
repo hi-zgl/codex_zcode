@@ -54,6 +54,13 @@ test('unit generation rejects relative paths, control characters, unsafe names, 
   assert.throws(() => userUnitDirectory({ XDG_CONFIG_HOME: 'relative' }), /absolute path/);
 });
 
+test('compiled runtime units execute the daemon directly without a TypeScript loader', () => {
+  const options = { ...defaultUserServiceOptions(), loaderPath: '', entryPath: '/installed/runtime/daemon.mjs' };
+  const unit = renderUserService(options);
+  assert.ok(unit.includes(`ExecStart=:"${process.execPath}" "/installed/runtime/daemon.mjs"\n`));
+  assert.doesNotMatch(unit, /--import/);
+});
+
 test('systemd-analyze verifies defaults and actually parses spaces, percent, dollars, quotes, backslashes, Unicode and trailing spaces', async t => {
   if (spawnSync('systemd-analyze', ['--version']).error) { t.skip('systemd-analyze is not installed'); return; }
   const { root, options } = await fixture(t);

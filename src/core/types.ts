@@ -1,5 +1,16 @@
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
 
+export { MAX_POOL_CONCURRENT_TASKS } from '../shared/pool-policy.js';
+
+export interface PoolPolicy {
+  /** null preserves unlimited admission; zero pauses admission of new tasks. */
+  maxConcurrentTasks: number | null;
+  /** All held task leases, including approvals, verification and uncertain execution. */
+  occupiedSlots: number;
+  /** null for an unlimited policy; never negative when a limit is lowered. */
+  availableSlots: number | null;
+}
+
 export type TaskStatus =
   | 'queued'
   | 'dispatching'

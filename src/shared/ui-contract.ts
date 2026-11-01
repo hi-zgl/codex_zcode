@@ -22,7 +22,7 @@ export const uiCapabilitiesSchema = z.object({
   selectedApiVersion:z.object({major:version,minor:uint}),daemonVersion:text,instanceId:uiIdSchema,storeId:uiIdSchema,servedAtMs:uint,
   capabilities:z.object({taskDetail:capability,taskLookupByRequest:capability,taskList:capability,quotaSnapshots:capability,quotaProbe:capability,
     approvalRead:capability,approvalRespondFingerprint:capability,artifactSnapshots:capability,dispatchTask:capability,createWorkspace:capability,
-    importAccounts:capability,startWorker:capability,stopWorker:capability,reconcileTask:capability,resumeTask:capability,cancelTask:capability}),
+    importAccounts:capability,startWorker:capability,stopWorker:capability,reconcileTask:capability,resumeTask:capability,cancelTask:capability,poolPolicy:capability}),
   limits:z.object({requestBytes:uint,responseBytes:uint,chunkBytes:uint,taskPageItems:uint,approvalPageItems:uint,artifactPageItems:uint,approvalSnapshotBytes:uint,editorFileBytes:uint}),
   runtime:z.object({platform:text,supportedOfficialVersions:z.array(text)}),
 });

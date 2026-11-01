@@ -4,10 +4,12 @@ import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import {
   CoreError,
+  MAX_POOL_CONCURRENT_TASKS,
   type ArtifactMetadata,
   type DispatchInput,
   type JsonValue,
   type PersistedTaskResult,
+  type PoolPolicy,
   type StopProof,
   type StoreOptions,
   type Task,
@@ -237,8 +239,8 @@ export class DurableTaskStore {
     // Recheck after acquiring the write lock: another process may have migrated
     // between opening this connection and obtaining schema ownership.
     const version = this.db.prepare('PRAGMA user_version').get() as { user_version: number };
-    if (version.user_version > 3) fail('UNSUPPORTED_SCHEMA', `State schema ${version.user_version} is newer than this program`);
-    if (version.user_version === 3) {this.db.exec('COMMIT');return;}
+    if (version.user_version > 4) fail('UNSUPPORTED_SCHEMA', `State schema ${version.user_version} is newer than this program`);
+    if (version.user_version === 4) {this.db.exec('COMMIT');return;}
     if (version.user_version === 0) this.db.exec(`
       CREATE TABLE IF NOT EXISTS workspaces (
         workspace_id TEXT PRIMARY KEY,
@@ -328,6 +330,14 @@ export class DurableTaskStore {
       PRAGMA user_version = 3;
     `);
     this.db.prepare('INSERT OR IGNORE INTO ui_metadata(key,value) VALUES(?,?)').run('store_id',randomUUID());
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS pool_policy (
+        singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+        max_concurrent_tasks INTEGER CHECK (max_concurrent_tasks >= 0 AND max_concurrent_tasks <= ${MAX_POOL_CONCURRENT_TASKS})
+      ) STRICT;
+      INSERT OR IGNORE INTO pool_policy(singleton,max_concurrent_tasks) VALUES(1,NULL);
+      PRAGMA user_version = 4;
+    `);
     this.db.exec('COMMIT');
     } catch (error) {
       try {this.db.exec('ROLLBACK');} catch { /* Preserve the original migration failure. */ }
@@ -417,6 +427,32 @@ export class DurableTaskStore {
     });
   }
 
+  getPoolPolicy(): PoolPolicy {
+    this.ensureOpen();
+    // A single statement keeps the setting and occupancy in one SQLite snapshot.
+    const row = this.db.prepare(`SELECT max_concurrent_tasks,
+      (SELECT count(*) FROM tasks WHERE lease_held = 1) AS occupied_slots FROM pool_policy WHERE singleton = 1`)
+      .get() as { max_concurrent_tasks: number | null; occupied_slots: number };
+    return {
+      maxConcurrentTasks: row.max_concurrent_tasks,
+      occupiedSlots: row.occupied_slots,
+      availableSlots: row.max_concurrent_tasks === null ? null : Math.max(0, row.max_concurrent_tasks - row.occupied_slots),
+    };
+  }
+
+  setPoolPolicy(input: { maxConcurrentTasks: number | null }): PoolPolicy {
+    const limit = input?.maxConcurrentTasks;
+    if (limit !== null) {
+      nonnegativeInteger(limit, 'maxConcurrentTasks');
+      if (limit > MAX_POOL_CONCURRENT_TASKS) fail('INVALID_ARGUMENT', `maxConcurrentTasks must be at most ${MAX_POOL_CONCURRENT_TASKS}`);
+    }
+    return this.write(() => {
+      this.db.prepare('UPDATE pool_policy SET max_concurrent_tasks = ? WHERE singleton = 1').run(limit);
+      // Existing leases are unchanged, even when occupancy exceeds the new limit.
+      return this.getPoolPolicy();
+    });
+  }
+
   dispatch(input: DispatchInput): { task: Task; created: boolean } {
     for (const key of ['requestId', 'workspaceId', 'prompt'] as const) requiredString(input?.[key], key);
     if (input.workerId !== undefined) requiredString(input.workerId, 'workerId');
@@ -442,6 +478,9 @@ export class DurableTaskStore {
       if (workspace.state !== 'active') fail('WORKSPACE_INACTIVE', 'Tasks require an active workspace');
       if (workspace.activeTaskId !== null) fail('WORKSPACE_BUSY', `Workspace is held by task ${workspace.activeTaskId}`);
       if (input.workerId !== undefined) this.assertWorkerAvailable(input.workerId);
+      // Admission and reservation share this write transaction across every caller.
+      // Reject before creating a task: there is no extra queue or worker selection.
+      if (this.getPoolPolicy().availableSlots === 0) fail('POOL_CAPACITY_REACHED', 'Pool concurrency limit reached; wait for held tasks to finish or update the pool policy');
       const taskId = `task_${randomUUID()}`;
       const at = this.now();
       this.db.prepare(`INSERT INTO tasks(task_id,request_id,workspace_id,payload,prompt,requested_worker_id,worker_id,

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   MCP_COMPACT_TARGET_BYTES, MCP_MAX_TEXT_BYTES, presentMcpError,
-  presentMcpResult, redactPresentationText, utf8Prefix,
+  presentMcpResult, redactPresentationText, utf8Prefix, classifyMcpError,
 } from '../../src/shared/presentation.js';
 
 function view(method: string, value: unknown, args: Record<string, unknown> = {}) {
@@ -76,6 +76,23 @@ test('probe exposes only protocol/auth status and numeric quota, never the provi
   assert.deepEqual(projected.value.quota.remaining, { count: 500, percentage: 0.5, nextResetTime: 999 });
   assert.doesNotMatch(projected.text, /provider|subscription|context|PRIVATE-NATIVE-CONTEXT/);
   assert.ok(Buffer.byteLength(projected.text) < 1024);
+});
+
+test('pool control and overview views expose only numeric policy fields within the MCP budget',()=>{
+  const policy={maxConcurrentTasks:0,occupiedSlots:12,availableSlots:0};
+  const hostile={...policy,raw:forbidden,prompt:forbidden,accounts:[{credentials:forbidden}]};
+  for(const method of ['get_pool_policy','set_pool_policy']){
+    const projected=view(method,hostile);
+    assert.deepEqual(projected.value,policy);assert.ok(Buffer.byteLength(projected.text)<256);
+  }
+  assert.deepEqual(view('overview',{poolPolicy:hostile}).value.poolPolicy,policy);
+  assert.deepEqual(view('get_pool_policy',{maxConcurrentTasks:null,occupiedSlots:2,availableSlots:null}).value,
+    {maxConcurrentTasks:null,occupiedSlots:2,availableSlots:null});
+  assert.equal(classifyMcpError(new Error('Pool concurrency limit reached; private diagnostic')),'POOL_CAPACITY_REACHED');
+  const error=presentMcpError('POOL_CAPACITY_REACHED','dispatch_task',{request_id:'request',workspace_id:'workspace',worker_id:'worker'});
+  assert.equal(JSON.parse(error.text).error,'POOL_CAPACITY_REACHED');
+  assert.match(JSON.parse(error.text).message,/No task was queued/);
+  assert.match(JSON.parse(error.text).nextAction,/same request_id/);
 });
 
 test('approval controls survive compact polling; truncated persistence never claims full review', () => {

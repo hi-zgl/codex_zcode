@@ -3,6 +3,7 @@ import { pathToFileURL } from 'node:url';
 import { open, mkdir } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { rpcCall, poolRoot } from '../shared/rpc.js';
+import { connectionPoolRoot } from '../shared/connection.js';
 import { methods, validateMethod } from '../shared/methods.js';
 import { defaultUserServiceOptions, installUserService, renderUserService, userUnitDirectory } from '../service/systemd.js';
 
@@ -54,15 +55,18 @@ async function main() {
     console.log('zcode-pool: local isolated ZCode orchestration prototype\n\nCommands:\n  daemon-start\n  daemon (foreground)\n  mcp (stdio)\n  service-generate [OPTIONS]\n  service-install [OPTIONS]\n  import-accounts FILE...\n  METHOD \'{"parameter":"value"}\'\n\nMethods:\n'+Object.entries(methods).map(([n,d])=>`  ${n}: ${d.description}`).join('\n'));
     return;
   }
-  if (command === 'daemon') {await import('../daemon/main.js');return;}
   if (command === 'mcp') {await import('../mcp/main.js');return;}
+  // The extension and Codex use one host-side profile; a running daemon keeps
+  // the concrete pool selected when it started, even if that profile changes.
+  process.env.ZCODE_POOL_HOME = await connectionPoolRoot();
+  if (command === 'daemon') {await import('../daemon/main.js');return;}
   if (command === 'service-generate' || command === 'service-install') { await serviceCommand(command,args); return; }
   if (command === 'daemon-start') {
     try {await rpcCall('overview',{}, {timeoutMs:1000});console.log('Daemon already ready');return;} catch {}
     const root=poolRoot(); await mkdir(join(root,'scheduler'),{recursive:true,mode:0o700});
     const log=await open(join(root,'scheduler','daemon.log'),'a',0o600);
     const runtime=defaultUserServiceOptions();
-    const child=spawn(runtime.nodePath,['--import',pathToFileURL(runtime.loaderPath).href,runtime.entryPath],{cwd:runtime.workingDirectory,detached:true,stdio:['ignore',log.fd,log.fd],env:process.env});
+    const child=spawn(runtime.nodePath,[...(runtime.loaderPath?['--import',pathToFileURL(runtime.loaderPath).href]:[]),runtime.entryPath],{cwd:runtime.workingDirectory,detached:true,stdio:['ignore',log.fd,log.fd],env:process.env});
     child.on('error',()=>{}); child.unref(); await log.close();
     for(let i=0;i<100;i++) {
       await new Promise(r=>setTimeout(r,100));

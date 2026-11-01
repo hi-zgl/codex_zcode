@@ -151,7 +151,7 @@ export class UiService {
   if(name==='ui_capabilities'){
    if(!p.supportedApiMajors.includes(1))throw new UiRpcError('INCOMPATIBLE_API',{outcome:'not_started'});
    return {selectedApiVersion:{major:1,minor:0},daemonVersion:'0.1.0',instanceId:this.instanceId,storeId:this.store.storeId,servedAtMs:Date.now(),
-    capabilities:Object.fromEntries(['taskDetail','taskLookupByRequest','taskList','quotaSnapshots','quotaProbe','approvalRead','approvalRespondFingerprint','artifactSnapshots','dispatchTask','createWorkspace','importAccounts','startWorker','stopWorker','reconcileTask','resumeTask','cancelTask'].map(k=>[k,{version:1}])),limits:UI_LIMITS,runtime:{platform:process.platform,supportedOfficialVersions:['3.16.3']}};
+    capabilities:Object.fromEntries(['taskDetail','taskLookupByRequest','taskList','quotaSnapshots','quotaProbe','approvalRead','approvalRespondFingerprint','artifactSnapshots','dispatchTask','createWorkspace','importAccounts','startWorker','stopWorker','reconcileTask','resumeTask','cancelTask','poolPolicy'].map(k=>[k,{version:1}])),limits:UI_LIMITS,runtime:{platform:process.platform,supportedOfficialVersions:['3.16.3']}};
   }
   if(name==='ui_get_task_detail'){
    return this.envelope(this.store.readSnapshot(()=>{const task=p.task_id?this.store.getTask(p.task_id):this.store.findTaskByRequestId(p.request_id);if(!task)throw new UiRpcError('NOT_FOUND');return this.detail(task);}));

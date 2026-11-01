@@ -9,7 +9,7 @@ function response(presented: PresentedText) {
   return { ...(presented.isError ? { isError: true } : {}), content: [{ type: 'text' as const, text: presented.text }] };
 }
 export function createMcpServer(call: DaemonCall = rpcCall): McpServer {
-  const server = new McpServer({ name: 'zcode-pool', version: '0.1.0' });
+  const server = new McpServer({ name: 'zcode-pool', version: '0.1.0' },{instructions:'Use ZCode workers for implementation; act as coordinator when the user requests delegation. Inspect overview and pool policy, select explicit accounts/workers/workspaces, dispatch scoped tasks with verification commands, and observe the original task IDs. Start/stop workers and adjust concurrency only within the user\'s instructions. Keep worker conversations local: read compact status/results, fetch logs or diffs only when needed. Busy continuation is bounded by the daemon; do not duplicate tasks or resend uncertain commands. The VS Code panel is optional monitoring and human intervention, not a required dispatch step. Approval decisions and execution mode must respect the user\'s authorization; do not silently select unrestricted mode.'});
   const registered = new Map<string, (typeof methods)[keyof typeof methods]>();
   for (const [name, definition] of Object.entries(methods)) {
     // Adding a daemon method never implicitly exposes its native return object.

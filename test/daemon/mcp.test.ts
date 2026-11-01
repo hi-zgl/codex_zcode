@@ -28,10 +28,17 @@ test('real MCP stdio forwards to daemon; MCP exit does not terminate daemon', {t
   await client.connect(transport);
   const tools=await client.listTools();
   assert.ok(tools.tools.some(t=>t.name==='zcode_dispatch_task'));
+  assert.ok(tools.tools.some(t=>t.name==='zcode_get_pool_policy'));
+  assert.ok(tools.tools.some(t=>t.name==='zcode_set_pool_policy'));
   assert.ok(!tools.tools.some(t=>t.name==='zcode_import_accounts'));
   const result=await client.callTool({name:'zcode_overview',arguments:{}});
   assert.equal(result.isError,undefined);
   assert.deepEqual(readText(result).tasks,[]);
+  assert.deepEqual(readText(result).poolPolicy,{maxConcurrentTasks:null,occupiedSlots:0,availableSlots:null});
+  const policy=await client.callTool({name:'zcode_set_pool_policy',arguments:{max_concurrent_tasks:0}});
+  assert.deepEqual(readText(policy),{maxConcurrentTasks:0,occupiedSlots:0,availableSlots:0});
+  assert.deepEqual(await rpcCall('get_pool_policy',{}, {root}),readText(policy),'MCP and local clients share one persisted policy');
+  assert.deepEqual(readText(await client.callTool({name:'zcode_get_pool_policy',arguments:{}})),readText(policy));
   await client.close();client=undefined;
   const overview=await rpcCall<{tasks:unknown[]}>('overview',{}, {root});
   assert.deepEqual(overview.tasks,[]);
@@ -114,6 +121,12 @@ test('real MCP stdio validates listed schemas and rejects unknown or huge invali
  const dispatch=listed.tools.find(tool=>tool.name==='zcode_dispatch_task')!;
  assert.equal((dispatch.inputSchema.properties?.prompt as any).maxLength,100_000);
  assert.ok(!listed.tools.some(tool=>tool.name==='zcode_daemon_stop'||tool.name==='zcode_import_accounts'));
+ const pool=listed.tools.find(tool=>tool.name==='zcode_set_pool_policy')!;
+ assert.ok(pool.inputSchema.properties?.max_concurrent_tasks);
+ for(const max_concurrent_tasks of [-1,65,0.5,'2']){
+  const invalidPolicy=await client.callTool({name:'zcode_set_pool_policy',arguments:{max_concurrent_tasks}});
+  assert.equal(invalidPolicy.isError,true);assert.equal(readText(invalidPolicy).error,'INVALID_ARGUMENT');
+ }
  const invalid=await client.callTool({name:'zcode_wait',arguments:{task_ids:Array.from({length:3000},()=>123),after_revision:{['PRIVATE-KEY-'.repeat(1000)]:-1}}});
  assert.equal(invalid.isError,true);
  assert.equal(readText(invalid).error,'INVALID_ARGUMENT');

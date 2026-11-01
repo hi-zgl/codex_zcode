@@ -68,6 +68,10 @@ strong { font-weight: 600; }
 .button:disabled { opacity: .58; }
 .button:disabled[aria-label] { opacity: .65; }
 .inline-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.page-actions { display: flex; flex-direction: column; align-items: flex-end; gap: 10px; min-width: 0; }
+.advanced-actions { font-size: 11px; color: var(--muted); }
+.advanced-actions summary { cursor: pointer; }
+.advanced-actions[open] > .action-with-reason { margin-top: 8px; }
 .badge { display: inline-flex; align-items: center; align-self: flex-start; flex: none; padding: 2px 7px; border: 1px solid var(--line); border-radius: 3px; font-size: 11px; font-weight: 500; line-height: 1.5; white-space: normal; color: var(--text); }
 .badge.attention { border-color: var(--warning); }
 .badge.success { border-color: var(--success); }

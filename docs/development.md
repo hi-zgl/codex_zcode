@@ -4,9 +4,9 @@
 
 当前代码为 Linux / Node.js 24 原型，已通过[本机真实任务与双账号并行验证](validation/2026-11-01.md)。官方适配器只接受已核对的 ZCode Server 3.16.3 / server protocol 1；其他版本拒绝自动兼容。任务只指定 Start Plan，不自动回退到付费 provider。
 
-可视化操作见 [VS Code 扩展运行与 F5 测试](ui/implementation.md)，不依赖开发 checkout 的后台安装见[独立 daemon 包](distribution.md)。扩展与 CLI/MCP 共享同一调度服务，UI 不会自动把完整审批或文件内容送入 Codex 上下文。
+普通用户可安装一体 VSIX，其中已包含调度后台、CLI 和 MCP，无需另装 tgz 或运行仓库命令；执行侧仍需 Node.js 24+ 和官方 ZCode 运行环境。见 [VS Code 使用、F5 与测试指南](ui/implementation.md)及[安装与交付](distribution.md)。下文的 npm 命令用于源码开发或高级 CLI 操作。扩展与 CLI/MCP 共享同一调度服务，UI 不会自动把完整审批或文件内容送入 Codex 上下文。
 
-UI 功能将持久存储升级到 schema 3，保留原有任务/attempt，并增加 store 身份、完整审批记录和答复回执；旧任务缺失的文件快照不会补猜。新 daemon 首次打开旧 schema 1/2 数据库时迁移，旧版 daemon 无法读取 schema 3；升级后不要混用旧后台程序。
+当前持久存储为 schema 4：保留原有任务/attempt、store 身份、完整审批和答复回执，并新增池级并发策略，默认不设全池上限。新 daemon 首次打开 schema 1/2/3 数据库时迁移；旧版 daemon 无法读取 schema 4，迁移后不要混用旧后台程序。旧任务缺失的文件快照不会补猜。安装/升级扩展或生成 MCP 配置不会重启已有旧 daemon；需先处理当前任务，再显式停止旧服务并启动新后台。
 
 ## 安装与检查
 
@@ -29,9 +29,9 @@ npm run cli -- overview
 npm run cli -- import-accounts data/accounts/*.json
 ```
 
-默认状态目录为 `~/.zcode_pool`。通过 `ZCODE_POOL_HOME` 可为整套调度器指定另一个目录，所有 CLI/MCP 入口需使用相同值。Unix socket 有长度限制，目录应简短。
+默认状态目录为 `~/.zcode_pool`。源码开发和手动 CLI 可通过 `ZCODE_POOL_HOME` 指定目录；MCP 与面板使用同一个池。安装版生成的配置通过 `ZCODE_POOL_CONNECTION_FILE` 读取共享连接资料，优先于 `ZCODE_POOL_HOME`；文件缺失或损坏直接报错，不回退到默认池。Unix socket 有长度限制，目录应简短。
 
-账号导入只通过本地 CLI 暴露，不作为 MCP 工具。返回账号别名和导出快照中的额度；快照不是实时余额。
+账号导入通过本地 CLI 或面板原生文件选择器完成，不作为 MCP 工具。返回账号别名和导出快照中的额度；快照不是实时余额。
 
 用 overview 中的账号别名启动实例：
 
@@ -65,6 +65,15 @@ npm run cli -- get_result '{"task_id":"替换为taskId"}'
 - diff 快照固定为该任务结束时工作区相对 workspace 起始 commit 的累计差异；后续任务不会改写旧快照。未跟踪文件另存产物，不自动塞入 patch。
 - 原型不提供自动合并或清理工具，代码集成仍由调用方审查并执行。
 
+### 共享并发策略
+
+```bash
+npm run cli -- get_pool_policy '{}'
+npm run cli -- set_pool_policy '{"max_concurrent_tasks":2}'
+```
+
+`max_concurrent_tasks` 为 `0–64` 的整数或 `null`。`0` 暂停新派发，`null` 不限制；降低上限不停止已有任务。MCP、面板及 CLI 遵守同一持久化策略。占用槽位包括等待审批、核验及未知执行状态但仍持有占用的任务。达到上限时派发直接拒绝，不自动排队，不应创建重复任务绕过限制。
+
 停止 daemon 可使用 `npm run cli -- daemon-stop`；它不会主动停止官方 Worker。
 
 ## 模型繁忙时立即继续
@@ -85,15 +94,17 @@ npm run cli -- reconcile_task '{"task_id":"替换为taskId"}'
 
 ## MCP 接入
 
-先启动 daemon，再以项目根目录作为工作目录运行 MCP：
+安装版在工作台点击“连接 Codex / 生成 MCP 配置”，将生成配置一次添加到同一执行侧的 Codex，并重新连接 Codex。此操作只生成文档，不自动修改 Codex 配置，也不能证明已连接。生成配置引用共享连接资料，面板切换目录后，后续 MCP 工具调用读取新目录；旧目录中的任务继续保留，不会迁移。捆绑 MCP 入口可在工具调用发现后台不可达时按需启动；已有旧 daemon 不会被自动替换或重启。
+
+源码开发可先启动 daemon，再以项目根目录作为工作目录运行 MCP：
 
 ```bash
 node --import tsx src/mcp/main.ts
 ```
 
-stdio 仅承载 MCP 协议；诊断输出使用 stderr。实际 Codex 配置可将 node、tsx loader 和入口文件写为绝对路径；所有入口使用相同 `ZCODE_POOL_HOME`。本项目不会自动修改用户的 Codex 全局配置。
+stdio 仅承载 MCP 协议；诊断输出使用 stderr。手动配置源码入口时，将 Node、tsx loader 和入口文件写为绝对路径，并使用相同的 `ZCODE_POOL_HOME` 或共享连接资料。未通过捆绑稳定入口启动的源码 MCP 不负责自动启动 daemon。本项目不会自动修改用户的 Codex 全局配置。
 
-工具名以 `zcode_` 开头，当前包括 overview、start_worker、stop_worker、probe_worker、create_workspace、dispatch_task、wait、get_result、get_diff、get_logs、respond_approval、cancel_task、reconcile_task、resume_task。
+工具名以 `zcode_` 开头，当前包括 overview、get_pool_policy、set_pool_policy、start_worker、stop_worker、probe_worker、create_workspace、dispatch_task、wait、get_result、get_diff、get_logs、respond_approval、cancel_task、reconcile_task、resume_task。
 
 MCP 返回独立的白名单精简视图，不直接回传 daemon 原始对象或完整会话。默认仅提供控制状态、简短结果和核验信息；日志与差异按需读取。具体预算见 [上下文输出策略](context-policy.md)，使用流程见 [主会话调度约定](codex-workflow.md)。
 

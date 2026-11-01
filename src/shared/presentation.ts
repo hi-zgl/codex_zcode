@@ -7,7 +7,7 @@ export const MCP_COMPACT_TARGET_BYTES = 6 * 1024;
 const MAX_CONTROL_BYTES = 2048;
 
 export const MCP_PRESENTED_METHODS = new Set([
-  'overview', 'start_worker', 'stop_worker', 'probe_worker', 'create_workspace',
+  'overview', 'get_pool_policy', 'set_pool_policy', 'start_worker', 'stop_worker', 'probe_worker', 'create_workspace',
   'dispatch_task', 'wait', 'get_result', 'get_logs', 'get_diff',
   'reconcile_task', 'resume_task', 'cancel_task', 'respond_approval',
 ]);
@@ -170,9 +170,18 @@ function workspace(value: unknown, full = false): Row {
   };
 }
 
+function poolPolicy(value: unknown): Row {
+  const source = object(value);
+  return {
+    maxConcurrentTasks: source.maxConcurrentTasks === null ? null : integer(source.maxConcurrentTasks),
+    occupiedSlots: integer(source.occupiedSlots),
+    availableSlots: source.availableSlots === null ? null : integer(source.availableSlots),
+  };
+}
+
 function overview(value: unknown): Row {
   const source = object(value);
-  const result: Row = {};
+  const result: Row = source.poolPolicy ? {poolPolicy:poolPolicy(source.poolPolicy)} : {};
   const omitted: Row = {};
   const collections = [
     ['accounts', 8, account], ['workers', 8, worker],
@@ -383,6 +392,7 @@ function project(method: string, value: unknown, args: Row): Row {
   const source = object(value);
   switch (method) {
     case 'overview': return overview(value);
+    case 'get_pool_policy': case 'set_pool_policy': return poolPolicy(value);
     case 'probe_worker': return probe(value);
     case 'start_worker': case 'stop_worker': return worker(value);
     case 'create_workspace': return workspace(value, true);
@@ -430,7 +440,7 @@ function budgetFailure(method: string, args: Row, projected?: Row): PresentedTex
     ...requestControls(args),
     ...Object.fromEntries(['taskId', 'workspaceId', 'workerId'].filter(key => typeof sourceTask[key] === 'string').map(key => [key, sourceTask[key]])),
   };
-  const mutating = ['dispatch_task', 'resume_task', 'cancel_task', 'respond_approval', 'start_worker', 'stop_worker', 'create_workspace'].includes(method);
+  const mutating = ['dispatch_task', 'resume_task', 'cancel_task', 'respond_approval', 'start_worker', 'stop_worker', 'create_workspace', 'set_pool_policy'].includes(method);
   return encode({
     error: 'OUTPUT_BUDGET_EXCEEDED', maxTextBytes: MCP_MAX_TEXT_BYTES, controls,
     message: 'The safe view cannot fit its control data. No identifier or pagination cursor was shortened.',
@@ -471,7 +481,7 @@ function safeReturnedControls(value: unknown): Row {
 }
 
 export type McpErrorKind = 'INVALID_ARGUMENT' | 'UNSUPPORTED_METHOD' | 'DAEMON_UNAVAILABLE' | 'REQUEST_FAILED' | 'PRESENTATION_FAILED'
-  | 'WORKSPACE_BUSY' | 'WORKER_BUSY' | 'REQUEST_CONFLICT' | 'NOT_FOUND' | 'WORKER_UNAVAILABLE' | 'APPROVAL_UNAVAILABLE'
+  | 'WORKSPACE_BUSY' | 'WORKER_BUSY' | 'POOL_CAPACITY_REACHED' | 'REQUEST_CONFLICT' | 'NOT_FOUND' | 'WORKER_UNAVAILABLE' | 'APPROVAL_UNAVAILABLE'
   | 'RECOVERY_REQUIRED' | 'MODEL_BUSY' | 'RATE_LIMITED' | 'AUTH_INVALID' | 'RISK_BLOCKED' | 'NATIVE_SERVER_ERROR' | 'MODEL_SELECTION_MISMATCH';
 const ERROR_MESSAGES: Record<McpErrorKind, string> = {
   INVALID_ARGUMENT: 'Invalid tool parameters. Check the tool input schema and retry.',
@@ -481,6 +491,7 @@ const ERROR_MESSAGES: Record<McpErrorKind, string> = {
   PRESENTATION_FAILED: 'The daemon replied but its safe view could not be produced. Inspect local state before repeating a mutation.',
   WORKSPACE_BUSY: 'The workspace is held by an active or uncertain task. Inspect overview and wait/reconcile that task before dispatching.',
   WORKER_BUSY: 'The worker or account already has active or uncertain work. Inspect overview and wait/reconcile the existing task.',
+  POOL_CAPACITY_REACHED: 'The pool concurrency limit is reached. Inspect get_pool_policy and wait for held tasks to finish, or explicitly update the pool policy. No task was queued.',
   REQUEST_CONFLICT: 'This request ID belongs to a different dispatch payload. Inspect the existing task before deciding whether a distinct task is needed.',
   NOT_FOUND: 'The requested task, workspace or worker was not found. Check its ID with overview or the local CLI.',
   WORKER_UNAVAILABLE: 'The worker is not ready. Inspect its local status and probe it before dispatching.',
@@ -505,6 +516,7 @@ export function classifyMcpError(value: unknown): McpErrorKind {
   if (code === 'ENOENT' || code === 'ECONNREFUSED') return 'DAEMON_UNAVAILABLE';
   if (code === 'WORKSPACE_BUSY' || /^Workspace is held by task |^Cannot change workspace lifecycle while a task/.test(message)) return 'WORKSPACE_BUSY';
   if (code === 'WORKER_BUSY' || /^Worker .+ is held by task |^Worker has an active or uncertain task|^Account is already (?:assigned|bound)|^Worker or account startup is already in progress/.test(message)) return 'WORKER_BUSY';
+  if (code === 'POOL_CAPACITY_REACHED' || /^Pool concurrency limit reached/.test(message)) return 'POOL_CAPACITY_REACHED';
   if (code === 'IDEMPOTENCY_CONFLICT' || message === 'requestId was already used with a different dispatch payload') return 'REQUEST_CONFLICT';
   if (['TASK_NOT_FOUND', 'WORKSPACE_NOT_FOUND'].includes(code) || /^(?:Task|Workspace) .+ was not found$|^Worker has no ownership record$/.test(message)) return 'NOT_FOUND';
   if (message === 'Worker not ready' || /^Worker status is not ready/.test(message)) return 'WORKER_UNAVAILABLE';
@@ -527,6 +539,7 @@ export function presentMcpError(kind: McpErrorKind, method: string, args: Row = 
   // Native exceptions may embed a prompt, raw snapshot, credentials or tool args.
   // They are deliberately never echoed, even after truncation/redaction.
   return encode({ error: kind, message: ERROR_MESSAGES[kind], ...requestControls(args),
-    ...(method === 'dispatch_task' || method === 'resume_task' ? { nextAction: 'Use overview/reconcile_task with the known IDs. Never automatically resend a task after an uncertain response.' } : {}),
+    ...(kind === 'POOL_CAPACITY_REACHED' ? { nextAction: 'Read get_pool_policy and wait for held tasks to finish. This request was not dispatched; retry with the same request_id when capacity is available.' }
+      : method === 'dispatch_task' || method === 'resume_task' ? { nextAction: 'Use overview/reconcile_task with the known IDs. Never automatically resend a task after an uncertain response.' } : {}),
   }, true);
 }

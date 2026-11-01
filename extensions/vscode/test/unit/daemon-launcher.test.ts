@@ -5,7 +5,7 @@ import { chmod, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } fro
 import { tmpdir } from 'node:os';
 import { delimiter, dirname, join } from 'node:path';
 import { HostError } from '../../src/host/client.js';
-import { findNodeExecutable, startInstalledDaemon, type DaemonLaunchOptions } from '../../src/host/daemon-launcher.js';
+import { findNodeExecutable, startInstalledDaemon, validateNode24, type DaemonLaunchOptions } from '../../src/host/daemon-launcher.js';
 
 const linuxOnly = { skip: process.platform !== 'linux' };
 const quote = (value: string): string => `'${value.replaceAll("'", "'\\''")}'`;
@@ -21,7 +21,7 @@ async function fixture(t: TestContext, version = 'v24.0.0', extraCli = '') {
   await mkdir(dirname(nodePath), { recursive: true });
   await writeFile(join(directory, 'package.json'), JSON.stringify({ name: 'zcode-pool', bin: { 'zcode-pool': './bin/zcode-pool.mjs' } }));
   await writeFile(cliPath, `import { writeFile } from 'node:fs/promises';
-await writeFile(new URL('../invocation.json', import.meta.url), JSON.stringify({ args: process.argv.slice(2), poolHome: process.env.ZCODE_POOL_HOME, cwd: process.cwd() }));
+await writeFile(new URL('../invocation.json', import.meta.url), JSON.stringify({ args: process.argv.slice(2), poolHome: process.env.ZCODE_POOL_HOME, cwd: process.cwd(), connectionFile: process.env.ZCODE_POOL_CONNECTION_FILE }));
 ${extraCli}
 `);
   await writeFile(nodePath, `#!/bin/sh
@@ -56,6 +56,26 @@ test('explicit startup uses the declared installed bin, selected pool and argume
   assert.equal(existsSync(f.options.poolHome), false, 'The launcher itself does not create or populate a pool');
 });
 
+test('Codex setup Node validation only checks the version and never starts the CLI or creates a pool', linuxOnly, async t => {
+  const f = await fixture(t);
+  await validateNode24(f.nodePath);
+  assert.equal(existsSync(f.versionMarker), true);
+  assert.equal(existsSync(f.invocation), false);
+  assert.equal(existsSync(f.options.poolHome), false);
+});
+
+test('Codex setup Node validation rejects old versions and selection changes before and after its check', linuxOnly, async t => {
+  const old = await fixture(t, 'v22.15.0');
+  await assert.rejects(validateNode24(old.nodePath), { code: 'INVALID_DAEMON_NODE' });
+  assert.equal(existsSync(old.invocation), false);
+  const f = await fixture(t);
+  await assert.rejects(validateNode24(f.nodePath, () => false), { code: 'STALE_CONNECTION' });
+  assert.equal(existsSync(f.versionMarker), false);
+  await assert.rejects(validateNode24(f.nodePath, () => !existsSync(f.versionMarker)), { code: 'STALE_CONNECTION' });
+  assert.equal(existsSync(f.versionMarker), true);
+  assert.equal(existsSync(f.invocation), false);
+});
+
 test('invalid, missing and non-executable paths never request daemon startup', linuxOnly, async t => {
   const f = await fixture(t);
   for (const key of ['poolHome', 'nodePath', 'cliPath'] as const) {
@@ -70,6 +90,20 @@ test('invalid, missing and non-executable paths never request daemon startup', l
   await assert.rejects(startInstalledDaemon({ ...f.options, cliPath: join(f.root, 'missing') }), { code: 'INVALID_DAEMON_CLI' });
   assert.equal(existsSync(f.versionMarker), false);
   assert.equal(existsSync(f.invocation), false);
+});
+
+test('a profile inherited by VS Code cannot override the explicitly selected launch pool', linuxOnly, async t => {
+  const f = await fixture(t);
+  const previous = process.env.ZCODE_POOL_CONNECTION_FILE;
+  process.env.ZCODE_POOL_CONNECTION_FILE = join(f.root, 'unrelated-pool-profile.json');
+  try { await startInstalledDaemon(f.options); }
+  finally {
+    if (previous === undefined) delete process.env.ZCODE_POOL_CONNECTION_FILE;
+    else process.env.ZCODE_POOL_CONNECTION_FILE = previous;
+  }
+  const invocation = JSON.parse(await readFile(f.invocation, 'utf8'));
+  assert.equal(invocation.poolHome, f.options.poolHome);
+  assert.equal(invocation.connectionFile, undefined);
 });
 
 test('checkout, wrong package, escaped declaration and mismatched bin are rejected before execution', linuxOnly, async t => {

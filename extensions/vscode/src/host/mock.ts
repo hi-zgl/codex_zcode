@@ -28,6 +28,8 @@ export class MockTransport implements Transport {
   readonly fixture:MockFixture;
   private disposed=false;
   private revision=100;
+  private maxConcurrentTasks:number|null=null;
+  private policy(){const occupiedSlots=Object.values(this.fixture.details).filter(t=>t.leaseHeld).length;return {maxConcurrentTasks:this.maxConcurrentTasks,occupiedSlots,availableSlots:this.maxConcurrentTasks===null?null:Math.max(0,this.maxConcurrentTasks-occupiedSlots)};}
   private readonly responseTicks=new Map<string,number>();
   failNext?:string;
   constructor(fixture:MockFixture){this.fixture=structuredClone(validateMockFixture(fixture));}
@@ -39,7 +41,9 @@ export class MockTransport implements Transport {
     const p=raw as Record<string,any>;const f=this.fixture;const task=p.task_id?f.details[p.task_id]:undefined;
     switch(method){
       case 'ui_capabilities':return f.capabilities;
-      case 'overview':return {...f.overview,tasks:Object.values(f.details).map(d=>this.compact(d))};
+      case 'overview':return {...f.overview,poolPolicy:this.policy(),tasks:Object.values(f.details).map(d=>this.compact(d))};
+      case 'get_pool_policy':return this.policy();
+      case 'set_pool_policy':{if(p.max_concurrent_tasks!==null&&(!Number.isInteger(p.max_concurrent_tasks)||p.max_concurrent_tasks<0||p.max_concurrent_tasks>64))throw new HostError('INVALID_ARGUMENT','Invalid concurrency limit');this.maxConcurrentTasks=p.max_concurrent_tasks;return this.policy();}
       case 'ui_get_task_detail':{const detail=task??Object.values(f.details).find(d=>d.requestId===p.request_id);if(!detail)throw new HostError('NOT_FOUND','The original task was not found; no dispatch was resent.');this.advance(detail);return this.envelope(detail);}
       case 'ui_list_tasks':{
         const revision=this.listRevision();const filter=p.filter??{};const marker=JSON.stringify(filter);let offset=0;
@@ -73,6 +77,7 @@ export class MockTransport implements Transport {
       case 'ui_get_quota':case 'ui_probe_quota':{const alias=method==='ui_get_quota'?p.account_id:f.overview.workers.find(w=>w.workerId===p.worker_id)?.accountAlias;if(!alias)throw new HostError('NOT_FOUND','Mock account not found.');const live=method==='ui_probe_quota';return this.envelope({accountAlias:alias,imported:{source:'imported_snapshot',accountAlias:alias,providerId:'account:zai-start-plan',observedAtMs:null,storedAtMs:null,generatedAt:{value:1793491000,unit:'unknown',atMs:null},serverTime:null,nextReset:null,unit:'unknown',total:null,used:null,remaining:0,percentage:null,authenticated:null,freshness:'unknown'},live:live?{source:'live_probe',accountAlias:alias,providerId:'account:zai-start-plan',observedAtMs:Date.now(),storedAtMs:Date.now(),generatedAt:null,serverTime:null,nextReset:null,unit:'unknown',total:100,used:20,remaining:80,percentage:null,authenticated:true,freshness:'fresh'}:null,lastProbe:{state:live?'succeeded':'never',attemptedAtMs:live?Date.now():null,errorCode:null},displayFreshnessWindowMs:120000});}
       case 'dispatch_task':{
         const prior=Object.values(f.details).find(d=>d.requestId===p.request_id);if(prior)return {task:this.compact(prior),created:false};
+        if(this.policy().availableSlots===0)throw new HostError('POOL_CAPACITY_REACHED','并发已满或新任务已暂停；等待现有任务释放占用。');
         const workspace=f.overview.workspaces.find(w=>w.workspaceId===p.workspace_id);const worker=f.overview.workers.find(w=>w.workerId===p.worker_id);if(!workspace||!worker||workspace.activeTaskId)throw new HostError('WORKSPACE_BUSY','Mock resource is held.');
         const detail=structuredClone(f.details['task-approval']!);const taskId=`task-mock-${++this.revision}`;const commandId=p.request_id;const sessionId=`mock-session-${this.revision}`;
         Object.assign(detail,{taskId,workspaceId:workspace.workspaceId,workerId:worker.workerId,workspace:structuredClone(workspace),requestId:p.request_id,status:'running',revision:this.revision,createdAtMs:f.clock+this.revision,updatedAtMs:f.clock+this.revision,leaseHeld:true,executionStopped:false,cancelRequestedAtMs:null,diagnostic:null});

@@ -1,7 +1,8 @@
 import {spawnSync} from 'node:child_process';
-import {mkdir,copyFile,watch,readFile} from 'node:fs/promises';
+import {mkdir,copyFile,watch} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
 import {build} from 'esbuild';
+import {buildBundledRuntime} from './build-runtime.mjs';
 const root=fileURLToPath(new URL('..',import.meta.url));
 const watching=process.argv.includes('--watch');
 function command(file,args){const r=spawnSync(process.execPath,[file,...args],{cwd:root,stdio:'inherit'});if(r.status!==0)throw new Error('Build check failed');}
@@ -17,6 +18,7 @@ async function compile(){
   for(const input of Object.keys(host.metafile.inputs))if(/(?:src\/(?:daemon|core|accounts|supervisor|runtime)|node:sqlite)/.test(input.replaceAll('\\','/')))throw new Error(`Forbidden host dependency: ${input}`);
   for(const input of Object.keys(webview.metafile.inputs))if(/(?:node_modules|src\/host)/.test(input.replaceAll('\\','/')))throw new Error(`Forbidden browser dependency: ${input}`);
   await copyFile(`${root}/media/styles.css`,`${root}/dist/webview/styles.css`);
+  await buildBundledRuntime();
   console.log('[zcodePool-watch] build finished');
 }
 if(!watching){await compile();}else{
@@ -24,6 +26,6 @@ if(!watching){await compile();}else{
   async function run(){if(building){rerun=true;return;}building=true;try{await compile();}catch(error){console.error(String(error));}finally{building=false;if(rerun){rerun=false;void run();}}}
   await run();
   const abort=new AbortController();
-  for(const directory of ['src','media','../../src/shared','test/fixtures'])void(async()=>{for await(const event of watch(`${root}/${directory}`,{recursive:true,signal:abort.signal})){if(event.filename){clearTimeout(debounce);debounce=setTimeout(()=>void run(),150);}}})();
+  for(const directory of ['src','media','../../src','test/fixtures'])void(async()=>{for await(const event of watch(`${root}/${directory}`,{recursive:true,signal:abort.signal})){if(event.filename){clearTimeout(debounce);debounce=setTimeout(()=>void run(),150);}}})();
   process.once('SIGINT',()=>{abort.abort();process.exit(0);});
 }

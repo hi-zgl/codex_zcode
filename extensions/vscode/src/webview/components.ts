@@ -63,10 +63,16 @@ function connectReason(snapshot: UiSnapshot): string | null {
   return snapshot.connection.supported === false || ['UNSUPPORTED_ENVIRONMENT', 'UNSUPPORTED_PLATFORM'].includes(snapshot.connection.error?.code ?? '') ? snapshot.connection.environmentReason ?? '此执行环境不受支持，请使用 Linux、Remote SSH 到 Linux 或 WSL。' : null;
 }
 function connectionBusy(ctx: RenderContext, snapshot: UiSnapshot): boolean {
-  return snapshot.connection.state === 'connecting' || ['connect', 'daemon.start', 'connection.configure'].some(action => ctx.state.pending.has(action));
+  return snapshot.connection.state === 'connecting' || ['connect', 'daemon.start', 'connection.configure', 'connection.codexSetup'].some(action => ctx.state.pending.has(action));
 }
 function startDaemonReason(snapshot: UiSnapshot): string | null {
   return connectReason(snapshot) ?? (!snapshot.connection.trusted ? '请先在 VS Code 中信任此工作区。' : null);
+}
+function codexSetupReason(snapshot: UiSnapshot): string | null {
+  return connectReason(snapshot) ?? (snapshot.connection.mode === 'mock' ? '演示模式不生成真实 Codex MCP 配置。' : !snapshot.connection.trusted ? '请先在 VS Code 中信任此工作区。' : null);
+}
+function codexSetup(ctx: RenderContext, snapshot: UiSnapshot, primary = false): HTMLElement {
+  return actionWithReason(ctx, '连接 Codex / 生成 MCP 配置', 'connection.codexSetup', {}, codexSetupReason(snapshot) ?? (connectionBusy(ctx, snapshot) && !ctx.state.pending.has('connection.codexSetup') ? '请等待当前连接操作完成。' : null), primary);
 }
 function resourceState(value: string): string {
   return ({ ready: '就绪', starting: '启动中', stopped: '已停止', active: '可用', archived: '已归档', available: '可用', unknown: '未确认', blocked: '受阻', invalid: '无效', cooling: '冷却中', error: '异常' } as Record<string, string>)[value] ?? value;
@@ -92,7 +98,7 @@ export function renderApp(ctx: RenderContext): HTMLElement {
 }
 function renderHeader(ctx: RenderContext): HTMLElement {
   const skip = el('a', 'skip-link', '跳到主要内容'); skip.href = '#main-content';
-  return el('header', 'app-header', skip, el('div', 'brand', el('span', 'brand-mark', 'Z'), el('strong', '', 'ZCODE')), el('span', 'header-description', '任务工作台'), ctx.state.snapshot?.connection.mode === 'mock' ? badge('演示模式 · 模拟数据', 'demo') : badge('本地 / 远程服务', 'quiet'));
+  return el('header', 'app-header', skip, el('div', 'brand', el('span', 'brand-mark', 'Z'), el('strong', '', 'ZCODE')), el('span', 'header-description', 'Codex 调度 · 任务监控'), ctx.state.snapshot?.connection.mode === 'mock' ? badge('演示模式 · 模拟数据', 'demo') : badge('本地 / 远程服务', 'quiet'));
 }
 function renderConnection(ctx: RenderContext, snapshot: UiSnapshot): HTMLElement {
   const connection = snapshot.connection;
@@ -112,15 +118,15 @@ function renderConnection(ctx: RenderContext, snapshot: UiSnapshot): HTMLElement
 }
 function renderNavigation(ctx: RenderContext): HTMLElement {
   const node = el('nav', 'page-nav'); node.setAttribute('aria-label', '工作台页面');
-  for (const [id, label] of [['tasks', '任务'], ['resources', '资源'], ['settings', '设置']]) {
+  for (const [id, label] of [['tasks', '任务监控'], ['resources', '额度与资源'], ['settings', '设置']]) {
     const b = button(ctx, label, 'page', { page: id }); if (ctx.state.page === id || (id === 'tasks' && ctx.state.page === 'compose')) b.setAttribute('aria-current', 'page'); node.append(b);
   }
   return node;
 }
 function renderWelcome(ctx: RenderContext, snapshot: UiSnapshot): HTMLElement {
-  const actions = el('div', 'inline-actions', button(ctx, '连接', 'connect', {}, { primary: true, busy: connectionBusy(ctx, snapshot), reason: connectReason(snapshot) }), button(ctx, '选择连接目录', 'connection.configure', {}, { busy: ctx.state.pending.has('connection.configure'), reason: connectionBusy(ctx, snapshot) ? '请等待当前连接操作完成。' : null }));
+  const actions = el('div', 'inline-actions', codexSetup(ctx, snapshot, true), button(ctx, '连接监控', 'connect', {}, { busy: connectionBusy(ctx, snapshot), reason: connectReason(snapshot) }), button(ctx, '选择连接目录', 'connection.configure', {}, { busy: ctx.state.pending.has('connection.configure'), reason: connectionBusy(ctx, snapshot) ? '请等待当前连接操作完成。' : null }));
   if (snapshot.connection.mode === 'real' && !['connected', 'legacy-readonly'].includes(snapshot.connection.state)) actions.append(actionWithReason(ctx, '启动后台并连接', 'daemon.start', {}, startDaemonReason(snapshot) ?? (connectionBusy(ctx, snapshot) ? '请等待当前连接操作完成。' : null), false));
-  return el('div', 'welcome', heading('ZCODE / 开始', '连接任务工作台', '查看任务进度、处理审批、检查交付。'), el('div', 'welcome-card', el('span', 'welcome-symbol', '⌁'), el('h2', '', snapshot.connection.error ? '暂时无法连接' : '选择目录，连接后台服务'), el('p', '', '连接目录保存任务、账号与执行器状态。后台服务运行任务，关闭工作台后任务会继续。'), kv([['运行环境', snapshot.connection.host], ['连接目录', snapshot.connection.poolHome], ['工作区信任', snapshot.connection.trusted ? '已信任' : '受限模式 · 仅可查看']]), actions, el('p', 'field-hint', snapshot.connection.mode === 'mock' ? '演示模式使用模拟数据。' : '后台尚未运行时，可启动已安装的服务并连接。执行器在“资源”页单独启动。'), button(ctx, '连接帮助', 'guidance.open', { topic: 'connection' })), messageFor(ctx, 'connect'), messageFor(ctx, 'connection.configure'), messageFor(ctx, 'daemon.start'));
+  return el('div', 'welcome', heading('ZCODE / 开始', '连接任务工作台', '在 Codex 中描述目标并调度任务，在这里监控进度、额度与交付。'), el('div', 'welcome-card', el('span', 'welcome-symbol', '⌁'), el('h2', '', snapshot.connection.error ? '暂时无法连接' : '让 Codex 使用同一后台'), el('p', '', '先生成 MCP 配置并在 Codex 中启用。工作台与 Codex 共享当前连接目录的账号、任务和并发设置。'), kv([['运行环境', snapshot.connection.host], ['连接目录', snapshot.connection.poolHome], ['工作区信任', snapshot.connection.trusted ? '已信任' : '受限模式 · 仅可查看']]), actions, el('p', 'field-hint', snapshot.connection.mode === 'mock' ? '演示模式使用模拟数据，可点击“连接监控”查看。' : '生成配置不会自动连接 Codex；启用配置后需重新连接 Codex。后台负责运行任务，关闭工作台后任务继续。'), button(ctx, '连接帮助', 'guidance.open', { topic: 'connection' })), messageFor(ctx, 'connect'), messageFor(ctx, 'connection.configure'), messageFor(ctx, 'connection.codexSetup'), messageFor(ctx, 'daemon.start'));
 }
 function renderActionFeedback(ctx: RenderContext): HTMLElement | null {
   const items = ctx.state.snapshot?.actions.filter(action => action.phase !== 'succeeded' || action.requestId) ?? [];
@@ -131,14 +137,16 @@ function renderTasks(ctx: RenderContext, snapshot: UiSnapshot): HTMLElement {
   const filtered = filterTasks(snapshot, ctx.state.filters);
   const attention = snapshot.tasks.filter(task => needsAttention(task, snapshot)).length;
   const active = snapshot.tasks.filter(isActive).length;
-  const page = el('div', 'task-page', heading('ZCODE / 任务', '任务工作台', '查看进度、处理审批、检查交付。', actionWithReason(ctx, '新任务', 'compose.open', {}, mutationReason(snapshot, 'dispatchTask'), true)));
+  const advanced = el('details', 'advanced-actions', el('summary', '', '高级操作'), actionWithReason(ctx, '手动派发任务', 'compose.open', {}, mutationReason(snapshot, 'dispatchTask'))); advanced.dataset.details = 'task-advanced';
+  const page = el('div', 'task-page', heading('ZCODE / 任务', '任务监控', '由 Codex 拆分、派发和验收任务；在这里查看进度、处理必要审批、检查交付。', el('div', 'page-actions', codexSetup(ctx, snapshot, true), advanced)));
+  page.append(messageFor(ctx, 'connection.codexSetup') ?? '');
   page.append(el('div', 'metrics', metric(ctx, '需要处理', attention, 'attention', '审批、阻塞、失败及待审阅交付'), metric(ctx, '执行中', active, 'active', '包括派发、执行与核验'), el('div', 'metric', el('span', 'metric-number', String(snapshot.tasks.length).padStart(2, '0')), el('div', '', el('strong', '', '已载入任务'), el('p', '', snapshot.scope === 'recent_50_loaded' ? '最近创建 50 条窗口 · 历史总数未知' : `当前匹配范围 · 总数 ${snapshot.total ?? '未知'}`)))));
   page.append(renderFilters(ctx, snapshot));
   const task = selectedTask(ctx.state);
   const taskList = el('section', 'task-list-panel'); taskList.setAttribute('aria-label', '任务列表');
   taskList.append(el('div', 'panel-title', el('h2', '', '已载入任务'), el('span', 'muted', '最近创建优先')));
   const list = el('div', 'task-list'); list.dataset.scroll = 'task-list';
-  if (!filtered.length) list.append(empty('当前列表没有匹配任务', snapshot.scope === 'recent_50_loaded' ? '最近 50 条中没有匹配项，可继续加载历史任务。' : '可清除筛选后查看其他任务。', button(ctx, '清除筛选 · 全部项目', 'filters.clear')));
+  if (!filtered.length) list.append(empty('当前列表没有匹配任务', snapshot.tasks.length === 0 ? '在 Codex 中描述任务目标，派发后的任务会显示在这里。也可通过高级操作手动派发。' : snapshot.scope === 'recent_50_loaded' ? '最近 50 条中没有匹配项，可继续加载历史任务。' : '可清除筛选后查看其他任务。', button(ctx, '清除筛选 · 全部项目', 'filters.clear')));
   for (const item of filtered) {
     const workspace = snapshot.resources.workspaces.find(ws => ws.workspaceId === item.workspaceId);
     const row = button(ctx, '', 'task.select', { taskId: item.taskId }, { className: `task-row ${item.taskId === snapshot.selectedTaskId ? 'selected' : ''}` });
@@ -348,8 +356,8 @@ function renderEvents(ctx: RenderContext, task: UiTask): HTMLElement {
   node.append(messageFor(ctx, `task:${task.taskId}:events`) ?? ''); return node;
 }
 function renderResources(ctx: RenderContext, snapshot: UiSnapshot): HTMLElement {
-  const node = el('div', 'resources-page', heading('ZCODE / 资源', '资源管理', '管理当前连接目录中的账号、执行器与任务目录。这里显示全部项目的资源。', button(ctx, '刷新资源', 'resources.refresh', {}, { busy: ctx.state.pending.has('resources.refresh') })));
-  node.append(section('账号', el('p', 'field-hint', `从 ${snapshot.connection.host} 选择 1–100 个 OAuth JSON 文件。同名账号可能覆盖已有记录。`), actionWithReason(ctx, '导入账号文件', 'accounts.import', {}, mutationReason(snapshot, 'importAccounts'), true), ctx.state.importSummary && notice(ctx.state.importSummary), !snapshot.resources.accounts.length && empty('尚无账号', '导入账号后，可为它启动执行器。已有历史任务仍可查看。'), ...snapshot.resources.accounts.map(account => renderAccount(ctx, snapshot, account.alias))));
+  const node = el('div', 'resources-page', heading('ZCODE / 额度', '额度与资源', '查看账号额度与可用资源，必要时人工调整；Codex 使用同一连接目录。', button(ctx, '刷新资源', 'resources.refresh', {}, { busy: ctx.state.pending.has('resources.refresh') })));
+  node.append(section('账号与额度', el('p', 'field-hint', `展开账号可读取额度快照；在线查询通过下方执行器发起。从 ${snapshot.connection.host} 导入 1–100 个 OAuth JSON 文件，同名账号可能覆盖已有记录。`), actionWithReason(ctx, '导入账号文件', 'accounts.import', {}, mutationReason(snapshot, 'importAccounts')), ctx.state.importSummary && notice(ctx.state.importSummary), !snapshot.resources.accounts.length && empty('尚无账号', '导入账号后，可为它启动执行器。已有历史任务仍可查看。'), ...snapshot.resources.accounts.map(account => renderAccount(ctx, snapshot, account.alias))));
   const workerId = input(ctx.state.workerId, 'workerId'); workerId.placeholder = '例如 wrk-01';
   const accountSelect = select(ctx.state.workerAccount, 'workerAccount', [['', '请选择账号'], ...snapshot.resources.accounts.map(account => [account.alias, `${account.alias} · ${account.provider} · ${resourceState(account.health)}`] as [string, string])]);
   const selectedAccount = snapshot.resources.accounts.find(account => account.alias === ctx.state.workerAccount);
@@ -400,7 +408,7 @@ function renderComposer(ctx: RenderContext, snapshot: UiSnapshot): HTMLElement {
   const workspace = snapshot.resources.workspaces.find(item => item.workspaceId === draft.workspaceId);
   const worker = snapshot.resources.workers.find(item => item.workerId === draft.workerId);
   const account = snapshot.resources.accounts.find(item => item.alias === worker?.accountAlias);
-  const node = el('div', 'composer-page', heading('ZCODE / 新任务', '新任务', '选择任务目录与执行器，写下你要完成的工作。草稿在关闭或重载窗口后可能丢失。', button(ctx, '返回任务列表', 'page', { page: 'tasks' })));
+  const node = el('div', 'composer-page', heading('ZCODE / 高级操作', '手动派发任务', '直接指定任务目录与执行器。日常可在 Codex 中描述目标，由 Codex 调度。草稿在关闭或重载窗口后可能丢失。', button(ctx, '返回任务列表', 'page', { page: 'tasks' })));
   node.append(el('p', 'field-hint', '任务目录是代码修改的位置；执行器决定使用哪个账号。'));
   const form = el('form', 'composer-form'); form.noValidate = true; form.addEventListener('submit', event => { event.preventDefault(); ctx.action('dispatch'); });
   form.append(el('div', 'form-grid', field('任务目录', select(draft.workspaceId, 'draft.workspaceId', [['', '请选择任务目录'], ...snapshot.resources.workspaces.map(item => [item.workspaceId, `${item.workspaceId} · ${item.branch}${item.activeTaskId ? ' · 已占用' : ''}`] as [string, string])]), undefined, ctx.state.validation.workspaceId), field('执行器', select(draft.workerId, 'draft.workerId', [['', '请选择执行器'], ...snapshot.resources.workers.map(item => [item.workerId, `${item.workerId} · ${item.accountAlias} · ${resourceState(item.state)}`] as [string, string])]), undefined, ctx.state.validation.workerId)));
@@ -418,15 +426,27 @@ function renderComposer(ctx: RenderContext, snapshot: UiSnapshot): HTMLElement {
   }
   if (!draft.verifyCommands.length) commands.append(code('git diff --check', '未配置命令时使用此默认核验'));
   commands.append(button(ctx, '添加核验命令', 'verify.add', {}, { reason: draft.verifyCommands.length >= 10 ? '已达 10 项上限。' : null })); form.append(commands);
-  const reason = mutationReason(snapshot, 'dispatchTask') ?? (ctx.state.submittedDraftToken === draft.submitToken ? '此草稿已提交，保留原请求身份。请检查回执或查询原请求；建立独立任务请返回列表后点击“新任务”。' : null);
+  const reason = mutationReason(snapshot, 'dispatchTask') ?? (ctx.state.submittedDraftToken === draft.submitToken ? '此草稿已提交，保留原请求身份。请检查回执或查询原请求；建立独立任务请返回列表使用“高级操作”。' : null);
   form.append(actionWithReason(ctx, '提交任务', 'dispatch', {}, reason, true), messageFor(ctx, 'dispatch') ?? '', el('p', 'field-hint', '提交后可在任务列表查看进度。若结果待确认，请通过回执查询原请求。'));
   node.append(form); return node;
 }
 function renderSettings(ctx: RenderContext, snapshot: UiSnapshot): HTMLElement {
   const connection = snapshot.connection; const interval = input(ctx.state.settingsInterval, 'settingsInterval', 'number'); interval.min = '15'; interval.max = '300';
   const valid = Number.isInteger(Number(ctx.state.settingsInterval)) && Number(ctx.state.settingsInterval) >= 15 && Number(ctx.state.settingsInterval) <= 300;
+  const concurrency = input(ctx.state.settingsConcurrency, 'settingsConcurrency', 'number'); concurrency.min = '0'; concurrency.max = '64'; concurrency.step = '1'; concurrency.placeholder = '不限制';
+  concurrency.disabled = ctx.state.pending.has('pool.policy.set');
+  const rawConcurrency = ctx.state.settingsConcurrency.trim(); const numericConcurrency = Number(rawConcurrency);
+  const validConcurrency = rawConcurrency === '' || (Number.isInteger(numericConcurrency) && numericConcurrency >= 0 && numericConcurrency <= 64);
+  const policy = snapshot.poolPolicy;
+  const policyReason = mutationReason(snapshot, 'poolPolicy') ?? (!policy ? '并发设置尚未读取，请刷新连接。' : !validConcurrency ? '请输入 0–64 的整数，或留空不限制。' : null);
   const diagnostic = { host: connection.host, pool: connection.poolHome, mode: connection.mode, state: connection.state, storeId: connection.storeId, instanceId: connection.instanceId, daemonVersion: connection.daemonVersion, error: connection.error?.code, taskId: snapshot.selectedTaskId, revision: snapshot.detail?.revision };
   const diagnostics = el('details', 'settings-diagnostics', el('summary', '', '高级：诊断信息'), el('p', 'field-hint', '复制内容包括连接身份、状态、版本与错误码，以及当前任务 ID。审批正文、提示词和凭据不会附在诊断中。'), code(JSON.stringify(diagnostic, null, 2), '待复制的脱敏诊断预览'), button(ctx, '复制脱敏诊断', 'diagnostics.copy'), messageFor(ctx, 'diagnostics.copy'));
   diagnostics.dataset.details = 'settings-diagnostics';
-  return el('div', 'settings-page', heading('ZCODE / 设置', '设置', '更改当前运行环境的连接目录和刷新频率。'), section('连接', kv([['运行环境', connection.host], ['连接目录', connection.poolHome], ['连接模式', connection.mode === 'mock' ? '演示（模拟数据）' : '后台服务'], ['工作区信任', connection.trusted ? '已信任' : '受限模式']]), el('div', 'inline-actions', button(ctx, '选择连接目录', 'connection.configure', {}, { busy: ctx.state.pending.has('connection.configure') }), button(ctx, '更多 VS Code 设置', 'settings.open'), button(ctx, '连接帮助', 'guidance.open', { topic: 'connection' })), el('p', 'field-hint', '切换目录后需重新连接。切换远程计算环境请使用 VS Code Remote 窗口。'), messageFor(ctx, 'connection.configure')), section('自动刷新', field('刷新间隔（秒）', interval, '默认 30 秒，范围 15–300 秒；工作台可见时自动发现新任务。', ctx.state.validation.settingsInterval), actionWithReason(ctx, '保存刷新间隔', 'settings.save', {}, valid ? null : '请输入 15–300 的整数。', true), messageFor(ctx, 'settings.save')), diagnostics);
+  return el('div', 'settings-page', heading('ZCODE / 设置', '设置', 'Codex 与工作台共享连接目录和并发上限。'),
+    section('连接 Codex', el('p', 'field-hint', '生成当前连接目录的 MCP 配置，在 Codex 中启用后重新连接 Codex。配置生成不代表 Codex 已连接。'), codexSetup(ctx, snapshot, true), messageFor(ctx, 'connection.codexSetup')),
+    section('并发任务', policy && kv([['当前上限', policy.maxConcurrentTasks === null ? '不限制' : policy.maxConcurrentTasks === 0 ? '0 · 暂停新派发' : policy.maxConcurrentTasks], ['占用槽位', policy.occupiedSlots], ['可用槽位', policy.availableSlots === null ? '不限制' : policy.availableSlots]]),
+      field('并发任务上限', concurrency, '0–64；留空不限制。设为 0 暂停新派发，降低上限不会停止已有任务。', ctx.state.validation.settingsConcurrency),
+      actionWithReason(ctx, '保存并发上限', 'pool.policy.set', {}, policyReason, true), messageFor(ctx, 'pool.policy.set')),
+    section('后台连接', kv([['运行环境', connection.host], ['连接目录', connection.poolHome], ['连接模式', connection.mode === 'mock' ? '演示（模拟数据）' : '后台服务'], ['工作区信任', connection.trusted ? '已信任' : '受限模式']]), el('div', 'inline-actions', button(ctx, '选择连接目录', 'connection.configure', {}, { busy: ctx.state.pending.has('connection.configure') }), button(ctx, '更多 VS Code 设置', 'settings.open'), button(ctx, '连接帮助', 'guidance.open', { topic: 'connection' })), el('p', 'field-hint', '切换目录后面板需重新连接；Codex 后续调用使用新目录，原目录任务保留。切换远程计算环境请使用 VS Code Remote 窗口。'), messageFor(ctx, 'connection.configure')),
+    section('自动刷新', field('刷新间隔（秒）', interval, '默认 30 秒，范围 15–300 秒；工作台可见时自动发现新任务。', ctx.state.validation.settingsInterval), actionWithReason(ctx, '保存刷新间隔', 'settings.save', {}, valid ? null : '请输入 15–300 的整数。', true), messageFor(ctx, 'settings.save')), diagnostics);
 }
