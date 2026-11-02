@@ -1,5 +1,5 @@
 import {spawnSync} from 'node:child_process';
-import {mkdir,copyFile,watch} from 'node:fs/promises';
+import {mkdir,watch} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
 import {build} from 'esbuild';
 import {buildBundledRuntime} from './build-runtime.mjs';
@@ -14,10 +14,10 @@ async function compile(){
   const [host,webview]=await Promise.all([
     build({absWorkingDir:root,entryPoints:['src/extension.ts'],bundle:true,platform:'node',format:'cjs',target:'node20',outfile:'dist/host/extension.cjs',external:['vscode'],alias:{zod:`${root}/node_modules/zod`},sourcemap:true,metafile:true}),
     build({absWorkingDir:root,entryPoints:['src/webview/main.ts'],bundle:true,platform:'browser',format:'iife',target:'chrome120',outfile:'dist/webview/main.js',sourcemap:true,metafile:true}),
+    build({absWorkingDir:root,entryPoints:['media/styles/index.css'],bundle:true,outfile:'dist/webview/styles.css'}),
   ]);
   for(const input of Object.keys(host.metafile.inputs))if(/(?:src\/(?:daemon|core|accounts|supervisor|runtime)|node:sqlite)/.test(input.replaceAll('\\','/')))throw new Error(`Forbidden host dependency: ${input}`);
   for(const input of Object.keys(webview.metafile.inputs))if(/(?:node_modules|src\/host)/.test(input.replaceAll('\\','/')))throw new Error(`Forbidden browser dependency: ${input}`);
-  await copyFile(`${root}/media/styles.css`,`${root}/dist/webview/styles.css`);
   await buildBundledRuntime();
   console.log('[zcodePool-watch] build finished');
 }

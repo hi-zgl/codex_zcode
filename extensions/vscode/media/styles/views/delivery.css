@@ -1,0 +1,228 @@
+/* Delivery Summary & Blockers */
+.delivery-summary {
+  white-space: pre-wrap;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+  line-height: 1.6;
+}
+
+.blockers {
+  color: var(--warning);
+  padding-left: 20px;
+  font-size: 12px;
+}
+
+/* Verification Terminal Receipt */
+.verification-row {
+  border-left: 2px solid var(--line);
+  padding-left: 12px;
+  margin: 15px 0;
+}
+
+.verification-row.terminal-receipt {
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--line-bright, #555);
+  border-radius: var(--radius-lg);
+  padding: 14px 16px;
+  margin: 14px 0;
+  background: var(--vscode-textCodeBlock-background, #16191a);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.22), var(--shadow-xs);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.verification-row.terminal-receipt:hover {
+  border-color: var(--line-bright, var(--line));
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.22), var(--shadow-sm);
+}
+
+.verification-row.terminal-receipt.receipt-success {
+  border-left-color: var(--success);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.2), 0 0 12px var(--success-glow);
+}
+
+.verification-row.terminal-receipt.receipt-failed {
+  border-left-color: var(--danger);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.2), 0 0 12px var(--danger-glow);
+}
+
+.terminal-cmd-wrap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.terminal-prompt {
+  color: var(--accent);
+  font-family: var(--mono);
+  font-weight: 700;
+  font-size: 13px;
+  line-height: 1;
+  user-select: none;
+  opacity: 0.95;
+  flex-shrink: 0;
+}
+
+.terminal-cmd {
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text);
+  overflow-wrap: anywhere;
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+  line-height: 1.45;
+}
+
+.verification-row.terminal-receipt .code-block {
+  margin-top: 10px;
+  background: rgba(0, 0, 0, 0.32);
+  border: 1px solid var(--line-subtle, rgba(255, 255, 255, 0.08));
+  border-radius: var(--radius-sm);
+  box-shadow: inset 0 1px 4px rgba(0, 0, 0, 0.35);
+}
+
+/* Artifact Files & Diff Syntax Colors */
+.artifact-file {
+  padding: 15px 18px;
+  border: 1px solid var(--line);
+  border-left: 3.5px solid var(--line);
+  border-radius: var(--radius-lg);
+  margin: 12px 0;
+  background: var(--surface-card, var(--surface-raised));
+  box-shadow: var(--shadow-xs);
+  transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1), border-color 0.15s ease, box-shadow 0.2s cubic-bezier(0.16, 1, 0.3, 1), background 0.15s ease;
+  position: relative;
+}
+
+.artifact-file:hover {
+  border-color: var(--line-bright, var(--line));
+  box-shadow: var(--shadow-md);
+  transform: translateY(-1px);
+}
+
+.artifact-file[data-change="added"],
+.artifact-file.file-change-added {
+  border-left-color: var(--success);
+  background: linear-gradient(90deg, var(--success-bg) 0%, var(--surface-card, var(--surface-raised)) 42%);
+}
+
+.artifact-file[data-change="modified"],
+.artifact-file.file-change-modified {
+  border-left-color: var(--warning);
+  background: linear-gradient(90deg, var(--warning-bg) 0%, var(--surface-card, var(--surface-raised)) 42%);
+}
+
+.artifact-file[data-change="deleted"],
+.artifact-file.file-change-deleted {
+  border-left-color: var(--danger);
+  background: linear-gradient(90deg, var(--danger-bg) 0%, var(--surface-card, var(--surface-raised)) 42%);
+}
+
+.artifact-file[data-change="renamed"],
+.artifact-file.file-change-renamed {
+  border-left-color: var(--info);
+  background: linear-gradient(90deg, var(--info-bg) 0%, var(--surface-card, var(--surface-raised)) 42%);
+}
+
+.artifact-file[data-change="mode_changed"],
+.artifact-file.file-change-mode_changed,
+.artifact-file[data-change="type_changed"],
+.artifact-file.file-change-type_changed {
+  border-left-color: var(--warning);
+  background: linear-gradient(90deg, var(--warning-bg) 0%, var(--surface-card, var(--surface-raised)) 42%);
+}
+
+.artifact-file[data-change="untracked"],
+.artifact-file.file-change-untracked {
+  border-left-color: var(--muted);
+  background: linear-gradient(90deg, var(--line-subtle) 0%, var(--surface-card, var(--surface-raised)) 42%);
+}
+
+.file-path-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.file-path-wrap .file-icon {
+  color: var(--muted);
+  flex-shrink: 0;
+}
+
+.artifact-file[data-change="added"] .file-icon { color: var(--success); }
+.artifact-file[data-change="modified"] .file-icon,
+.artifact-file[data-change="mode_changed"] .file-icon,
+.artifact-file[data-change="type_changed"] .file-icon { color: var(--warning); }
+.artifact-file[data-change="deleted"] .file-icon { color: var(--danger); }
+.artifact-file[data-change="renamed"] .file-icon { color: var(--info); }
+
+.file-path {
+  overflow-wrap: anywhere;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1.45;
+  letter-spacing: -0.01em;
+  color: var(--text);
+}
+
+.change-symbol {
+  font-family: var(--mono);
+  font-weight: 700;
+  font-size: 13px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 12px;
+  text-align: center;
+}
+
+.badge[data-change="added"] .change-symbol,
+.file-change-added .change-symbol {
+  color: var(--success);
+}
+
+.badge[data-change="modified"] .change-symbol,
+.badge[data-change="mode_changed"] .change-symbol,
+.badge[data-change="type_changed"] .change-symbol,
+.file-change-modified .change-symbol,
+.file-change-mode_changed .change-symbol,
+.file-change-type_changed .change-symbol {
+  color: var(--warning);
+}
+
+.badge[data-change="deleted"] .change-symbol,
+.file-change-deleted .change-symbol {
+  color: var(--danger);
+}
+
+.badge[data-change="renamed"] .change-symbol,
+.file-change-renamed .change-symbol {
+  color: var(--info);
+}
+
+.artifact-file .inline-actions {
+  margin-top: 9px;
+}
+
+.artifact-file .metadata {
+  gap: 6px 18px;
+  margin: 10px 0;
+}
+
+.artifact-file .metadata dt {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.artifact-file .metadata dd {
+  font-size: 11px;
+  font-family: var(--mono);
+  line-height: 1.45;
+  word-break: break-all;
+  overflow-wrap: anywhere;
+}

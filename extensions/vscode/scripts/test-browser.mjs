@@ -22,7 +22,7 @@ const fixture = await loadMockFixture(join(root, 'test/fixtures/pool-demo.json')
 for (const review of Object.values(fixture.reviews)) review.expiresAtMs = Date.now() + 300_000;
 const files = {
   '/main.js': ['text/javascript', await readFile(join(output, 'webview.js'))],
-  '/styles.css': ['text/css', await readFile(join(root, 'media/styles.css'))],
+  '/styles.css': ['text/css', await readFile(join(root, 'dist/webview/styles.css'))],
   '/theme.css': ['text/css', `
   :root {--vscode-font-family:system-ui,sans-serif;--vscode-font-size:13px;--vscode-editor-font-family:monospace;--vscode-focusBorder:#f3ad4e;--vscode-button-background:#bf7e26;--vscode-button-foreground:#fff;--vscode-button-hoverBackground:#aa7020;--vscode-button-secondaryBackground:#3a3a3a;--vscode-button-secondaryForeground:#fff;--vscode-errorForeground:#f48771;--vscode-testing-iconPassed:#89d185;--vscode-descriptionForeground:#aaa;--vscode-panel-border:#3b3b3b;--vscode-input-border:#4d4d4d;--vscode-input-background:#252526;--vscode-input-foreground:#eee;--vscode-editor-background:#1e1e1e;--vscode-editor-foreground:#ddd;--vscode-foreground:#ddd;--vscode-sideBar-background:#252526;--vscode-textCodeBlock-background:#171717;--vscode-list-hoverBackground:#2a2d2e;--vscode-list-activeSelectionBackground:#3c3e40;--vscode-textLink-foreground:#dfac6a;}
   :root.vscode-light {--vscode-editor-background:#fff;--vscode-editor-foreground:#222;--vscode-foreground:#222;--vscode-sideBar-background:#f3f3f3;--vscode-descriptionForeground:#555;--vscode-panel-border:#d6d6d6;--vscode-input-background:#fff;--vscode-input-foreground:#222;--vscode-input-border:#aaa;--vscode-textCodeBlock-background:#f1f1f1;--vscode-list-hoverBackground:#eee;--vscode-list-activeSelectionBackground:#dceaf5;--vscode-button-secondaryBackground:#ddd;--vscode-button-secondaryForeground:#222;--vscode-textLink-foreground:#805000;}
@@ -81,16 +81,24 @@ const waitState = async predicate => {
   throw new Error('Host state condition timed out');
 };
 async function checkLayout(name) {
-  for (const width of [280, 320, 360, 760, 1280]) {
+  for (const width of [280, 320, 360, 500, 650, 760, 1280, 1920, 2560]) {
     await page.setViewportSize({ width, height: 900 });
     const geometry = await page.evaluate(() => ({ width: innerWidth, scroll: document.documentElement.scrollWidth,
       clipped: [...document.querySelectorAll('button,input,select,textarea')].flatMap(element => {
         const r = element.getBoundingClientRect();
         return r.width > 0 && (r.left < -2 || r.right > innerWidth + 2) ? [element.getAttribute('aria-label') || element.textContent || element.tagName] : [];
       }),
+      smallFonts: [...document.querySelectorAll('#app *')].flatMap(element => {
+        if (element.classList.contains('sr-only') || element.tagName === ' SVG' || element.closest('svg')) return [];
+        const r = element.getBoundingClientRect();
+        if (r.width === 0 || r.height === 0) return [];
+        const size = parseFloat(getComputedStyle(element).fontSize);
+        return size < 11 ? [`${element.tagName}.${element.className}:${size}px`] : [];
+      }),
     }));
     assert.ok(geometry.scroll <= geometry.width + 2, `${name}/${width} horizontal overflow: ${JSON.stringify(geometry)}`);
     assert.deepEqual(geometry.clipped, [], `${name}/${width} controls outside viewport`);
+    assert.deepEqual(geometry.smallFonts, [], `${name}/${width} elements with font-size < 11px`);
     if (width === 320) await page.screenshot({ path: join(output, `${name}-320.png`), fullPage: true });
   }
 }
@@ -113,7 +121,7 @@ try {
     await checkLayout(theme);
     await page.screenshot({ path: join(output, `${theme}-tasks.png`), fullPage: true });
   }
-  report.push('Task list geometry: 280/320/360/760/1280 px, dark/light/high contrast');
+  report.push('Task list geometry: 280/320/360/500/650/760/1280 px, dark/light/high contrast');
   await page.evaluate(() => { document.body.className = 'vscode-dark'; document.documentElement.className = 'vscode-dark'; });
   await page.setViewportSize({ width: 1280, height: 900 });
 
@@ -127,6 +135,8 @@ try {
   const opened = nativeCalls.find(call => call.action === 'diff');
   assert.ok(typeof opened.base === 'string' && typeof opened.final === 'string');
   assert.notEqual(opened.base, opened.final);
+  await action('patch.read').click();
+  await page.locator('.diff-block .diff-line.diff-add').first().waitFor();
   await page.screenshot({ path: join(output, 'delivery.png'), fullPage: true });
   await checkLayout('delivery');
   report.push('Immutable file manifest and original Host native-diff content reads');
@@ -186,7 +196,7 @@ try {
   await page.keyboard.press('Tab');
   const focused = await page.evaluate(() => ({ tag: document.activeElement?.tagName, label: document.activeElement?.getAttribute('aria-label') || document.activeElement?.textContent || '' }));
   assert.ok(focused.tag && !['BODY', 'HTML'].includes(focused.tag));
-  report.push('Delivery, resources, approval and composer geometry at all five widths; keyboard focus retained');
+  report.push('Delivery, resources, approval and composer geometry across all responsive widths; keyboard focus retained');
 
   const availableWorkspace = service.snapshot().resources.workspaces.find(workspace => !workspace.activeTaskId);
   const availableWorker = service.snapshot().resources.workers.find(worker => worker.state === 'ready' && !worker.leaseTaskIds.length);

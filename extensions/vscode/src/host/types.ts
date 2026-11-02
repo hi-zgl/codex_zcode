@@ -41,4 +41,4 @@ export interface UiSnapshot {
   overviewIntervalSeconds: number; notice: string | null;
 }
 export type HostPush = { v: 1; type: 'state'; generation: number; data: UiSnapshot };
-export type HostResponse = { v: 1; id: string; generation: number } & ({ ok: true; data: any } | { ok: false; error: UiError });
+export type HostResponse<T = unknown> = { v: 1; id: string; generation: number } & ({ ok: true; data: T } | { ok: false; error: UiError });

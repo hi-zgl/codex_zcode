@@ -390,6 +390,21 @@ test('pending disappearance preserves an unattributed receipt and clears complet
   assert.match(entry.error!, /无法确认采用/);
   s.approvals.stateKnown = false; applySnapshot(state, s);
   assert.match(approvalDisabled(state, entry, 'decline')!, /归属未知/);
+
+  s.actions = [{ key: 'dispatch:req-toast', phase: 'succeeded', message: 'Task dispatch was acknowledged.', requestId: 'req-toast', taskId: 'task-complete' }];
+  applySnapshot(state, s);
+  const toastDom = renderApp({ state, action: (name, data) => { if (name === 'dismiss-action-receipt') state.dismissedActions.add(data?.key ?? ''); } });
+  const receipt = toastDom.querySelector('.action-receipt.succeeded');
+  assert.ok(receipt);
+  assert.equal(receipt.getAttribute('role'), 'status');
+  assert.match(receipt.querySelector('strong')!.textContent!, /已收到回执/);
+  assert.match(receipt.querySelector('code')!.textContent!, /request: req-toast/);
+  const dismissBtn = receipt.querySelector('[data-action="dismiss-action-receipt"]') as unknown as HTMLButtonElement;
+  assert.ok(dismissBtn);
+  assert.equal(dismissBtn.getAttribute('aria-label'), '关闭回执');
+  dismissBtn.click();
+  const dismissedDom = renderApp({ state, action: () => {} });
+  assert.equal(dismissedDom.querySelector('.action-receipt'), null);
 });
 
 test('navigation restoration survives initial disconnected state and is isolated by store identity', () => {

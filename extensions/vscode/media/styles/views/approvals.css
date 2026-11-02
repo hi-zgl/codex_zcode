@@ -1,0 +1,193 @@
+/* Approval Security Cards & Reviews */
+.approval-card {
+  border: 1px solid var(--warning-border);
+  border-left: 4px solid var(--warning);
+  border-radius: var(--radius-lg);
+  padding: 18px 20px;
+  margin: 16px 0;
+  min-width: 0;
+  background: var(--surface-card, var(--surface-raised));
+  box-shadow: var(--shadow-sm);
+  transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1), border-color 0.15s ease, box-shadow 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.approval-card:hover {
+  border-color: var(--warning);
+  box-shadow: var(--shadow-md), 0 0 12px var(--warning-glow);
+  transform: translateY(-1px);
+}
+
+.approval-title-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.approval-shield-icon {
+  color: var(--warning);
+  flex-shrink: 0;
+}
+
+.approval-card > p {
+  font-size: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.6;
+}
+
+.approval-card > .button {
+  margin: 5px 7px 5px 0;
+}
+
+.approval-card > .approval-read-status {
+  margin: 13px 0 8px;
+  color: var(--muted);
+  font-size: 11px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.approval-card > .approval-read-status.complete {
+  color: var(--success);
+  font-weight: 500;
+}
+
+.review-identity,
+.review-canonical,
+.settings-diagnostics {
+  margin: 14px 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  padding: 0;
+  background: var(--surface);
+  transition: border-color 0.2s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.review-identity:hover,
+.review-canonical:hover,
+.settings-diagnostics:hover {
+  border-color: var(--line-bright, var(--line));
+  box-shadow: var(--shadow-xs);
+}
+
+.review-identity summary,
+.review-canonical summary,
+.settings-diagnostics summary {
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--muted);
+  padding: 10px 14px;
+  background: var(--surface-raised);
+  border-radius: var(--radius-md);
+  transition: background-color 0.18s ease, color 0.18s ease;
+  user-select: none;
+}
+
+.review-identity summary::before,
+.review-canonical summary::before,
+.settings-diagnostics summary::before {
+  content: "";
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(-45deg);
+  transition: transform 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+  flex-shrink: 0;
+}
+
+.review-identity summary:hover,
+.review-canonical summary:hover,
+.settings-diagnostics summary:hover {
+  background: var(--surface-hover);
+  color: var(--accent);
+}
+
+.review-identity summary:focus-visible,
+.review-canonical summary:focus-visible,
+.settings-diagnostics summary:focus-visible {
+  outline: 2px solid var(--focus-border, var(--focus));
+  outline-offset: 2px;
+  position: relative;
+  z-index: 2;
+}
+
+.review-identity[open] summary,
+.review-canonical[open] summary,
+.settings-diagnostics[open] summary {
+  border-bottom: 1px solid var(--line);
+  border-radius: var(--radius-md) var(--radius-md) 0 0;
+  color: var(--text);
+}
+
+.review-identity[open] summary::before,
+.review-canonical[open] summary::before,
+.settings-diagnostics[open] summary::before {
+  transform: rotate(45deg);
+}
+
+.review-identity[open] > :not(summary),
+.review-canonical[open] > :not(summary),
+.settings-diagnostics[open] > :not(summary) {
+  padding: 12px 14px;
+}
+
+.review-identity .metadata dd {
+  font-family: var(--mono);
+  font-size: 11px;
+  word-break: break-all;
+  overflow-wrap: anywhere;
+}
+
+.permission-content {
+  margin-top: 20px;
+  border-top: 1px solid var(--line);
+  padding-top: 18px;
+}
+
+.permission-content .section > p {
+  font-size: 12px;
+  overflow-wrap: anywhere;
+  line-height: 1.6;
+}
+
+.parameter-label {
+  font-family: var(--mono);
+  color: var(--muted);
+  margin-top: 13px;
+}
+
+.approval-decisions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 17px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+.approval-decisions .action-with-reason {
+  flex: 1;
+  min-width: 130px;
+}
+
+.approval-decisions .button {
+  min-height: 34px;
+}
+
+.review-decision-meta {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+  line-height: 1.45;
+  letter-spacing: -0.01em;
+}

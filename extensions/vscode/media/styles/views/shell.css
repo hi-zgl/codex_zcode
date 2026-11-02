@@ -1,0 +1,229 @@
+/* Workbench Shell Navigation & Header */
+.app-header {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  min-height: 62px;
+  border-bottom: 1px solid var(--line);
+  padding: 14px 28px;
+  background: var(--surface);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  letter-spacing: 1.5px;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.brand-mark {
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--accent-subtle);
+  width: 24px;
+  height: 24px;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--accent);
+  letter-spacing: -1px;
+}
+
+.brand-divider {
+  color: var(--muted);
+  font-weight: 300;
+  padding: 0 3px;
+}
+
+.header-description {
+  font-size: 12px;
+  color: var(--muted);
+  flex: 1;
+}
+
+.skip-link {
+  position: absolute;
+  z-index: 3;
+  left: 12px;
+  top: -80px;
+  background: var(--surface-raised);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+  box-shadow: var(--shadow-md);
+}
+
+.skip-link:focus {
+  top: 8px;
+}
+
+/* Connection Banner & Status */
+.connection-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px 24px;
+  padding: 14px 28px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-raised);
+}
+
+.execution-context {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 18px;
+  flex: 1;
+  min-width: 0;
+}
+
+.connection-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.connection-indicator {
+  width: 8px;
+  height: 8px;
+  background: var(--muted);
+  border-radius: var(--radius-full);
+  flex: none;
+  transition: background-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.connection-indicator.online {
+  background: var(--success);
+  box-shadow: 0 0 8px var(--success-glow);
+}
+
+.host-label,
+.pool-path,
+.sync-time {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.host-label,
+.pool-path {
+  overflow-wrap: anywhere;
+}
+
+.sync-time {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+
+.connection-trailing {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 6px 16px;
+}
+
+.connection-banner > .notice {
+  flex-basis: 100%;
+  margin: 0;
+}
+
+/* Page Navigation Bar */
+.page-nav {
+  display: flex;
+  gap: 24px;
+  padding: 0 28px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.page-nav .button {
+  position: relative;
+  border: 0;
+  border-radius: 0;
+  border-bottom: 2px solid transparent;
+  padding: 13px 4px 11px;
+  font-size: 13px;
+  font-weight: 500;
+  background: none;
+  color: var(--muted);
+  box-shadow: none;
+  min-height: auto;
+  transition: color 0.18s ease, border-bottom-color 0.22s cubic-bezier(0.16, 1, 0.3, 1), background-color 0.18s ease;
+}
+
+.page-nav .button:hover:enabled {
+  color: var(--text);
+  background: none;
+  box-shadow: none;
+}
+
+.page-nav .button[aria-current] {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+  box-shadow: none;
+}
+
+.page-nav .button:focus-visible {
+  outline: 2px solid var(--focus-border, var(--focus));
+  outline-offset: 2px;
+  border-radius: var(--radius-xs);
+  position: relative;
+  z-index: 2;
+}
+
+.mobile-back {
+  display: none;
+}
+
+/* Welcome Screen */
+.welcome {
+  max-width: 850px;
+  margin: 18px auto 30px;
+}
+
+.welcome-card {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-xl);
+  padding: 32px;
+  background: linear-gradient(180deg, var(--surface-raised) 0%, var(--surface) 100%);
+  box-shadow: var(--shadow-md);
+}
+
+.welcome-symbol {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 45px;
+  line-height: 1;
+  color: var(--accent);
+  margin-bottom: 20px;
+  filter: drop-shadow(0 0 12px var(--accent-glow));
+}
+
+.welcome-card h2 {
+  font-size: 20px;
+  font-weight: 600;
+  margin-bottom: 12px;
+}
+
+.welcome-card > p {
+  color: var(--muted);
+  max-width: 650px;
+  font-size: 12px;
+  line-height: 1.65;
+}
+
+.welcome-card .metadata {
+  margin: 26px 0;
+  gap: 20px;
+}
+
+.welcome-card > .field-hint {
+  margin-top: 16px;
+}

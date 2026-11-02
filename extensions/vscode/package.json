@@ -41,7 +41,7 @@
     "test:installed": "node scripts/test-installed.mjs",
     "test:real-model": "node scripts/test-real-model.mjs",
     "vscode:prepublish": "npm run build",
-    "package:vsix": "vsce package --no-dependencies",
+    "package:vsix": "vsce package --no-dependencies --allow-missing-repository",
     "package:check": "node scripts/check-package.mjs"
   },
   "dependencies": {

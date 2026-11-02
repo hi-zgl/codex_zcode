@@ -20,6 +20,7 @@ export interface LocalState {
   rawFields: Map<string, string>;
   submittedDraftToken: string | null; importSummary: string | null;
   projectDefaultApplied: boolean;
+  dismissedActions: Set<string>;
 }
 export interface PersistedUi { version: 1; identity: string; page: 'tasks' | 'resources' | 'settings'; tab: DetailTab; filters: Filters; selectedTaskId: string | null }
 const tabs: DetailTab[] = ['overview', 'approvals', 'delivery', 'events'];
@@ -34,7 +35,7 @@ export function readPersisted(value: unknown): PersistedUi | null {
   return { version: 1, identity: p.identity, page: p.page as PersistedUi['page'], tab: p.tab!, filters: { project: filters.project, status: filters.status, worker: filters.worker, workspace: filters.workspace, query: filters.query }, selectedTaskId: p.selectedTaskId ?? null };
 }
 export function createState(persisted: unknown = null): LocalState {
-  return { snapshot: null, page: 'tasks', tab: 'overview', filters: defaultFilters(), detailOpen: false, expandedAccounts: new Set(), reviews: new Map(), events: [], eventsCursor: null, eventsLoaded: false, patch: '', patchLoaded: false, patchNextOffset: null, artifact: null, pending: new Set(), errors: new Map(), message: '', draft: null, draftDirty: false, workerId: '', workerAccount: '', baseRef: 'HEAD', settingsInterval: '30', settingsConcurrency: '', policyDirty: false, validation: {}, taskLookup: '', loadedIdentity: null, restore: readPersisted(persisted), deliveryVisited: false, inspectedFiles: new Set(), rawFields: new Map(), submittedDraftToken: null, importSummary: null, projectDefaultApplied: false };
+  return { snapshot: null, page: 'tasks', tab: 'overview', filters: defaultFilters(), detailOpen: false, expandedAccounts: new Set(), reviews: new Map(), events: [], eventsCursor: null, eventsLoaded: false, patch: '', patchLoaded: false, patchNextOffset: null, artifact: null, pending: new Set(), errors: new Map(), message: '', draft: null, draftDirty: false, workerId: '', workerAccount: '', baseRef: 'HEAD', settingsInterval: '30', settingsConcurrency: '', policyDirty: false, validation: {}, taskLookup: '', loadedIdentity: null, restore: readPersisted(persisted), deliveryVisited: false, inspectedFiles: new Set(), rawFields: new Map(), submittedDraftToken: null, importSummary: null, projectDefaultApplied: false, dismissedActions: new Set() };
 }
 export function connectionIdentity(snapshot: UiSnapshot): string { return `${snapshot.connection.host}\u0000${snapshot.connection.poolHome}\u0000${snapshot.connection.storeId ?? ''}`; }
 export function clearTaskContent(state: LocalState): void {
@@ -57,6 +58,14 @@ export function applySnapshot(state: LocalState, snapshot: UiSnapshot): boolean 
     state.filters = defaultFilters(); state.tab = 'overview'; state.detailOpen = false;
     state.expandedAccounts.clear(); state.draft = null; state.draftDirty = false; state.page = 'tasks';
     state.pending.clear(); state.errors.clear(); state.message = ''; state.restore = null; state.rawFields.clear(); state.submittedDraftToken = null; state.importSummary = null; state.projectDefaultApplied = false; state.policyDirty = false;
+    state.dismissedActions.clear();
+  } else if (previous) {
+    for (const act of snapshot.actions) {
+      const prevAct = previous.actions.find(a => a.key === act.key);
+      if (prevAct && prevAct.phase !== act.phase) {
+        state.dismissedActions.delete(act.key);
+      }
+    }
   }
   if (changedIdentity || changedGeneration || changedInstance || previous?.selectedTaskId !== snapshot.selectedTaskId) clearTaskContent(state);
   if (previous?.delivery.manifest?.manifestSha256 && previous.delivery.manifest.manifestSha256 !== snapshot.delivery.manifest?.manifestSha256) { state.inspectedFiles.clear(); state.artifact = null; }

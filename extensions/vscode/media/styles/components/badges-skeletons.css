@@ -1,0 +1,166 @@
+/* Badges & Status Indicators */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  align-self: flex-start;
+  flex: none;
+  padding: 2px 9px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-full);
+  background: var(--surface-raised);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.5;
+  white-space: normal;
+  color: var(--text);
+  box-shadow: var(--shadow-xs);
+  letter-spacing: 0.2px;
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+  transition: background-color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.badge.running {
+  background: var(--info-bg);
+  border-color: var(--info-border);
+  color: var(--info);
+  box-shadow: 0 0 8px var(--info-glow);
+}
+
+.badge.attention {
+  background: var(--warning-bg);
+  border-color: var(--warning-border);
+  color: var(--warning);
+  box-shadow: 0 0 6px var(--warning-glow);
+}
+
+.badge.success {
+  background: var(--success-bg);
+  border-color: var(--success-border);
+  color: var(--success);
+  box-shadow: 0 0 6px var(--success-glow);
+}
+
+.badge.failed,
+.badge.danger {
+  background: var(--danger-bg);
+  border-color: var(--danger-border);
+  color: var(--danger);
+  box-shadow: 0 0 6px var(--danger-glow);
+}
+
+.badge.idle {
+  background: var(--surface-hover);
+  border-color: var(--line-subtle, var(--line));
+  color: var(--muted);
+  box-shadow: none;
+}
+
+.badge.demo {
+  background: var(--warning-bg);
+  border-style: dashed;
+  border-color: var(--warning-border);
+  color: var(--warning);
+}
+
+.badge.quiet {
+  color: var(--muted);
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+}
+
+/* Breathing Pulse Dot */
+.pulse-dot {
+  position: relative;
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-full);
+  background-color: currentColor;
+  flex-shrink: 0;
+  vertical-align: middle;
+}
+
+.pulse-dot::after {
+  content: '';
+  position: absolute;
+  top: -3px;
+  left: -3px;
+  width: 12px;
+  height: 12px;
+  border-radius: var(--radius-full);
+  background-color: currentColor;
+  opacity: 0.55;
+  animation: pulse-glow 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+@keyframes pulse-glow {
+  0%, 100% {
+    transform: scale(0.85);
+    opacity: 0.6;
+  }
+  50% {
+    transform: scale(1.65);
+    opacity: 0.12;
+  }
+}
+
+/* Shimmer Animation & Skeletons */
+@keyframes shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+.skeleton {
+  display: block;
+  background: linear-gradient(
+    90deg,
+    var(--surface-raised) 25%,
+    var(--surface-hover) 37%,
+    var(--surface-raised) 63%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.8s ease-in-out infinite;
+  border-radius: var(--radius-sm);
+  color: transparent !important;
+  user-select: none;
+  pointer-events: none;
+}
+
+.skeleton-text {
+  height: 14px;
+  margin-bottom: 8px;
+  border-radius: var(--radius-xs);
+}
+
+.skeleton-text.short {
+  width: 40%;
+}
+
+.skeleton-text.medium {
+  width: 70%;
+}
+
+.skeleton-card {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  padding: 18px;
+  background: var(--surface-raised);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  box-shadow: var(--shadow-xs);
+}
+
+.skeleton-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}

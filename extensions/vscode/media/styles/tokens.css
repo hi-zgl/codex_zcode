@@ -1,0 +1,188 @@
+:root {
+  color-scheme: light dark;
+
+  /* Surface & Base */
+  --surface: var(--vscode-editor-background, #181b1c);
+  --surface-raised: var(--vscode-sideBar-background, #202425);
+  --surface-hover: var(--vscode-list-hoverBackground, #2b3031);
+  --surface-active: var(--vscode-list-activeSelectionBackground, #343b3d);
+  --surface-card: var(--vscode-sideBar-background, #1e2223);
+
+  /* Glassmorphism Material Tokens */
+  --glass-bg: color-mix(in srgb, var(--surface-raised) 88%, transparent);
+  --glass-blur: blur(12px);
+  --glass-border: rgba(255, 255, 255, 0.1);
+
+  /* Typography Colors */
+  --text: var(--vscode-foreground, #d9dddc);
+  --muted: var(--vscode-descriptionForeground, #9ba6a2);
+  --muted-light: var(--vscode-disabledForeground, #76827e);
+
+  /* Borders & Lines */
+  --line: var(--vscode-widget-border, var(--vscode-panel-border, #3a4140));
+  --line-subtle: rgba(255, 255, 255, 0.08);
+  --line-bright: rgba(255, 255, 255, 0.16);
+
+  /* Focus & Accents */
+  --focus: var(--vscode-focusBorder, #d3ae69);
+  --focus-border: var(--vscode-focusBorder, #d3ae69);
+  --accent: var(--vscode-textLink-foreground, #d9b678);
+  --accent-hover: var(--vscode-textLink-activeForeground, #eac68e);
+  --accent-subtle: rgba(217, 182, 120, 0.12);
+  --accent-subtle-hover: rgba(217, 182, 120, 0.2);
+  --accent-glow: rgba(217, 182, 120, 0.35);
+  --accent-border: rgba(217, 182, 120, 0.3);
+
+  /* Semantic Color Scales (Soft Alpha Tints) */
+  --warning: var(--vscode-editorWarning-foreground, #d7b16e);
+  --warning-bg: rgba(215, 177, 110, 0.12);
+  --warning-border: rgba(215, 177, 110, 0.3);
+  --warning-glow: rgba(215, 177, 110, 0.25);
+
+  --success: var(--vscode-testing-iconPassed, #8bb89e);
+  --success-bg: rgba(139, 184, 158, 0.12);
+  --success-border: rgba(139, 184, 158, 0.3);
+  --success-glow: rgba(139, 184, 158, 0.25);
+
+  --danger: var(--vscode-errorForeground, #f18c88);
+  --danger-bg: rgba(241, 140, 136, 0.12);
+  --danger-border: rgba(241, 140, 136, 0.3);
+  --danger-glow: rgba(241, 140, 136, 0.25);
+
+  --info: var(--vscode-textLink-foreground, #80b3d6);
+  --info-bg: rgba(128, 179, 214, 0.12);
+  --info-border: rgba(128, 179, 214, 0.3);
+  --info-glow: rgba(128, 179, 214, 0.25);
+
+  /* Spacing Scale */
+  --space-2xs: 2px;
+  --space-xs: 4px;
+  --space-sm: 8px;
+  --space-md: 12px;
+  --space-lg: 16px;
+  --space-xl: 20px;
+  --space-2xl: 24px;
+  --space-3xl: 28px;
+  --space-4xl: 32px;
+
+  /* Radius System */
+  --radius-xs: 2px;
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 12px;
+  --radius-full: 9999px;
+
+  /* Shadows & Depth Glows */
+  --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.12);
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.15), 0 1px 2px rgba(0, 0, 0, 0.1);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.2), 0 2px 4px rgba(0, 0, 0, 0.12);
+  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.28), 0 4px 8px rgba(0, 0, 0, 0.16);
+  --shadow-glow: 0 0 16px var(--accent-glow);
+  --shadow-glow-sm: 0 0 8px var(--accent-glow);
+
+  /* Elevation & Z-Index Scale */
+  --z-base: 1;
+  --z-raised: 2;
+  --z-nav: 10;
+  --z-overlay: 100;
+  --z-toast: 1000;
+
+  /* Motion & Transition Curves */
+  --transition-fast: 0.15s ease;
+  --transition-normal: 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  --transition-slow: 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in-out: cubic-bezier(0.4, 0, 0.6, 1);
+
+  /* Fonts */
+  --mono: var(--vscode-editor-font-family, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
+  font-family: var(--vscode-font-family, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif);
+  font-size: var(--vscode-font-size, 13px);
+  font-weight: var(--vscode-font-weight, 400);
+  line-height: 1.55;
+  background: var(--surface);
+  color: var(--text);
+}
+
+/* Accessible Focus Ring Scale */
+button, input, select, textarea, a, summary, [role="tab"], [tabindex] {
+  outline-offset: 2px;
+}
+
+:focus-visible {
+  outline: 2px solid var(--focus-border, var(--focus));
+  outline-offset: 2px;
+}
+
+button:focus-visible,
+.button:focus-visible,
+a:focus-visible,
+summary:focus-visible,
+[role="tab"]:focus-visible,
+[role="tabpanel"]:focus-visible,
+[tabindex]:not([tabindex="-1"]):focus-visible {
+  outline: 2px solid var(--focus-border, var(--focus));
+  outline-offset: 2px;
+}
+
+/* Tabular Numerics Scale - Prevention of jitter during rapid data updates */
+.metric strong,
+.metric-number,
+.metric p,
+.meter span,
+progress + .field-hint,
+progress + span,
+.quota-detail .field-hint,
+.task-time,
+.sync-time,
+.retry-strip strong,
+.retry-strip span,
+.task-chip,
+.task-id,
+.identity-code,
+.detail-heading h2,
+.terminal-receipt code,
+.terminal-cmd,
+.verification-row code,
+.verification-command h4,
+.review-decision-meta,
+.quota-value,
+.quota-value span,
+.badge,
+.change-badge,
+.change-symbol,
+.attempt-list li > strong,
+.event-list .section-toolbar span,
+.event-list .section-toolbar .muted,
+.event-list .field-hint,
+.metadata dd,
+.metadata dd code,
+.action-receipt code,
+.scope-note,
+.detail-tabs .button,
+input[type="number"],
+.artifact-file .field-hint,
+.empty-hint,
+.field-hint,
+.field-error,
+.code-block,
+.diff-line,
+.diff-hunk {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+
+/* Vector Iconography Base Sizing */
+.v-icon {
+  display: inline-block;
+  vertical-align: -0.15em;
+  flex-shrink: 0;
+  stroke: currentColor;
+}
+.button .v-icon {
+  margin-right: 2px;
+}
+.badge .v-icon {
+  margin-right: 3px;
+}

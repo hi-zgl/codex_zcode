@@ -1,0 +1,243 @@
+/* Responsive Layout Breakpoints */
+
+@media (min-width: 1100px) {
+  .task-workspace { grid-template-columns: minmax(290px, .75fr) minmax(0, 1.8fr); }
+  .task-detail { padding: 27px 30px; }
+}
+
+@media (min-width: 1400px) {
+  .task-workspace { grid-template-columns: minmax(320px, 420px) minmax(0, 1fr); }
+  .main-content { padding: 24px 36px; }
+  .app-header, .connection-banner, .page-nav { padding-left: 36px; padding-right: 36px; }
+  .workbench > .notice { margin: 12px 36px; }
+}
+
+@media (min-width: 1800px) {
+  .main-content { padding: 28px 48px; }
+  .app-header, .connection-banner, .page-nav { padding-left: 48px; padding-right: 48px; }
+  .workbench > .notice { margin: 12px 48px; }
+  .task-workspace { grid-template-columns: minmax(380px, 500px) minmax(0, 1fr); }
+  .task-detail { padding: 30px 36px; }
+  .metrics { gap: 16px; }
+  .resources-page, .settings-page, .composer-page { max-width: 1480px; }
+  .task-detail > .metadata, .delivery > .metadata { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+
+@media (max-width: 980px) {
+  .app-header, .connection-banner { padding-left: 20px; padding-right: 20px; }
+  .main-content { padding: 22px 20px; }
+  .page-nav { padding: 0 20px; }
+  .task-filters, .filters { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .task-filters .field:last-child, .filters .field:last-child { grid-column: span 2; }
+  .task-detail { padding: 20px 17px; }
+  .detail-tabs { gap: 12px; }
+  .detail-tabs .button { font-size: 11px; }
+  .metric { padding: 16px 13px; gap: 12px; }
+  .metric-number { font-size: 25px; }
+  .metric p { font-size: 11px; }
+}
+
+@media (max-width: 759px) {
+  .app-header { min-height: 54px; }
+  .connection-trailing { width: 100%; justify-content: space-between; }
+  .task-workspace { display: block; }
+  .task-workspace .detail-container { display: none; }
+  .task-workspace.detail-open .task-list-panel { display: none; }
+  .task-workspace.detail-open .detail-container { display: block; }
+  .task-list-panel { border-right: 0; }
+  .task-list { max-height: none; }
+  .mobile-back { display: inline-flex; align-items: center; gap: 6px; margin: 16px 17px 0; background: transparent; border: 0; color: var(--accent); padding-left: 0; font-size: 12px; font-weight: 500; cursor: pointer; }
+  .detail-tabs { gap: 16px; flex-wrap: wrap; }
+  .worker-start-form { grid-template-columns: 1fr 1fr; }
+  .worker-start-form .action-with-reason { grid-column: 1 / -1; padding-top: 0; }
+  .worker-start-form .field { margin-bottom: 0; }
+  .resource-card .metadata { grid-template-columns: 1fr 1fr; }
+  .metric p { display: none; }
+  .page-heading { flex-wrap: wrap; gap: 14px; }
+  .page-heading > div:first-child { flex-basis: 100%; }
+}
+
+@media (max-width: 650px) {
+  .header-description { display: none; }
+  .metrics {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+    margin-bottom: 16px;
+  }
+  .metric {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+    padding: 12px 10px;
+  }
+  .metric-icon-wrap {
+    width: 28px;
+    height: 28px;
+  }
+  .metric-number {
+    font-size: 24px;
+  }
+  .metric strong {
+    font-size: 11px;
+  }
+  .task-filters, .filters {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px 8px;
+  }
+  .task-filters .field:last-child, .filters .field:last-child {
+    grid-column: 1 / -1;
+  }
+  .metadata {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px 14px;
+  }
+  .resource-card .metadata {
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+  .form-grid, .quota-sources {
+    grid-template-columns: 1fr;
+  }
+  .workspace-create-form {
+    flex-direction: column;
+    gap: 8px;
+  }
+  .workspace-create-form .field {
+    width: 100%;
+    max-width: 100%;
+  }
+  .workspace-create-form .action-with-reason {
+    padding-top: 0;
+  }
+  .detail-tabs {
+    gap: 8px;
+    justify-content: flex-start;
+  }
+}
+
+@media (max-width: 479px) {
+  h1 { font-size: 21px; }
+  .app-header, .connection-banner { padding-left: 14px; padding-right: 14px; }
+  .app-header { gap: 10px; flex-wrap: wrap; }
+  .brand { flex: 1; gap: 6px; font-size: 11px; }
+  .app-header > .badge { font-size: 11px; }
+  .main-content { padding: 22px 12px; }
+  .page-nav { padding: 0 14px; gap: 21px; }
+  .connection-banner { gap: 10px; }
+  .execution-context { gap: 7px 12px; }
+  .execution-context .pool-path { flex-basis: 100%; }
+  .sync-time { font-size: 11px; }
+  .connection-trailing { justify-content: flex-start; gap: 10px; }
+  .connection-trailing .button { font-size: 11px; }
+  .metrics { margin-bottom: 16px; gap: 6px; }
+  .metric { flex-direction: column; align-items: flex-start; gap: 6px; padding: 10px 8px; }
+  .metric-icon-wrap { width: 26px; height: 26px; }
+  .metric-number { font-size: 22px; }
+  .metric strong { font-size: 11px; }
+  .task-filters, .filters { grid-template-columns: 1fr 1fr; gap: 10px 8px; }
+  .task-filters .field:last-child, .filters .field:last-child { grid-column: 1 / -1; }
+  .task-detail { padding: 19px 13px; }
+  .detail-heading { flex-direction: column; gap: 9px; }
+  .detail-heading h2 { font-size: 14px; }
+  .detail-tabs { gap: 0; justify-content: space-between; }
+  .detail-tabs .button { font-size: 11px; }
+  .metadata, .resource-card .metadata { grid-template-columns: 1fr; gap: 11px; }
+  .task-detail > .metadata { grid-template-columns: 1fr 1fr; }
+  .form-grid, .quota-sources, .worker-start-form { grid-template-columns: 1fr; }
+  .resource-card, .approval-card { padding: 12px; }
+  .worker-start-form { gap: 14px; }
+  .approval-decisions { flex-direction: column; }
+  .approval-decisions .action-with-reason { width: 100%; }
+  .approval-decisions .button { width: 100%; }
+  .welcome { margin-top: 0; }
+  .welcome-card { padding: 22px 17px; }
+  .welcome-card .metadata { grid-template-columns: 1fr; }
+  .welcome-card .inline-actions { flex-direction: column; align-items: stretch; }
+  .welcome-symbol { font-size: 35px; }
+  .action-feedback {
+    left: 12px;
+    right: 12px;
+    bottom: 12px;
+    max-width: calc(100% - 24px);
+    align-items: stretch;
+    margin: 0;
+  }
+  .action-receipt {
+    max-width: 100%;
+    min-width: 0;
+    width: 100%;
+  }
+  .workbench > .notice { margin-left: 12px; margin-right: 12px; }
+  .task-lookup { flex-direction: column; align-items: stretch; }
+  .notice { padding: 9px; }
+  .code-block { padding: 9px; }
+}
+
+@media (max-width: 359px) {
+  .app-header, .connection-banner { padding-left: 10px; padding-right: 10px; }
+  .main-content { padding: 16px 10px; }
+  .task-filters, .filters, .task-detail > .metadata { grid-template-columns: 1fr; gap: 8px; }
+  .task-filters .field:last-child, .filters .field:last-child { grid-column: 1; }
+  .metrics { gap: 4px; }
+  .metric { padding: 8px 6px; gap: 4px; }
+  .metric-icon-wrap { width: 22px; height: 22px; }
+  .metric-number { font-size: 18px; }
+  .metric strong { font-size: 11px; line-height: 1.25; overflow-wrap: anywhere; word-break: break-word; }
+  .page-nav { padding: 0 10px; gap: 6px 12px; flex-wrap: wrap; }
+  .page-nav .button { padding: 10px 2px 9px; font-size: 12px; }
+  .detail-tabs { gap: 4px 8px; flex-wrap: wrap; }
+  .detail-tabs .button { padding: 6px 4px; font-size: 11px; min-height: 32px; }
+  .task-row, .approval-card, .artifact-file, .resource-card { padding: 10px 11px; }
+  .task-detail { padding: 14px 10px; }
+  .action-feedback { left: 8px; right: 8px; bottom: 8px; max-width: calc(100% - 16px); }
+  .action-receipt { max-width: 100%; padding: 10px 12px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation: none !important;
+    transition: none !important;
+    scroll-behavior: auto !important;
+  }
+  .button:hover:enabled,
+  .task-row:hover:enabled,
+  .metric:hover:enabled,
+  .resource-card:hover,
+  .approval-card:hover,
+  .artifact-file:hover,
+  .action-receipt .toast-dismiss:hover,
+  .empty-state:hover .empty-icon-wrapper,
+  .empty-state:hover .empty-mark::before,
+  .empty-state:hover .empty-mark-icon {
+    transform: none !important;
+  }
+  .button:active:enabled,
+  .task-row:active:enabled,
+  .metric:active:enabled,
+  .action-receipt .toast-dismiss:active {
+    transform: none !important;
+  }
+  .action-receipt,
+  .review-identity[open] > :not(summary),
+  .review-canonical[open] > :not(summary),
+  .settings-diagnostics[open] > :not(summary),
+  .advanced-actions[open] > :not(summary) {
+    animation: none !important;
+    transform: none !important;
+  }
+  .spinner {
+    animation: none !important;
+    border-right-color: currentColor !important;
+  }
+  .pulse-dot::after {
+    animation: none !important;
+    display: none !important;
+  }
+}
+
+@media (forced-colors: active) {
+  .button, .badge, .notice, .task-row.selected, .action-receipt { border: 1px solid ButtonText; }
+  .task-row.selected { outline: 1px solid Highlight; }
+  .connection-indicator { forced-color-adjust: none; background: GrayText; }
+  .connection-indicator.online { background: Highlight; }
+}
