@@ -285,3 +285,13 @@ test('directProbeAccount throws business error on HTTP 200 with code 500', async
   );
 });
 
+
+test('resolveQuotaSnapshot redacts credential-like fields from rawSnapshot', () => {
+  const snapshot = resolveQuotaSnapshot({
+    source: 'live_probe', accountAlias: 'a', providerId: 'account:zai-start-plan', observedAtMs: 1, storedAtMs: 1,
+    rawQuota: { remaining: { count: 5 }, secret: 'CANARY', access_token: 'CANARY', nested: { token: 'CANARY' } },
+    authenticated: true, freshness: 'fresh',
+  });
+  assert.equal(JSON.stringify(snapshot).includes('CANARY'), false);
+  assert.equal(snapshot.remaining, 5);
+});

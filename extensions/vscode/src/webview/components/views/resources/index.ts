@@ -59,6 +59,10 @@ export function scheduleAutoRefreshTicker(root: HTMLElement, ctx: RenderContext)
       return;
     }
 
+    // A hidden webview neither needs fresh countdown text nor should spend live
+    // probes; the next visible tick catches up (the 60s gate is time-based).
+    if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+
     // 1. Local countdown ticking every interval
     updateCountdowns(root);
 
@@ -132,7 +136,10 @@ export function renderResources(ctx: RenderContext, snapshot: UiSnapshot): HTMLE
     '导入账号文件',
     'accounts.import',
     {},
-    mutationReason(snapshot, 'importAccounts')
+    mutationReason(snapshot, 'importAccounts'),
+    false,
+    'accounts.import',
+    { icon: icon('add', { size: 12 }) }
   );
 
   const sortMode = ctx.state.accountSortMode ?? 'quota_first';
@@ -143,7 +150,7 @@ export function renderResources(ctx: RenderContext, snapshot: UiSnapshot): HTMLE
     'account.sort',
     { mode: isQuotaFirst ? 'default' : 'quota_first' },
     {
-      icon: icon(isQuotaFirst ? 'zap' : 'list-ordered', { size: 12 }),
+      icon: icon(isQuotaFirst ? 'sort-precedence' : 'list-ordered', { size: 12 }),
       className: isQuotaFirst ? 'btn-sort-toggle active' : 'btn-sort-toggle',
     }
   );

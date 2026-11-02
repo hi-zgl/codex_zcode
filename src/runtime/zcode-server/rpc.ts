@@ -168,7 +168,8 @@ export class ChannelRpc {
     await this.ready;
     const id = this.nextId++;
     this.listeners.set(id, { accept, fail });
-    this.send([102, id, channel, event], arg);
+    try { this.send([102, id, channel, event], arg); }
+    catch (error) { this.listeners.delete(id); throw error; }
     return () => { this.listeners.delete(id); if (!this.closed) this.send([103, id]); };
   }
   private fail(error: Error): void {

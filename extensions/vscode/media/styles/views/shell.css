@@ -15,7 +15,7 @@
   gap: 9px;
   letter-spacing: 1.5px;
   white-space: nowrap;
-  font-size: 12px;
+  font-size: var(--font-sm);
 }
 
 .brand-mark {
@@ -26,7 +26,7 @@
   background: var(--accent-subtle);
   width: 24px;
   height: 24px;
-  font-size: 14px;
+  font-size: var(--font-lg);
   font-weight: 700;
   color: var(--accent);
   letter-spacing: -1px;
@@ -39,7 +39,7 @@
 }
 
 .header-description {
-  font-size: 12px;
+  font-size: var(--font-sm);
   color: var(--muted);
   flex: 1;
 }
@@ -84,7 +84,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 12px;
+  font-size: var(--font-sm);
   font-weight: 500;
 }
 
@@ -105,7 +105,7 @@
 .host-label,
 .pool-path,
 .sync-time {
-  font-size: 11px;
+  font-size: var(--font-xs);
   color: var(--muted);
 }
 
@@ -148,7 +148,7 @@
   border-radius: 0;
   border-bottom: 2px solid transparent;
   padding: 13px 4px 11px;
-  font-size: 13px;
+  font-size: var(--font-md);
   font-weight: 500;
   background: none;
   color: var(--muted);
@@ -207,7 +207,7 @@
 }
 
 .welcome-card h2 {
-  font-size: 20px;
+  font-size: var(--font-2xl);
   font-weight: 600;
   margin-bottom: 12px;
 }
@@ -215,7 +215,7 @@
 .welcome-card > p {
   color: var(--muted);
   max-width: 650px;
-  font-size: 12px;
+  font-size: var(--font-sm);
   line-height: 1.65;
 }
 

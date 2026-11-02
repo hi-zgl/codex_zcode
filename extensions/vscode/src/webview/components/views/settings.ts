@@ -1,3 +1,4 @@
+import { icon } from '../../icons.js';
 import type { UiSnapshot } from '../../../host/types.js';
 import { mutationReason } from '../../state.js';
 import type { RenderContext } from '../types.js';
@@ -39,7 +40,7 @@ export function renderSettings(ctx: RenderContext, snapshot: UiSnapshot): HTMLEl
     el('summary', '', '高级：诊断信息'),
     el('p', 'field-hint', '复制内容包括连接身份、状态、版本与错误码，以及当前任务 ID。审批正文、提示词和凭据不会附在诊断中。'),
     code(JSON.stringify(diagnostic, null, 2), '待复制的脱敏诊断预览'),
-    button(ctx, '复制脱敏诊断', 'diagnostics.copy'),
+    button(ctx, '复制脱敏诊断', 'diagnostics.copy', {}, { icon: icon('copy', { size: 12 }) }),
     messageFor(ctx, 'diagnostics.copy')
   );
   diagnostics.dataset.details = 'settings-diagnostics';
@@ -69,9 +70,9 @@ export function renderSettings(ctx: RenderContext, snapshot: UiSnapshot): HTMLEl
         ['工作区信任', connection.trusted ? '已信任' : '受限模式']
       ]),
       el('div', 'inline-actions',
-        button(ctx, '选择连接目录', 'connection.configure', {}, { busy: ctx.state.pending.has('connection.configure') }),
-        button(ctx, '更多 VS Code 设置', 'settings.open'),
-        button(ctx, '连接帮助', 'guidance.open', { topic: 'connection' })
+        button(ctx, '选择连接目录', 'connection.configure', {}, { busy: ctx.state.pending.has('connection.configure'), icon: icon('folder', { size: 12 }) }),
+        button(ctx, '更多 VS Code 设置', 'settings.open', {}, { icon: icon('settings-gear', { size: 12 }) }),
+        button(ctx, '连接帮助', 'guidance.open', { topic: 'connection' }, { icon: icon('question', { size: 12 }) })
       ),
       el('p', 'field-hint', '切换目录后面板需重新连接；Codex 后续调用使用新目录，原目录任务保留。切换远程计算环境请使用 VS Code Remote 窗口。'),
       messageFor(ctx, 'connection.configure')

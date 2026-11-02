@@ -2,7 +2,7 @@ import {randomUUID} from 'node:crypto';
 import {uiMethods,UI_LIMITS,uiPermissionReviewSchema,uiIdSchema,type UiMethodName,type UiTaskSummary,type UiTaskDetail,type UiQuota,type UiQuotaSnapshot,type UiApprovalReview,type UiApprovalPreview} from '../shared/ui-contract.js';
 import {CoreError,type Task,type PersistedTaskResult} from '../core/types.js';
 import type {DurableTaskStore} from '../core/store.js';
-import type {AccountSummary} from '../accounts/index.js';
+import {startPlanProviderId,type AccountSummary} from '../accounts/index.js';
 import {record,redact} from '../runtime/zcode-server/events.js';
 import type {SessionSnapshot} from '../runtime/types.js';
 import {loadManifest,manifestView,publicArtifactFile,readSavedFile} from './artifacts.js';
@@ -24,8 +24,6 @@ interface ActionReceipt {taskId:string;approvalId:string;actionId:string;ownerKe
 const FINAL=new Set(['succeeded','failed','cancelled']);
 const FRESH=120_000;
 const nativePermissionId=/^perm_[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
-function finite(value:unknown):number|null{return typeof value==='number'&&Number.isFinite(value)?value:null;}
-function sourceTime(value:unknown){return typeof value==='string'||typeof value==='number'&&Number.isFinite(value)?{value,unit:'unknown' as const,atMs:null}:null;}
 function stateOfManifest(result:PersistedTaskResult|null):UiTaskDetail['result']['manifestState']{return result?.artifacts.some(a=>a.kind==='file_manifest')?'available':result?.artifacts.some(a=>a.kind==='patch')?'legacy_patch_only':'not_captured';}
 
 /** UI-specific projections; legacy CLI/MCP methods and their output whitelist are unchanged. */
@@ -103,7 +101,7 @@ export class UiService {
   }
   const rawQuota:Record<string,unknown>={...(q?{...q}:{}),quota_raw:account.quotaRaw,subscription_raw:account.subscriptionRaw,plan_type:account.plan};
   const hasImported=!!(q||account.quotaRaw!==undefined||account.subscriptionRaw!==undefined||account.plan);
-  const imported:UiQuotaSnapshot|null=hasImported?resolveQuotaSnapshot({source:'imported_snapshot',accountAlias,providerId:`account:${account.provider}-start-plan`,observedAtMs:null,storedAtMs:null,rawQuota,authenticated:null,freshness:'unknown'}):null;
+  const imported:UiQuotaSnapshot|null=hasImported?resolveQuotaSnapshot({source:'imported_snapshot',accountAlias,providerId:startPlanProviderId(account.provider),observedAtMs:null,storedAtMs:null,rawQuota,authenticated:null,freshness:'unknown'}):null;
   return {accountAlias,imported,live,lastProbe:cache?.lastProbe??{state:'never',attemptedAtMs:null,errorCode:null},displayFreshnessWindowMs:FRESH};
  }
  private actionFor(taskId:string,approvalId:string,owner:UiApprovalReview['owner']):ActionReceipt|undefined{
@@ -198,7 +196,7 @@ export class UiService {
        if(acc){
         const hasImported=!!(acc.quota||acc.quotaRaw!==undefined||acc.subscriptionRaw!==undefined||acc.plan);
         if(hasImported){
-         staleSnapshot=resolveQuotaSnapshot({source:'imported_snapshot',accountAlias:alias,providerId:`account:${acc.provider}-start-plan`,observedAtMs:null,storedAtMs:null,rawQuota:{...(acc.quota?{...acc.quota}:{}),quota_raw:acc.quotaRaw,subscription_raw:acc.subscriptionRaw,plan_type:acc.plan},authenticated:null,freshness:'stale'});
+         staleSnapshot=resolveQuotaSnapshot({source:'imported_snapshot',accountAlias:alias,providerId:startPlanProviderId(acc.provider),observedAtMs:null,storedAtMs:null,rawQuota:{...(acc.quota?{...acc.quota}:{}),quota_raw:acc.quotaRaw,subscription_raw:acc.subscriptionRaw,plan_type:acc.plan},authenticated:null,freshness:'stale'});
         }
        }
       }catch{}

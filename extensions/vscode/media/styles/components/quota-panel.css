@@ -1,7 +1,7 @@
 /**
  * Quota Panel & Slot Layout Component
  * Implements the translucent dark panel, slot layouts, and 3-column quota window grid:
- * - .quota-panel (Root container with glassmorphism, 10px radius, fine border)
+ * - .quota-panel (Root container: translucent card surface, 10px radius, fine border)
  * - .row-quota-slot (Embedded account slot with dashed boundary)
  * - .q-win (3-column grid: minmax(95px, 115px) label, 1fr progress bar, 136px countdown/status)
  * - .q-win.mini (Compact variant: minmax(85px, 105px) / 1fr / 128px)
@@ -13,7 +13,6 @@
   background: var(--quota-panel-bg, var(--surface-card));
   padding: 12px 15px 13px;
   box-sizing: border-box;
-  backdrop-filter: var(--glass-blur, blur(12px));
   box-shadow: var(--shadow-sm);
   transition: border-color var(--transition-normal), box-shadow var(--transition-normal);
 }
@@ -33,7 +32,7 @@
 
 .q-eyebrow {
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: var(--font-sm);
   letter-spacing: 0.18em;
   text-transform: uppercase;
   color: var(--muted);
@@ -68,7 +67,7 @@
 }
 
 .q-source-badge {
-  font-size: 11.5px;
+  font-size: var(--font-sm);
   font-family: var(--mono);
   padding: 2px 7px;
   border-radius: var(--radius-sm, 4px);
@@ -80,19 +79,19 @@
   gap: 4px;
 }
 .q-source-badge.live {
-  border-color: rgba(63, 185, 80, 0.4);
-  background: rgba(63, 185, 80, 0.12);
-  color: var(--success, #3fb950);
+  border-color: var(--success-border);
+  background: var(--success-bg);
+  color: var(--success-text);
 }
 .q-source-badge.imported {
-  border-color: rgba(56, 139, 253, 0.4);
-  background: rgba(56, 139, 253, 0.12);
-  color: var(--accent, #58a6ff);
+  border-color: var(--info-border);
+  background: var(--info-bg);
+  color: var(--info-text);
 }
 
 .q-source-time {
   font-family: var(--mono);
-  font-size: 11.5px;
+  font-size: var(--font-sm);
   color: var(--muted);
   font-variant-numeric: tabular-nums;
   font-feature-settings: "tnum" 1;
@@ -130,7 +129,7 @@
 .q-win .qbar { margin-top: 0; }
 
 .q-win-label {
-  font-size: 14.5px;
+  font-size: var(--font-lg);
   color: var(--text);
   white-space: nowrap;
   overflow: hidden;
@@ -139,7 +138,7 @@
 }
 .q-win-pct {
   font-family: var(--mono);
-  font-size: 14px;
+  font-size: var(--font-lg);
   color: var(--muted);
   text-align: right;
   font-variant-numeric: tabular-nums;
@@ -147,7 +146,7 @@
 }
 .q-win-reset {
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: var(--font-sm);
   color: var(--muted);
   white-space: nowrap;
   overflow: hidden;
@@ -163,11 +162,11 @@
   gap: 6px;
   margin-bottom: 0;
 }
-.q-win.mini .q-win-label { font-size: 13px; }
-.q-win.mini .q-win-pct { font-size: 12.5px; }
-.q-win.mini .q-win-reset { font-size: 11.5px; }
+.q-win.mini .q-win-label { font-size: var(--font-md); }
+.q-win.mini .q-win-pct { font-size: var(--font-sm); }
+.q-win.mini .q-win-reset { font-size: var(--font-sm); }
 .q-win.mini .qbar { height: var(--qbar-height-mini, 17px); }
-.q-win.mini .qbar-pct { font-size: 11px; }
+.q-win.mini .qbar-pct { font-size: var(--font-xs); }
 
 /* Plan Groupings & Subscriptions */
 .plan-grp + .plan-grp {
@@ -185,7 +184,7 @@
 }
 
 .pg-name {
-  font-size: 12.5px;
+  font-size: var(--font-sm);
   color: var(--text);
   font-family: var(--mono);
   letter-spacing: 0.02em;
@@ -200,7 +199,7 @@
   margin-left: auto;
   flex: none;
   font-family: var(--mono);
-  font-size: 11.5px;
+  font-size: var(--font-sm);
   color: var(--muted);
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
@@ -222,7 +221,7 @@
 .q-item { margin-bottom: 10px; }
 .q-item:last-child { margin-bottom: 0; }
 .q-item-name {
-  font-size: 14.5px;
+  font-size: var(--font-lg);
   color: var(--text);
   display: flex;
   justify-content: space-between;
@@ -231,20 +230,20 @@
 }
 .q-item-nums {
   font-family: var(--mono);
-  font-size: 12.5px;
+  font-size: var(--font-sm);
   color: var(--muted);
   margin-top: 2px;
   font-variant-numeric: tabular-nums;
 }
-.q-item-name .q-item-nums { margin-top: 0; font-size: 14px; color: var(--text); }
+.q-item-name .q-item-nums { margin-top: 0; font-size: var(--font-lg); color: var(--text); }
 
 /* Status Messages & Interactive Controls */
-.q-line { font-size: 13.5px; color: var(--muted); margin-top: 5px; }
+.q-line { font-size: var(--font-md); color: var(--muted); margin-top: 5px; }
 .q-fetch { width: 100%; }
 
 .q-loading, .aq-loading {
   color: var(--muted);
-  font-size: 13.5px;
+  font-size: var(--font-md);
   font-family: var(--mono);
   padding: 4px 0;
   display: flex;
@@ -254,7 +253,7 @@
 
 .q-err, .aq-err {
   color: var(--danger, #f48771);
-  font-size: 13px;
+  font-size: var(--font-md);
   line-height: 1.45;
   padding: 2px 0;
 }
@@ -262,7 +261,7 @@
 
 .q-expand {
   margin-top: 8px;
-  font-size: 13.5px;
+  font-size: var(--font-md);
   color: var(--muted);
   border: none;
   background: transparent;
@@ -280,7 +279,7 @@
   border-radius: var(--radius-sm, 4px);
   background: var(--surface-hover);
   color: var(--text);
-  font-size: 12px;
+  font-size: var(--font-sm);
   padding: 2px 9px;
   cursor: pointer;
   transition: border-color var(--transition-fast), background var(--transition-fast);
@@ -290,6 +289,6 @@
 /* Narrow Sidebar Responsive Refinements (< 360px) */
 @media (max-width: 360px) {
   .q-win { grid-template-columns: minmax(75px, 90px) 1fr 100px; gap: 4px; }
-  .q-win-label { font-size: 13px; }
-  .q-win-reset { font-size: 11px; }
+  .q-win-label { font-size: var(--font-md); }
+  .q-win-reset { font-size: var(--font-xs); }
 }

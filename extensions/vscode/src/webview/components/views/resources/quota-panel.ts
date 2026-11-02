@@ -29,10 +29,12 @@ export function formatResetTime(resetsAtMs: number | null, nowMs: number = Date.
   if (diff <= 0) return '已重置';
   const mins = Math.ceil(diff / 60_000);
   if (mins < 60) return `${mins}分钟后重置`;
-  const hours = Math.floor(diff / 3_600_000);
-  const remMins = Math.floor((diff % 3_600_000) / 60_000);
+  // Derive every unit from the same rounded-up minute count so boundaries never read
+  // "0小时59分" (59.5 min) or "0天" (23h59.5m).
+  const hours = Math.floor(mins / 60);
+  const remMins = mins % 60;
   if (hours < 24) return remMins > 0 ? `${hours}小时${remMins}分后重置` : `${hours}小时后重置`;
-  return `${Math.floor(diff / 86_400_000)}天后重置`;
+  return `${Math.floor(mins / 1_440)}天后重置`;
 }
 
 /** Formats relative elapsed time string (e.g., "3分钟前"). */

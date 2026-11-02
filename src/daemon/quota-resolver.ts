@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { UiQuotaTier, UiQuotaWindowItem, UiQuotaSnapshot } from '../shared/ui-contract.js';
-import type { AccountCredentials } from '../accounts/index.js';
+import { startPlanProviderId, type AccountCredentials } from '../accounts/index.js';
+import { redact } from '../runtime/zcode-server/events.js';
 
 export const QUOTA_LIMIT_URL = 'https://open.bigmodel.cn/api/monitor/usage/quota/limit';
 export const BILLING_BALANCE_URL = 'https://zcode.z.ai/api/v1/zcode-plan/billing/balance';
@@ -210,7 +211,8 @@ export function resolveQuotaSnapshot(params: QuotaResolveParams): UiQuotaSnapsho
     percentage,
     authenticated,
     freshness: params.freshness ?? 'unknown',
-    ...(params.rawQuota ? { rawSnapshot: params.rawQuota } : {}),
+    // rawSnapshot crosses the daemon → UI boundary; never forward credential-like fields.
+    ...(params.rawQuota ? { rawSnapshot: redact(params.rawQuota) } : {}),
   };
 }
 
@@ -223,7 +225,7 @@ function isBusinessError(payload: any): boolean {
 
 export async function directProbeAccount(account: AccountCredentials, fetchImpl: typeof fetch = globalThis.fetch): Promise<{ accountAlias: string; providerId: string; quota: Record<string, unknown> }> {
   const token = account.zcodeJwtToken || account.accessToken;
-  const providerId = `account:${account.provider}-start-plan`;
+  const providerId = startPlanProviderId(account.provider);
   const requestId = randomUUID();
   const headers = { Authorization: `Bearer ${token}`, 'User-Agent': `ZCode/${CLIENT_APP_VERSION}`, 'x-request-id': requestId, Accept: 'application/json' };
   let response = await fetchImpl(QUOTA_LIMIT_URL, { method: 'GET', headers }).catch(() => null);

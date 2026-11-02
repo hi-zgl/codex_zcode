@@ -1,104 +1,111 @@
-/* Buttons System */
+/*
+ * Buttons. Flat, native-feeling controls driven by --button-* tokens (which map
+ * to VS Code's button colours). States, in order of precedence:
+ *   disabled  > busy (.loading, aria-busy) > active > hover > rest
+ * Focus is the global :focus-visible ring from tokens.css; no hover "lift".
+ */
 .button {
   display: inline-flex;
   justify-content: center;
   align-items: center;
   gap: 6px;
-  min-height: 30px;
-  padding: 5px 12px;
-  border: 1px solid var(--vscode-button-border, var(--line));
+  min-height: 28px;
+  padding: 4px 12px;
+  border: 1px solid var(--button-border);
   border-radius: var(--radius-sm);
-  background: var(--vscode-button-secondaryBackground, var(--surface-raised));
-  color: var(--vscode-button-secondaryForeground, var(--text));
+  background: var(--button-secondary-bg);
+  color: var(--button-secondary-fg);
   cursor: pointer;
-  line-height: 1.4;
+  font: inherit;
+  font-size: var(--font-md);
+  line-height: var(--line-height-tight);
   text-align: center;
   font-weight: 500;
-  box-shadow: var(--shadow-xs);
   overflow-wrap: anywhere;
   user-select: none;
-  transition: background-color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease, transform 0.12s var(--ease-out, ease), color 0.15s ease;
+  transition: background-color var(--transition-fast), border-color var(--transition-fast), color var(--transition-fast);
 }
 
 .button:hover:enabled {
-  background: var(--vscode-button-secondaryHoverBackground, var(--surface-hover));
-  border-color: var(--line-bright, var(--line));
-  box-shadow: var(--shadow-sm);
-  transform: translateY(-1px);
+  background: var(--button-secondary-hover-bg);
 }
 
 .button:active:enabled {
-  transform: translateY(0) scale(0.985);
+  background: color-mix(in srgb, var(--button-secondary-hover-bg) 85%, var(--text));
 }
 
 .button:focus-visible {
-  outline: 2px solid var(--focus-border, var(--focus));
-  outline-offset: 2px;
   position: relative;
   z-index: 2;
 }
 
-/* Primary Button */
+/* Primary: the one main action in a region. */
 .button.primary {
-  background: linear-gradient(180deg, var(--vscode-button-background, #9c7c45) 0%, rgba(138, 105, 48, 0.96) 100%);
-  color: var(--vscode-button-foreground, #fff);
-  border: 1px solid var(--accent-border);
-  box-shadow: var(--shadow-sm), 0 0 8px var(--accent-subtle);
-  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.2);
+  background: var(--button-bg);
+  color: var(--button-fg);
+  border-color: var(--button-border);
 }
 
 .button.primary:hover:enabled {
-  background: linear-gradient(180deg, var(--vscode-button-hoverBackground, #ae8c51) 0%, var(--vscode-button-background, #9c7c45) 100%);
-  border-color: var(--accent);
-  box-shadow: var(--shadow-md), 0 0 12px var(--accent-glow);
+  background: var(--button-hover-bg);
 }
 
-/* Secondary Button */
+.button.primary:active:enabled {
+  background: color-mix(in srgb, var(--button-hover-bg) 85%, #000);
+}
+
 .button.secondary {
-  background: var(--vscode-button-secondaryBackground, var(--surface-raised));
-  color: var(--vscode-button-secondaryForeground, var(--text));
-  border: 1px solid var(--line);
-  box-shadow: var(--shadow-xs);
+  background: var(--button-secondary-bg);
+  color: var(--button-secondary-fg);
+  border-color: var(--line);
 }
 
 .button.secondary:hover:enabled {
-  background: var(--vscode-button-secondaryHoverBackground, var(--surface-hover));
-  border-color: var(--line-bright, var(--line));
-  box-shadow: var(--shadow-sm);
+  background: var(--button-secondary-hover-bg);
+  border-color: var(--line-bright);
 }
 
-/* Danger Button */
+/* Danger: outlined at rest, filled on hover so the commitment is visible. */
 .button.danger {
   background: var(--danger-bg);
-  color: var(--danger);
-  border: 1px solid var(--danger-border);
-  box-shadow: var(--shadow-xs);
+  color: var(--danger-text);
+  border-color: var(--danger-border);
 }
 
-.button.danger:hover:enabled {
+.button.danger:hover:enabled,
+.button.danger.armed {
   background: var(--danger);
-  color: #fff;
+  /* Editor background on the danger hue: light-on-dark in light themes,
+     dark-on-light in dark themes, so the filled state stays legible. */
+  color: var(--surface);
   border-color: var(--danger);
-  box-shadow: 0 0 10px var(--danger-glow);
 }
 
-/* Ghost Button */
+.button.danger:active:enabled {
+  background: color-mix(in srgb, var(--danger) 85%, #000);
+}
+
+/* Ghost: low-emphasis toolbar action. */
 .button.ghost {
   background: transparent;
   color: var(--muted);
-  border: 1px solid transparent;
-  box-shadow: none;
+  border-color: transparent;
 }
 
 .button.ghost:hover:enabled {
   background: var(--surface-hover);
   color: var(--text);
-  border-color: var(--line-subtle);
 }
 
-/* Button Loading & Spinner */
-.button.loading {
-  cursor: wait;
+.button.ghost:active:enabled {
+  background: var(--surface-active);
+}
+
+/* Busy: spinner replaces the icon, cursor shows progress, colour stays legible. */
+.button.loading,
+.button[aria-busy="true"] {
+  cursor: progress;
+  opacity: 0.85;
 }
 
 @keyframes spin {
@@ -122,24 +129,30 @@
 
 .button .spinner {
   margin: 0;
-  flex-shrink: 0;
 }
 
-.button:disabled {
-  opacity: .58;
+.button:disabled:not(.loading) {
+  opacity: 0.5;
   cursor: not-allowed;
 }
 
-.button:disabled[aria-label] {
-  opacity: .65;
+/* Two-step confirmation for destructive actions (see components/button.ts). */
+.confirm-group {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px 4px 10px;
+  border: 1px solid var(--danger-border);
+  border-radius: var(--radius-sm);
+  background: var(--danger-bg);
+  animation: details-expand var(--transition-fast);
 }
 
-/* Keep navigational tab buttons static on hover/active */
-.page-nav .button:hover:enabled,
-.detail-tabs .button:hover:enabled,
-.page-nav .button:active:enabled,
-.detail-tabs .button:active:enabled {
-  transform: none;
+.confirm-prompt {
+  color: var(--text);
+  font-size: var(--font-sm);
+  font-weight: 500;
 }
 
 .inline-actions {
@@ -168,7 +181,7 @@ details summary::marker {
 }
 
 .advanced-actions {
-  font-size: 11px;
+  font-size: var(--font-xs);
   color: var(--muted);
 }
 
@@ -182,15 +195,6 @@ details summary::marker {
   outline-offset: 2px;
   transition: color 0.15s ease;
   user-select: none;
-}
-
-.advanced-actions summary::-webkit-details-marker {
-  display: none;
-}
-
-.advanced-actions summary::marker {
-  display: none;
-  content: "";
 }
 
 .advanced-actions summary::before {

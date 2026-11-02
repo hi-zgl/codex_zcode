@@ -14,7 +14,7 @@ export interface LocalState {
   snapshot: UiSnapshot | null; page: Page; tab: DetailTab; filters: Filters; detailOpen: boolean;
   expandedAccounts: Set<string>; reviews: Map<string, ReviewContent>; events: EventRow[]; eventsCursor: number | null; eventsLoaded: boolean;
   patch: string; patchLoaded: boolean; patchNextOffset: number | null; artifact: ArtifactText | null;
-  pending: Set<string>; errors: Map<string, string>; message: string; draft: TaskDraft | null; draftDirty: boolean;
+  pending: Set<string>; errors: Map<string, string>; message: string; messageTone: 'info' | 'error'; armedConfirm: string | null; draft: TaskDraft | null; draftDirty: boolean;
   workerId: string; workerAccount: string; baseRef: string; settingsInterval: string; settingsConcurrency: string; policyDirty: boolean;
   validation: Record<string, string>; taskLookup: string; loadedIdentity: string | null; restore: PersistedUi | null;
   deliveryVisited: boolean; inspectedFiles: Set<string>;
@@ -37,7 +37,7 @@ export function readPersisted(value: unknown): PersistedUi | null {
   return { version: 1, identity: p.identity, page: p.page as PersistedUi['page'], tab: p.tab!, filters: { project: filters.project, status: filters.status, worker: filters.worker, workspace: filters.workspace, query: filters.query }, selectedTaskId: p.selectedTaskId ?? null };
 }
 export function createState(persisted: unknown = null): LocalState {
-  return { snapshot: null, page: 'tasks', tab: 'overview', filters: defaultFilters(), detailOpen: false, expandedAccounts: new Set(), reviews: new Map(), events: [], eventsCursor: null, eventsLoaded: false, patch: '', patchLoaded: false, patchNextOffset: null, artifact: null, pending: new Set(), errors: new Map(), message: '', draft: null, draftDirty: false, workerId: '', workerAccount: '', baseRef: 'HEAD', settingsInterval: '30', settingsConcurrency: '', policyDirty: false, validation: {}, taskLookup: '', loadedIdentity: null, restore: readPersisted(persisted), deliveryVisited: false, inspectedFiles: new Set(), rawFields: new Map(), submittedDraftToken: null, importSummary: null, projectDefaultApplied: false, dismissedActions: new Set(), accountSortMode: 'quota_first' };
+  return { snapshot: null, page: 'tasks', tab: 'overview', filters: defaultFilters(), detailOpen: false, expandedAccounts: new Set(), reviews: new Map(), events: [], eventsCursor: null, eventsLoaded: false, patch: '', patchLoaded: false, patchNextOffset: null, artifact: null, pending: new Set(), errors: new Map(), message: '', messageTone: 'info', armedConfirm: null, draft: null, draftDirty: false, workerId: '', workerAccount: '', baseRef: 'HEAD', settingsInterval: '30', settingsConcurrency: '', policyDirty: false, validation: {}, taskLookup: '', loadedIdentity: null, restore: readPersisted(persisted), deliveryVisited: false, inspectedFiles: new Set(), rawFields: new Map(), submittedDraftToken: null, importSummary: null, projectDefaultApplied: false, dismissedActions: new Set(), accountSortMode: 'quota_first' };
 }
 export function connectionIdentity(snapshot: UiSnapshot): string { return `${snapshot.connection.host}\u0000${snapshot.connection.poolHome}\u0000${snapshot.connection.storeId ?? ''}`; }
 export function clearTaskContent(state: LocalState): void {
@@ -59,7 +59,7 @@ export function applySnapshot(state: LocalState, snapshot: UiSnapshot): boolean 
   if (changedIdentity) {
     state.filters = defaultFilters(); state.tab = 'overview'; state.detailOpen = false;
     state.expandedAccounts.clear(); state.draft = null; state.draftDirty = false; state.page = 'tasks';
-    state.pending.clear(); state.errors.clear(); state.message = ''; state.restore = null; state.rawFields.clear(); state.submittedDraftToken = null; state.importSummary = null; state.projectDefaultApplied = false; state.policyDirty = false;
+    state.pending.clear(); state.errors.clear(); state.message = ''; state.armedConfirm = null; state.restore = null; state.rawFields.clear(); state.submittedDraftToken = null; state.importSummary = null; state.projectDefaultApplied = false; state.policyDirty = false;
     state.dismissedActions.clear();
   } else if (previous) {
     for (const act of snapshot.actions) {

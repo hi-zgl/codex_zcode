@@ -50,7 +50,7 @@ export function renderActionFeedback(ctx: RenderContext): HTMLElement | null {
 
     const dismissBtn = button(
       ctx,
-      [icon('x-circle', { size: 14, className: 'toast-dismiss-icon' }), el('span', 'sr-only', '关闭')],
+      [icon('close', { size: 14, className: 'toast-dismiss-icon' }), el('span', 'sr-only', '关闭')],
       'dismiss-action-receipt',
       { key: action.key },
       { className: 'toast-dismiss' }
@@ -84,8 +84,9 @@ export function renderActionFeedback(ctx: RenderContext): HTMLElement | null {
       body,
       actions.childNodes.length ? actions : null
     );
-    receipt.setAttribute('role', 'status');
-    receipt.setAttribute('aria-live', 'polite');
+    // Announcements go through the app's persistent live regions; the role only
+    // tells assistive tech how urgent the receipt is when it is navigated to.
+    receipt.setAttribute('role', action.phase === 'failed' ? 'alert' : 'status');
     receipt.dataset.key = action.key;
     return receipt;
   }));
@@ -94,4 +95,21 @@ export function renderActionFeedback(ctx: RenderContext): HTMLElement | null {
 export function messageFor(ctx: RenderContext, key: string): HTMLElement | null {
   const error = ctx.state.errors.get(key);
   return error ? notice(error, 'error') : null;
+}
+
+/**
+ * Visible confirmation for successful local actions (save, copy, import...).
+ * Errors are already shown next to the control that failed, so only info-tone
+ * messages are flashed here. Screen readers hear it via the live region.
+ */
+export function renderFlash(ctx: RenderContext): HTMLElement | null {
+  if (!ctx.state.message || ctx.state.messageTone === 'error') return null;
+  const dismiss = button(ctx, icon('close', { size: 14 }), 'message.dismiss', {}, { variant: 'ghost', className: 'flash-dismiss' });
+  dismiss.setAttribute('aria-label', '关闭提示');
+  dismiss.title = '关闭提示';
+  return el('div', 'flash notice success',
+    el('span', 'notice-symbol', icon('check-circle', { size: 14 })),
+    el('p', '', ctx.state.message),
+    dismiss
+  );
 }

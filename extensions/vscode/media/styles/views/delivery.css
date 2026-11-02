@@ -1,15 +1,15 @@
 /* Delivery Summary & Blockers */
 .delivery-summary {
   white-space: pre-wrap;
-  font-size: 12px;
+  font-size: var(--font-sm);
   overflow-wrap: anywhere;
   line-height: 1.6;
 }
 
 .blockers {
-  color: var(--warning);
+  color: var(--warning-text);
   padding-left: 20px;
-  font-size: 12px;
+  font-size: var(--font-sm);
 }
 
 /* Verification Terminal Receipt */
@@ -21,28 +21,28 @@
 
 .verification-row.terminal-receipt {
   border: 1px solid var(--line);
-  border-left: 4px solid var(--line-bright, #555);
+  border-left: 4px solid var(--line-bright);
   border-radius: var(--radius-lg);
   padding: 14px 16px;
   margin: 14px 0;
-  background: var(--vscode-textCodeBlock-background, #16191a);
-  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.22), var(--shadow-xs);
+  background: var(--surface-sunken);
+  box-shadow: var(--shadow-inset), var(--shadow-xs);
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
 
 .verification-row.terminal-receipt:hover {
   border-color: var(--line-bright, var(--line));
-  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.22), var(--shadow-sm);
+  box-shadow: var(--shadow-inset), var(--shadow-sm);
 }
 
 .verification-row.terminal-receipt.receipt-success {
   border-left-color: var(--success);
-  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.2), 0 0 12px var(--success-glow);
+  box-shadow: var(--shadow-inset), 0 0 12px var(--success-glow);
 }
 
 .verification-row.terminal-receipt.receipt-failed {
   border-left-color: var(--danger);
-  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.2), 0 0 12px var(--danger-glow);
+  box-shadow: var(--shadow-inset), 0 0 12px var(--danger-glow);
 }
 
 .terminal-cmd-wrap {
@@ -56,7 +56,7 @@
   color: var(--accent);
   font-family: var(--mono);
   font-weight: 700;
-  font-size: 13px;
+  font-size: var(--font-md);
   line-height: 1;
   user-select: none;
   opacity: 0.95;
@@ -65,7 +65,7 @@
 
 .terminal-cmd {
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: var(--font-sm);
   font-weight: 500;
   color: var(--text);
   overflow-wrap: anywhere;
@@ -77,10 +77,10 @@
 
 .verification-row.terminal-receipt .code-block {
   margin-top: 10px;
-  background: rgba(0, 0, 0, 0.32);
-  border: 1px solid var(--line-subtle, rgba(255, 255, 255, 0.08));
+  background: color-mix(in srgb, var(--surface-sunken) 80%, #000);
+  border: 1px solid var(--line-subtle);
   border-radius: var(--radius-sm);
-  box-shadow: inset 0 1px 4px rgba(0, 0, 0, 0.35);
+  box-shadow: var(--shadow-inset);
 }
 
 /* Artifact Files & Diff Syntax Colors */
@@ -99,7 +99,6 @@
 .artifact-file:hover {
   border-color: var(--line-bright, var(--line));
   box-shadow: var(--shadow-md);
-  transform: translateY(-1px);
 }
 
 .artifact-file[data-change="added"],
@@ -152,17 +151,17 @@
   flex-shrink: 0;
 }
 
-.artifact-file[data-change="added"] .file-icon { color: var(--success); }
+.artifact-file[data-change="added"] .file-icon { color: var(--success-text); }
 .artifact-file[data-change="modified"] .file-icon,
 .artifact-file[data-change="mode_changed"] .file-icon,
-.artifact-file[data-change="type_changed"] .file-icon { color: var(--warning); }
-.artifact-file[data-change="deleted"] .file-icon { color: var(--danger); }
-.artifact-file[data-change="renamed"] .file-icon { color: var(--info); }
+.artifact-file[data-change="type_changed"] .file-icon { color: var(--warning-text); }
+.artifact-file[data-change="deleted"] .file-icon { color: var(--danger-text); }
+.artifact-file[data-change="renamed"] .file-icon { color: var(--info-text); }
 
 .file-path {
   overflow-wrap: anywhere;
   font-family: var(--mono);
-  font-size: 12.5px;
+  font-size: var(--font-sm);
   font-weight: 600;
   line-height: 1.45;
   letter-spacing: -0.01em;
@@ -172,7 +171,7 @@
 .change-symbol {
   font-family: var(--mono);
   font-weight: 700;
-  font-size: 13px;
+  font-size: var(--font-md);
   line-height: 1;
   display: inline-flex;
   align-items: center;
@@ -183,7 +182,7 @@
 
 .badge[data-change="added"] .change-symbol,
 .file-change-added .change-symbol {
-  color: var(--success);
+  color: var(--success-text);
 }
 
 .badge[data-change="modified"] .change-symbol,
@@ -192,17 +191,17 @@
 .file-change-modified .change-symbol,
 .file-change-mode_changed .change-symbol,
 .file-change-type_changed .change-symbol {
-  color: var(--warning);
+  color: var(--warning-text);
 }
 
 .badge[data-change="deleted"] .change-symbol,
 .file-change-deleted .change-symbol {
-  color: var(--danger);
+  color: var(--danger-text);
 }
 
 .badge[data-change="renamed"] .change-symbol,
 .file-change-renamed .change-symbol {
-  color: var(--info);
+  color: var(--info-text);
 }
 
 .artifact-file .inline-actions {
@@ -215,12 +214,12 @@
 }
 
 .artifact-file .metadata dt {
-  font-size: 11px;
+  font-size: var(--font-xs);
   color: var(--muted);
 }
 
 .artifact-file .metadata dd {
-  font-size: 11px;
+  font-size: var(--font-xs);
   font-family: var(--mono);
   line-height: 1.45;
   word-break: break-all;

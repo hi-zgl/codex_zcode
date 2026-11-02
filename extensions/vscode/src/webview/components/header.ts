@@ -1,5 +1,5 @@
 import type { UiSnapshot } from '../../host/types.js';
-import { icon } from '../icons.js';
+import { icon, type IconName } from '../icons.js';
 import { mutationReason } from '../state.js';
 import type { RenderContext } from './types.js';
 import { el, date, kv, heading } from './dom.js';
@@ -26,7 +26,7 @@ export function codexSetupReason(snapshot: UiSnapshot): string | null {
 }
 
 export function codexSetup(ctx: RenderContext, snapshot: UiSnapshot, primary = false): HTMLElement {
-  return actionWithReason(ctx, '连接 Codex / 生成 MCP 配置', 'connection.codexSetup', {}, codexSetupReason(snapshot) ?? (connectionBusy(ctx, snapshot) && !ctx.state.pending.has('connection.codexSetup') ? '请等待当前连接操作完成。' : null), primary);
+  return actionWithReason(ctx, '连接 Codex / 生成 MCP 配置', 'connection.codexSetup', {}, codexSetupReason(snapshot) ?? (connectionBusy(ctx, snapshot) && !ctx.state.pending.has('connection.codexSetup') ? '请等待当前连接操作完成。' : null), primary, 'connection.codexSetup', { icon: icon('plug', { size: 12 }) });
 }
 
 export function renderHeader(ctx: RenderContext): HTMLElement {
@@ -58,8 +58,8 @@ export function renderConnection(ctx: RenderContext, snapshot: UiSnapshot): HTML
   if (['connected', 'legacy-readonly'].includes(connection.state) || (connection.state === 'error' && snapshot.tasks.length)) {
     actions.append(
       button(ctx, '刷新', 'refresh', {}, { busy: ctx.state.pending.has('refresh'), icon: icon('refresh', { size: 12 }) }),
-      button(ctx, '断开面板', 'disconnect'),
-      actionWithReason(ctx, '收工：停止实例与后台', 'pool.shutdown', {}, mutationReason(snapshot, 'poolLifecycle'), false)
+      button(ctx, '断开面板', 'disconnect', {}, { variant: 'ghost', icon: icon('debug-disconnect', { size: 12 }) }),
+      actionWithReason(ctx, '收工：停止实例与后台', 'pool.shutdown', {}, mutationReason(snapshot, 'poolLifecycle'), false, 'pool.shutdown', { icon: icon('stop-circle', { size: 12 }), confirm: { prompt: '停止所有空闲执行器并退出后台？账号与任务数据会保留。', confirmLabel: '确认收工' } })
     );
   } else {
     actions.append(
@@ -67,7 +67,7 @@ export function renderConnection(ctx: RenderContext, snapshot: UiSnapshot): HTML
         primary: true,
         busy: connectionBusy(ctx, snapshot),
         reason: connectReason(snapshot),
-        icon: connection.state === 'error' ? icon('refresh', { size: 12 }) : undefined
+        icon: icon(connection.state === 'error' ? 'refresh' : 'plug', { size: 12 })
       })
     );
   }
@@ -97,8 +97,9 @@ export function renderConnection(ctx: RenderContext, snapshot: UiSnapshot): HTML
 export function renderNavigation(ctx: RenderContext): HTMLElement {
   const node = el('nav', 'page-nav');
   node.setAttribute('aria-label', '工作台页面');
-  for (const [id, label] of [['tasks', '任务监控'], ['resources', '额度与资源'], ['settings', '设置']]) {
-    const b = button(ctx, label, 'page', { page: id });
+  const pages: readonly (readonly [string, string, IconName])[] = [['tasks', '任务监控', 'tasklist'], ['resources', '额度与资源', 'dashboard'], ['settings', '设置', 'settings-gear']];
+  for (const [id, label, iconName] of pages) {
+    const b = button(ctx, label, 'page', { page: id }, { icon: icon(iconName, { size: 14 }) });
     if (ctx.state.page === id || (id === 'tasks' && ctx.state.page === 'compose')) b.setAttribute('aria-current', 'page');
     node.append(b);
   }
@@ -108,16 +109,16 @@ export function renderNavigation(ctx: RenderContext): HTMLElement {
 export function renderWelcome(ctx: RenderContext, snapshot: UiSnapshot): HTMLElement {
   const actions = el('div', 'inline-actions',
     codexSetup(ctx, snapshot, true),
-    button(ctx, '连接监控', 'connect', {}, { busy: connectionBusy(ctx, snapshot), reason: connectReason(snapshot) }),
-    button(ctx, '选择连接目录', 'connection.configure', {}, { busy: ctx.state.pending.has('connection.configure'), reason: connectionBusy(ctx, snapshot) ? '请等待当前连接操作完成。' : null })
+    button(ctx, '连接监控', 'connect', {}, { busy: connectionBusy(ctx, snapshot), reason: connectReason(snapshot), icon: icon('plug', { size: 12 }) }),
+    button(ctx, '选择连接目录', 'connection.configure', {}, { busy: ctx.state.pending.has('connection.configure'), reason: connectionBusy(ctx, snapshot) ? '请等待当前连接操作完成。' : null, icon: icon('folder', { size: 12 }) })
   );
   if (snapshot.connection.mode === 'real' && !['connected', 'legacy-readonly'].includes(snapshot.connection.state)) {
-    actions.append(actionWithReason(ctx, '启动后台并连接', 'daemon.start', {}, startDaemonReason(snapshot) ?? (connectionBusy(ctx, snapshot) ? '请等待当前连接操作完成。' : null), false));
+    actions.append(actionWithReason(ctx, '启动后台并连接', 'daemon.start', {}, startDaemonReason(snapshot) ?? (connectionBusy(ctx, snapshot) ? '请等待当前连接操作完成。' : null), false, 'daemon.start', { icon: icon('play', { size: 12 }) }));
   }
   return el('div', 'welcome',
     heading('ZCODE / 开始', '连接任务工作台', '在 Codex 中描述目标并调度任务，在这里监控进度、额度与交付。'),
     el('div', 'welcome-card',
-      el('span', 'welcome-symbol', icon('zap', { size: 40, className: 'welcome-icon' })),
+      el('span', 'welcome-symbol', icon('rocket', { size: 40, className: 'welcome-icon' })),
       el('h2', '', snapshot.connection.error ? '暂时无法连接' : '让 Codex 使用同一后台'),
       el('p', '', '先生成 MCP 配置并在 Codex 中启用。工作台与 Codex 共享当前连接目录的账号、任务和并发设置。'),
       kv([

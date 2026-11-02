@@ -17,7 +17,7 @@
 
 .detail-heading h2 {
   font-family: var(--mono);
-  font-size: 15px;
+  font-size: var(--font-lg);
   font-weight: 600;
   overflow-wrap: anywhere;
 }
@@ -43,7 +43,7 @@
 }
 
 .metadata dt {
-  font-size: 11px;
+  font-size: var(--font-xs);
   font-weight: 500;
   color: var(--muted);
   margin-bottom: 2px;
@@ -53,7 +53,7 @@
 }
 
 .metadata dd {
-  font-size: 12px;
+  font-size: var(--font-sm);
   font-weight: 500;
   color: var(--text);
   margin: 0;
@@ -75,12 +75,12 @@
   padding: 1px 6px;
   border-radius: var(--radius-xs);
   font-family: var(--mono);
-  font-size: 11px;
+  font-size: var(--font-xs);
 }
 
 .occupancy-proof {
-  font-size: 11px;
-  color: var(--success);
+  font-size: var(--font-xs);
+  color: var(--success-text);
   margin: 13px 0;
   display: inline-flex;
   align-items: center;
@@ -93,7 +93,7 @@
   flex-direction: column;
   gap: 4px;
   margin: 16px 0;
-  font-size: 11px;
+  font-size: var(--font-xs);
   border-left: 2px solid var(--accent-border, var(--line));
   padding: 4px 14px;
   background: var(--accent-subtle);
@@ -110,7 +110,7 @@
 
 .retry-strip span {
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--font-xs);
   font-variant-numeric: tabular-nums;
   font-feature-settings: "tnum" 1;
   line-height: 1.45;
@@ -133,7 +133,7 @@
   border-radius: 0;
   background: transparent;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--font-sm);
   font-weight: 500;
   white-space: nowrap;
   box-shadow: none;
@@ -163,7 +163,7 @@
 .identity-code {
   display: block;
   overflow-wrap: anywhere;
-  font-size: 11px;
+  font-size: var(--font-xs);
   font-family: var(--mono);
   color: var(--muted);
   margin: 7px 0;
@@ -199,7 +199,7 @@
   align-items: flex-start;
   gap: 12px;
   padding: 12px 0;
-  border-bottom: 1px solid var(--line-subtle, rgba(255, 255, 255, 0.04));
+  border-bottom: 1px solid var(--line-subtle);
 }
 
 .event-list li:last-child { border-bottom: none; }
@@ -218,12 +218,12 @@
   margin-top: 1px;
 }
 
-.event-list .section-toolbar { margin: 0 0 3px; font-size: 11px; }
-.event-list .section-toolbar strong { font-size: 12px; font-weight: 600; }
+.event-list .section-toolbar { margin: 0 0 3px; font-size: var(--font-xs); }
+.event-list .section-toolbar strong { font-size: var(--font-sm); font-weight: 600; }
 
 .event-list .section-toolbar .muted {
   font-family: var(--mono);
-  font-size: 11px;
+  font-size: var(--font-xs);
   font-variant-numeric: tabular-nums;
   font-feature-settings: "tnum" 1;
 }
@@ -257,7 +257,7 @@
 .attempt-list li > strong {
   display: inline-block;
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: var(--font-sm);
   font-weight: 600;
   color: var(--text);
   margin-bottom: 8px;

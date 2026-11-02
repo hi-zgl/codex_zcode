@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { readFile, mkdir, writeFile } from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { join } from 'node:path';
 import { build } from 'esbuild';
@@ -102,6 +103,13 @@ async function checkLayout(name) {
     if (width === 320) await page.screenshot({ path: join(output, `${name}-320.png`), fullPage: true });
   }
 }
+const contrastAudit = `(${readFileSync(new URL('./contrast-audit.js', import.meta.url), 'utf8')})()`;
+async function auditContrast(name) {
+  const size = page.viewportSize();
+  await page.setViewportSize({ width: 1280, height: 900 });
+  assert.deepEqual(await page.evaluate(contrastAudit), [], `${name}: text below WCAG AA contrast`);
+  if (size) await page.setViewportSize(size);
+}
 const report = [];
 try {
   await page.goto(`http://127.0.0.1:${address.port}/`);
@@ -120,8 +128,9 @@ try {
     await page.evaluate(value => { document.body.className = value; document.documentElement.className = value; }, theme);
     await checkLayout(theme);
     await page.screenshot({ path: join(output, `${theme}-tasks.png`), fullPage: true });
+    await auditContrast(theme);
   }
-  report.push('Task list geometry: 280/320/360/500/650/760/1280 px, dark/light/high contrast');
+  report.push('Task list geometry: 280/320/360/500/650/760/1280 px, dark/light/high contrast; WCAG AA text contrast');
   await page.evaluate(() => { document.body.className = 'vscode-dark'; document.documentElement.className = 'vscode-dark'; });
   await page.setViewportSize({ width: 1280, height: 900 });
 
@@ -138,6 +147,7 @@ try {
   await action('patch.read').click();
   await page.locator('.diff-block .diff-line.diff-add').first().waitFor();
   await page.screenshot({ path: join(output, 'delivery.png'), fullPage: true });
+  await auditContrast('delivery');
   await checkLayout('delivery');
   report.push('Immutable file manifest and original Host native-diff content reads');
 
@@ -146,6 +156,7 @@ try {
   assert.ok(nativeCalls.includes('pickAccountFiles'));
   assert.ok(!transport.calls.some(call => call.method === 'import_accounts'), 'cancelled picker must not import');
   await page.screenshot({ path: join(output, 'resources.png'), fullPage: true });
+  await auditContrast('resources');
   await checkLayout('resources');
   report.push('Resource screen and cancelled native import picker have no daemon mutation');
 
@@ -172,6 +183,7 @@ try {
   await checkLayout('settings');
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.screenshot({ path: join(output, 'settings.png'), fullPage: true });
+  await auditContrast('settings');
   report.push('Shared concurrency policy: invalid limits gated, zero pauses new dispatch, empty removes limit and occupied tasks continue');
 
   await action('page', '[data-page="tasks"]').click();
@@ -182,6 +194,7 @@ try {
   await action('approval.respond', '[data-decision="accept"]').waitFor();
   await page.waitForFunction(() => !!document.querySelector('[data-action="approval.respond"][data-decision="accept"]') && !document.querySelector('[data-action="approval.respond"][data-decision="accept"]').disabled);
   await page.screenshot({ path: join(output, 'approval.png'), fullPage: true });
+  await auditContrast('approval');
   await checkLayout('approval');
   await action('approval.respond', '[data-decision="accept"]').click();
   await waitState(() => transport.calls.filter(call => call.method === 'ui_respond_approval').length === 1);
@@ -192,6 +205,7 @@ try {
   await action('compose.open').click();
   await checkLayout('compose');
   await page.screenshot({ path: join(output, 'compose.png'), fullPage: true });
+  await auditContrast('compose');
   // Keyboard navigation must land on a named, visible control rather than losing focus.
   await page.keyboard.press('Tab');
   const focused = await page.evaluate(() => ({ tag: document.activeElement?.tagName, label: document.activeElement?.getAttribute('aria-label') || document.activeElement?.textContent || '' }));
@@ -212,6 +226,11 @@ try {
   assert.equal(dispatched[0].params.prompt, promptCanary);
   assert.equal(dispatched[0].params.busy_retry_limit, 3);
   assert.ok(!JSON.stringify([...storage.values()]).includes(promptCanary), 'Host recovery storage excludes prompt');
+  await action('cancel').click();
+  assert.equal(transport.calls.filter(call => call.method === 'cancel_task').length, 0, 'destructive cancel needs a second, explicit confirmation');
+  await page.locator('.confirm-group').waitFor();
+  assert.equal(await page.evaluate(() => document.activeElement?.getAttribute('data-action')), 'cancel', 'focus moves to the confirm button');
+  await page.locator('.confirm-group').screenshot({ path: join(output, 'confirm.png') });
   await action('cancel').click();
   await waitState(state => !!state.detail?.cancelRequestedAtMs);
   assert.equal(service.snapshot().detail.leaseHeld, true, 'cancellation request does not prove release');

@@ -39,3 +39,7 @@ Use `test:unit`, `test:integration`, `test:smoke` and `test:browser` for the sep
 `test:real-model` is a separate opt-in acceptance runner and skips before any connection unless `ZCODE_POOL_RUN_REAL_MODEL=1`. An enabled run also requires explicit `--pool-home`, `--worker-id`, `--workspace-id`, `--prompt-file`, `--verify-commands-file`, `--model-id`, `--mode`, `--session`, `--busy-retry-limit` and a new `--receipt-file` path. The verification file is a JSON array of `{command,args,timeoutMs}` objects. It dispatches once and observes the original task; approvals remain a manual UI action. It never automatically approves, probes, resumes, cancels or retries. Default build, F5, smoke and CI paths do not enable it.
 
 日常收工可用“收工：停止实例与后台”，有任务占用时拒绝，数据保留。“断开面板”仅停止观察。MCP 通过 `zcode_daemon_start` 明确启动，通过 `zcode_shutdown_pool` 收工；查询不会重启后台。旧后台需在空闲时升级后提供收工能力。
+
+## Icons
+
+Webview and command icons use [VS Code Codicons](https://github.com/microsoft/vscode-codicons) (© Microsoft, CC BY 4.0) so the workbench matches native VS Code glyphs. `media/icon.png` is rendered from `media/icon-source.svg`; `media/zcode-pool.svg` is the monochrome 24×24 activity-bar mark.

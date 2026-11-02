@@ -1,6 +1,7 @@
 import type { UiSnapshot } from '../../../../host/types.js';
 import { sortAccountsByQuota } from '../../../../../../../src/shared/account-sort.js';
 import { mutationReason } from '../../../state.js';
+import { icon } from '../../../icons.js';
 import type { RenderContext } from '../../types.js';
 import { el, section, kv, field, input, select } from '../../dom.js';
 import { badge, pulseDot } from '../../primitives.js';
@@ -94,7 +95,7 @@ function renderWorkerCard(
   );
 
   for (const taskId of worker.leaseTaskIds) {
-    card.append(button(ctx, `查看占用任务 ${taskId}`, 'task.select', { taskId }));
+    card.append(button(ctx, `查看占用任务 ${taskId}`, 'task.select', { taskId }, { icon: icon('go-to-file', { size: 12 }) }));
   }
 
   const actions = el('div', 'resource-actions',
@@ -105,7 +106,8 @@ function renderWorkerCard(
       { workerId: worker.workerId },
       probeReason,
       false,
-      `worker:${worker.workerId}:probe`
+      `worker:${worker.workerId}:probe`,
+      { icon: icon('pulse', { size: 12 }) }
     ),
     actionWithReason(
       ctx,
@@ -115,7 +117,7 @@ function renderWorkerCard(
       stopReason,
       false,
       `worker:${worker.workerId}:stop`,
-      { variant: 'danger' }
+      { variant: 'danger', icon: icon('stop-circle', { size: 12 }), confirm: { prompt: `停止执行器 ${worker.workerId}？`, confirmLabel: '确认停止' } }
     )
   );
 
@@ -158,7 +160,7 @@ export function renderWorkerSection(ctx: RenderContext, snapshot: UiSnapshot): H
   const form = el('div', 'worker-start-form',
     field('执行器名称', workerIdInput),
     field('绑定账号', accountSelect),
-    actionWithReason(ctx, '启动执行器', 'worker.start', {}, startReason, true)
+    actionWithReason(ctx, '启动执行器', 'worker.start', {}, startReason, true, 'worker.start', { icon: icon('play', { size: 12 }) })
   );
 
   const sec = section(

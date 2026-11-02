@@ -72,21 +72,21 @@ export function renderTaskControls(ctx: RenderContext, snapshot: UiSnapshot, tas
   if (detail.controls.reconcile.available || ['interrupted', 'blocked', 'dispatching'].includes(task.status) || (task.leaseHeld && !isActive(task))) {
     const reason = mutationReason(snapshot, 'reconcileTask') ?? (!detail.controls.reconcile.available ? detail.controls.reconcile.reason ?? '当前状态不适用。' : null);
     actions.append(
-      actionWithReason(ctx, '核对执行状态', 'reconcile', data, reason, false, `task:${task.taskId}:reconcile`),
+      actionWithReason(ctx, '核对执行状态', 'reconcile', data, reason, false, `task:${task.taskId}:reconcile`, { icon: icon('sync', { size: 12 }) }),
       el('p', 'field-hint', '不发送模型命令或运行核验；会更新本地任务记录，并可能释放已证实停止的占用。')
     );
   }
   if (detail.controls.resume.available || ['interrupted', 'blocked'].includes(task.status)) {
     const reason = mutationReason(snapshot, 'resumeTask') ?? (!detail.verificationPolicy.complete ? '核验策略尚不能完整安全显示。' : !detail.controls.resume.available ? detail.controls.resume.reason ?? '当前状态不适用。' : null);
     actions.append(
-      actionWithReason(ctx, '恢复观察', 'resume', data, reason, true, `task:${task.taskId}:resume`),
+      actionWithReason(ctx, '恢复观察', 'resume', data, reason, true, `task:${task.taskId}:resume`, { icon: icon('play', { size: 12 }) }),
       el('p', 'field-hint', '附着原执行；结束后可能运行既有核验，明确繁忙时可使用剩余的原会话续跑。')
     );
   }
   if (task.status !== 'verifying' && (detail.controls.cancel.available || isActive(task) || ['blocked', 'interrupted'].includes(task.status))) {
     const reason = mutationReason(snapshot, 'cancelTask') ?? (task.cancelRequestedAtMs != null ? '取消意图已记录，等待实际停止确认。' : !detail.controls.cancel.available ? detail.controls.cancel.reason ?? '当前状态不适用。' : null);
     actions.append(
-      actionWithReason(ctx, task.cancelRequestedAtMs != null ? '等待停止确认' : '请求取消整个任务', 'cancel', data, reason, false, `task:${task.taskId}:cancel`, { variant: 'danger' })
+      actionWithReason(ctx, task.cancelRequestedAtMs != null ? '等待停止确认' : '请求取消整个任务', 'cancel', data, reason, false, `task:${task.taskId}:cancel`, { variant: 'danger', icon: icon('circle-slash', { size: 12 }), confirm: { prompt: `取消任务 ${task.taskId}？执行将被要求停止，无法撤销。`, confirmLabel: '确认取消任务' } })
     );
   }
   actions.append(messageFor(ctx, `task:${task.taskId}`) ?? '');

@@ -482,7 +482,46 @@ test('finish-work stays separate from disconnect and accepts the Host generation
  const finish=choose(h.root as unknown as ParentNode,'pool.shutdown');assert.equal(finish.disabled,false);
  assert.match(h.root.textContent??'',/断开面板/);
  h.reply(request=>{if(request.type==='pool.shutdown'){const next=structuredClone(initial);next.connection.state='disconnected';next.connection.generation++;h.push(next);return {stopping:true,workersStopped:true,stoppedWorkers:1};}return {};});
- finish.click();await new Promise(resolve=>setTimeout(resolve,20));
+ finish.click();
+ assert.equal(h.sent.some(r=>r.type==='pool.shutdown'),false,'first activation only arms the confirmation');
+ const confirmGroup=h.root.querySelector('.confirm-group');assert.ok(confirmGroup);assert.match(confirmGroup.textContent??'',/账号与任务数据会保留/);
+ const cancelConfirm=choose(h.root as unknown as ParentNode,'confirm.cancel');cancelConfirm.click();
+ assert.equal(h.root.querySelector('.confirm-group'),null);assert.equal(h.sent.some(r=>r.type==='pool.shutdown'),false);
+ choose(h.root as unknown as ParentNode,'pool.shutdown').click();
+ h.root.dispatchEvent(new browser.KeyboardEvent('keydown',{key:'Escape',bubbles:true}));
+ assert.equal(h.root.querySelector('.confirm-group'),null,'Escape disarms');
+ choose(h.root as unknown as ParentNode,'pool.shutdown').click();
+ const accept=choose(h.root as unknown as ParentNode,'pool.shutdown');assert.equal(accept.dataset.confirm,undefined);assert.match(accept.textContent??'',/确认收工/);
+ accept.click();await new Promise(resolve=>setTimeout(resolve,20));
  assert.equal(h.sent.filter(r=>r.type==='pool.shutdown').length,1);assert.equal(h.sent.some(r=>r.type==='cancel'||r.type==='daemon.start'),false);
  assert.match(h.root.textContent??'',/实例已停止，后台正在退出/);
+});
+
+test('action feedback: visible flash, persistent live regions and urgent failed receipts',async()=>{
+ const initial=snapshot();const h=harness(initial);h.push();
+ const live=()=>Array.from(browser.document.querySelectorAll('[data-live]')) as unknown as HTMLElement[];
+ assert.equal(live().filter(node=>node.parentElement===h.root.parentElement).length>=2,true,'live regions sit outside the re-rendered root');
+ h.reply(()=>({}));
+ await h.app.action('diagnostics.copy');
+ const flash=h.root.querySelector('.flash');assert.ok(flash);assert.match(flash.textContent??'',/已复制脱敏诊断/);
+ const polite=live().find(node=>node.dataset.live==='polite'&&node.textContent?.includes('已复制脱敏诊断'));assert.ok(polite,'success is announced politely');
+ choose(h.root as unknown as ParentNode,'message.dismiss').click();assert.equal(h.root.querySelector('.flash'),null);
+ const failed=structuredClone(initial);failed.actions=[{key:'cancel:task-x',phase:'failed',message:'Cancel refused.'}];h.push(failed);
+ assert.equal(h.root.querySelector('.action-receipt.failed')?.getAttribute('role'),'alert');
+ assert.ok(live().some(node=>node.dataset.live==='assertive'&&node.textContent?.includes('Cancel refused.')));
+ h.app.dispose();assert.equal(live().some(node=>node.textContent?.includes('Cancel refused.')),false,'dispose removes live regions');
+});
+
+test('task list supports arrow-key roving focus without selecting',async()=>{
+ const h=harness();h.push();
+ const rows=()=>Array.from(h.root.querySelectorAll('.task-list .task-row')) as unknown as HTMLButtonElement[];
+ assert.ok(rows().length>=2);
+ rows()[0].focus();
+ rows()[0].dispatchEvent(new browser.KeyboardEvent('keydown',{key:'ArrowDown',bubbles:true}) as unknown as Event);
+ assert.equal(browser.document.activeElement,rows()[1] as unknown);
+ rows()[1].dispatchEvent(new browser.KeyboardEvent('keydown',{key:'End',bubbles:true}) as unknown as Event);
+ assert.equal(browser.document.activeElement,rows().at(-1) as unknown);
+ rows().at(-1)!.dispatchEvent(new browser.KeyboardEvent('keydown',{key:'Home',bubbles:true}) as unknown as Event);
+ assert.equal(browser.document.activeElement,rows()[0] as unknown);
+ assert.equal(h.sent.some(r=>r.type==='task.select'),false,'moving focus does not select');
 });

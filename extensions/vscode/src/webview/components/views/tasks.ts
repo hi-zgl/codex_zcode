@@ -15,7 +15,7 @@ export function metric(ctx: RenderContext, label: string, count: number, filter:
     className: `metric metric-${filter} ${isSelected ? 'selected' : ''}`
   });
   const iconWrap = el('div', `metric-icon-wrap ${filter}`,
-    filter === 'attention' ? icon('alert-circle', { size: 16 }) :
+    filter === 'attention' ? icon('bell', { size: 16 }) :
     filter === 'active' ? icon('zap', { size: 16 }) : icon('inbox', { size: 16 })
   );
   node.append(
@@ -75,6 +75,10 @@ export function renderTasks(ctx: RenderContext, snapshot: UiSnapshot): HTMLEleme
   taskList.append(el('div', 'panel-title', el('h2', '', '已载入任务'), el('span', 'muted', '最近创建优先')));
   const list = el('div', 'task-list');
   list.dataset.scroll = 'task-list';
+  list.setAttribute('aria-describedby', 'task-list-keys');
+  const keys = el('span', 'sr-only', '使用上下方向键在任务之间移动，按 Enter 打开。');
+  keys.id = 'task-list-keys';
+  taskList.append(keys);
   if (!filtered.length) {
     const isZero = snapshot.tasks.length === 0;
     const desc = isZero
@@ -83,7 +87,7 @@ export function renderTasks(ctx: RenderContext, snapshot: UiSnapshot): HTMLEleme
       ? '最近 50 条中没有匹配项，可继续加载历史任务。'
       : '可清除筛选后查看其他任务。';
     list.append(emptyCard('当前列表没有匹配任务', desc, {
-      action: button(ctx, '清除筛选 · 全部项目', 'filters.clear', {}, { icon: icon('refresh', { size: 12 }) }),
+      action: button(ctx, '清除筛选 · 全部项目', 'filters.clear', {}, { icon: icon('close', { size: 12 }) }),
       icon: isZero ? 'inbox' : 'search',
       hint: isZero ? '提示：通过顶部“连接 Codex / 生成 MCP 配置”启用自动任务调度。' : undefined
     }));
@@ -111,11 +115,11 @@ export function renderTasks(ctx: RenderContext, snapshot: UiSnapshot): HTMLEleme
     list.append(row);
   }
   taskList.append(list, el('p', 'scope-note', `筛选 ${filtered.length} / 已载入 ${snapshot.tasks.length} · ${snapshot.scope === 'recent_50_loaded' ? '历史总数未知' : `服务端范围共 ${snapshot.total ?? '未知'} 条${ctx.state.filters.status === 'attention' ? '；需要处理仅筛选已载入任务' : ''}`}`));
-  if (snapshot.listNextCursor) taskList.append(button(ctx, '继续加载历史任务', 'tasks.more', {}, { busy: ctx.state.pending.has('tasks.list') }));
-  if (ctx.state.errors.has('tasks.list')) taskList.append(notice(ctx.state.errors.get('tasks.list')!, 'warning'), button(ctx, '重新加载列表', 'tasks.reload'));
+  if (snapshot.listNextCursor) taskList.append(button(ctx, '继续加载历史任务', 'tasks.more', {}, { busy: ctx.state.pending.has('tasks.list'), icon: icon('history', { size: 12 }) }));
+  if (ctx.state.errors.has('tasks.list')) taskList.append(notice(ctx.state.errors.get('tasks.list')!, 'warning'), button(ctx, '重新加载列表', 'tasks.reload', {}, { icon: icon('refresh', { size: 12 }) }));
   const lookup = input(ctx.state.taskLookup, 'taskLookup');
   lookup.placeholder = '已知任务完整 ID';
-  taskList.append(el('div', 'task-lookup', field('通过任务 ID 查找', lookup), button(ctx, '打开任务', 'task.lookup', {}, { reason: !ctx.state.taskLookup.trim() ? '请输入完整任务 ID。' : null })));
+  taskList.append(el('div', 'task-lookup', field('通过任务 ID 查找', lookup), button(ctx, '打开任务', 'task.lookup', {}, { icon: icon('search', { size: 12 }), reason: !ctx.state.taskLookup.trim() ? '请输入完整任务 ID。' : null })));
   const detail = el('section', 'detail-container', button(ctx, [icon('arrow-left', { size: 12 }), ' 返回任务列表'], 'detail.back', {}, { className: 'mobile-back' }), task ? renderTaskDetail(ctx, snapshot, task, filtered.some(item => item.taskId === task.taskId)) : emptyCard('选择一个任务', '选中任务仅加载详情，不会恢复或执行任务。', { icon: 'list-tree', hint: '在左侧列表中选择任一任务，即可查看安全概况、待决审批、不可变交付快照与脱敏事件流。' }));
   page.append(el('div', `task-workspace ${ctx.state.detailOpen ? 'detail-open' : ''}`, taskList, detail));
   return page;

@@ -93,6 +93,9 @@ export function renderQuotaBar(options: QuotaBarOptions): HTMLElement {
   const defaultLabel = `${formatPercentage(remaining)} 剩余`;
   const displayText = labelOverride ?? defaultLabel;
   bar.setAttribute('aria-label', ariaLabel ?? displayText);
+  // aria-valuenow carries the used share while the fill and label show what remains;
+  // valuetext makes assistive tech announce the same wording users see.
+  bar.setAttribute('aria-valuetext', displayText);
 
   // Fill indicator showing remaining quota (or used quota based on remaining)
   const fillClasses = ['qbar-fill', themeClass].filter(Boolean).join(' ');

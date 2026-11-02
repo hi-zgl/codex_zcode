@@ -10,7 +10,7 @@ const listed = spawnSync(process.execPath, ['node_modules/@vscode/vsce/vsce', 'l
 if (listed.status !== 0) throw new Error(listed.stderr || listed.stdout);
 const files = listed.stdout.trim().split('\n').filter(Boolean);
 const runtime = runtimeFiles.map(path => `dist/runtime/${path}`).concat('dist/runtime/manifest.json');
-const expected = ['package.json', 'README.md', 'CHANGELOG.md', 'LICENSE', 'dist/host/extension.cjs', 'dist/webview/main.js', 'dist/webview/styles.css', 'media/zcode-pool.svg', ...runtime];
+const expected = ['package.json', 'README.md', 'CHANGELOG.md', 'LICENSE', 'dist/host/extension.cjs', 'dist/webview/main.js', 'dist/webview/styles.css', 'media/zcode-pool.svg', 'media/icon.png', ...runtime];
 // vsce normalizes LICENSE to LICENSE.txt inside the archive.
 const canonical = path => path.toLowerCase().replace(/^license\.txt$/, 'license');
 const allowed = new Set(expected.map(canonical));

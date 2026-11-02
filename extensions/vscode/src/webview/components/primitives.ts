@@ -68,10 +68,10 @@ export function status(task: UiTask, stale = false): HTMLElement {
     statusIcon = icon('x-circle', { size: 11 });
   } else if (['waiting_approval', 'blocked', 'interrupted'].includes(task.status)) {
     tone = 'attention';
-    statusIcon = icon('alert-circle', { size: 11 });
+    statusIcon = icon(task.status === 'waiting_approval' ? 'shield' : task.status === 'blocked' ? 'circle-slash' : 'debug-disconnect', { size: 11 });
   } else if (['cancelled', 'queued'].includes(task.status)) {
     tone = 'idle';
-    statusIcon = task.status === 'queued' ? icon('clock', { size: 11 }) : icon('dot', { size: 10 });
+    statusIcon = task.status === 'queued' ? icon('clock', { size: 11 }) : icon('circle-slash', { size: 11 });
   }
 
   return badge([statusIcon, `${stale ? '上次已知：' : ''}${statusLabel(task)}`], tone);

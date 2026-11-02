@@ -1,6 +1,6 @@
 import type { RenderContext } from './components/types.js';
 import { el } from './components/dom.js';
-import { empty, renderActionFeedback } from './components/feedback.js';
+import { empty, renderActionFeedback, renderFlash } from './components/feedback.js';
 import { renderHeader, renderConnection, renderNavigation, renderWelcome } from './components/header.js';
 import { notice } from './components/primitives.js';
 import { renderSettings } from './components/views/settings.js';
@@ -32,6 +32,8 @@ export function renderApp(ctx: RenderContext): HTMLElement {
   if (snapshot.notice) root.append(notice(snapshot.notice, 'warning'));
   const feedback = renderActionFeedback(ctx);
   if (feedback) root.append(feedback);
+  const flash = renderFlash(ctx);
+  if (flash) root.append(flash);
   const main = el('main', 'main-content');
   main.id = 'main-content';
   if (ctx.state.page === 'settings') main.append(renderSettings(ctx, snapshot));
@@ -40,9 +42,5 @@ export function renderApp(ctx: RenderContext): HTMLElement {
   else if (ctx.state.page === 'compose') main.append(renderComposer(ctx, snapshot));
   else main.append(renderTasks(ctx, snapshot));
   root.append(main);
-  const live = el('div', 'sr-only', ctx.state.message);
-  live.setAttribute('aria-live', 'polite');
-  live.setAttribute('aria-atomic', 'true');
-  root.append(live);
   return root;
 }

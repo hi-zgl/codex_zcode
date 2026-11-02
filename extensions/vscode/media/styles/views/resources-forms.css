@@ -26,7 +26,6 @@
 .resource-card:hover {
   border-color: var(--line-bright, var(--line));
   box-shadow: var(--shadow-md);
-  transform: translateY(-1px);
 }
 
 .resource-card .metadata {
@@ -100,7 +99,7 @@
 
 .quota-value {
   font-family: var(--mono);
-  font-size: 26px;
+  font-size: var(--font-3xl);
   margin: 12px 0;
   line-height: 1.4;
   overflow-wrap: anywhere;
@@ -110,7 +109,7 @@
 
 .quota-value span {
   font-family: inherit;
-  font-size: 11px;
+  font-size: var(--font-xs);
   color: var(--muted);
   display: block;
   font-variant-numeric: tabular-nums;
@@ -178,8 +177,8 @@
   align-items: center;
   gap: 6px;
   padding: 5px 12px;
-  font-size: 12px;
-  font-family: var(--font-sans);
+  font-size: var(--font-sm);
+  font-family: inherit;
   border-radius: var(--radius-sm, 4px);
   border: 1px solid var(--line);
   background: var(--surface-hover);
@@ -196,14 +195,13 @@
 }
 
 .btn-sort-toggle.active {
-  color: var(--color-amber-gold, #e3b341);
-  border-color: rgba(227, 179, 65, 0.45);
-  background: rgba(227, 179, 65, 0.12);
+  color: var(--accent);
+  border-color: var(--accent-border);
+  background: var(--accent-subtle);
   font-weight: 500;
-  box-shadow: 0 0 6px rgba(227, 179, 65, 0.15);
 }
 
 .btn-sort-toggle.active:hover {
-  border-color: rgba(227, 179, 65, 0.65);
-  background: rgba(227, 179, 65, 0.18);
+  border-color: var(--accent);
+  background: var(--accent-subtle-hover);
 }

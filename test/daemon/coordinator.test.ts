@@ -653,3 +653,8 @@ test('partial Worker stop failure keeps daemon available and never forces termin
  await assert.rejects(coordinator.call('shutdown_pool',{}),/shutdown incomplete/);assert.deepEqual(stopped,['a','b']);
  assert.ok(await coordinator.call('get_pool_policy',{}));
 });
+
+test('daemon_start reaching a live daemon reports ready instead of an empty JSON-RPC result', async (t) => {
+  const { coordinator } = await fixture(t);
+  assert.deepEqual(await coordinator.call('daemon_start', {}), { ready: true });
+});

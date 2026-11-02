@@ -22,9 +22,22 @@ export class WorkbenchApp {
   private readonly submittedDraftTokens = new Set<string>();
   private destroyed = false; private pointerGesture = false; private renderQueued = false;
   private focusAfterRender: string | null = null;
+  /** Live regions live outside the re-rendered root so screen readers observe real text changes. */
+  private readonly livePolite: HTMLElement;
+  private readonly liveAssertive: HTMLElement;
+  private readonly announcedReceipts = new Map<string, string>();
+  private lastAnnouncedMessage = '';
 
   constructor(private readonly root: HTMLElement, readonly bridge: WebviewBridge) {
     this.state = createState(bridge.getState());
+    const doc = root.ownerDocument;
+    const makeLive = (politeness: 'polite' | 'assertive'): HTMLElement => {
+      const node = doc.createElement('div'); node.className = 'sr-only'; node.dataset.live = politeness;
+      node.setAttribute('aria-live', politeness); node.setAttribute('aria-atomic', 'true');
+      if (politeness === 'assertive') node.setAttribute('role', 'alert'); else node.setAttribute('role', 'status');
+      (root.parentElement ?? doc.body).append(node); return node;
+    };
+    this.livePolite = makeLive('polite'); this.liveAssertive = makeLive('assertive');
     this.toasts = new ToastManager({ root, state: this.state, onDismiss: key => void this.action('dismiss-action-receipt', { key }) });
     this.disposeSubscription = bridge.subscribe(snapshot => this.receiveSnapshot(snapshot));
     root.addEventListener('input', this.onInput); root.addEventListener('change', this.onChange); root.addEventListener('keydown', this.onKeyDown);
@@ -54,15 +67,36 @@ export class WorkbenchApp {
     restoreFrame(this.root, frame, this.focusAfterRender); this.focusAfterRender = null;
     const persisted = persistedUi(this.state); if (persisted) this.bridge.setState(persisted);
     this.toasts.attachToastInteractions();
+    this.announce();
+  }
+  /** Announce new messages and receipt phase changes once, via the persistent live regions. */
+  private announce(): void {
+    let polite = ''; let assertive = '';
+    if (this.state.message && this.state.message !== this.lastAnnouncedMessage) {
+      if (this.state.messageTone === 'error') assertive = this.state.message; else polite = this.state.message;
+    }
+    this.lastAnnouncedMessage = this.state.message;
+    const seen = new Set<string>();
+    for (const receipt of this.state.snapshot?.actions ?? []) {
+      seen.add(receipt.key);
+      if (this.announcedReceipts.get(receipt.key) === receipt.phase) continue;
+      this.announcedReceipts.set(receipt.key, receipt.phase);
+      if (receipt.phase === 'failed') assertive = [assertive, `操作未完成：${receipt.message}`].filter(Boolean).join(' ');
+      else if (receipt.phase !== 'pending') polite = [polite, `${receipt.phase === 'succeeded' ? '已收到回执' : '结果待确认'}：${receipt.message}`].filter(Boolean).join(' ');
+    }
+    for (const key of Array.from(this.announcedReceipts.keys())) if (!seen.has(key)) this.announcedReceipts.delete(key);
+    if (polite) this.livePolite.textContent = polite;
+    if (assertive) this.liveAssertive.textContent = assertive;
   }
   private async run<T>(key: string, operation: () => Promise<T>, errorKey = key): Promise<T | undefined> {
     if (this.state.pending.has(key)) return undefined;
     this.state.pending.add(key); this.state.errors.delete(errorKey); this.render();
-    try { return await operation(); }
+    const messageBefore = this.state.message;
+    try { const result = await operation(); if (this.state.message !== messageBefore) this.state.messageTone = 'info'; return result; }
     catch (error) {
       if (error instanceof BridgeError && ['STALE_CONNECTION', 'STALE_SELECTION'].includes(error.detail.code)) return undefined;
       const message = error instanceof BridgeError ? `${error.detail.code} · ${error.message}` : '此操作未能完成，请查看目标状态后重试读取。';
-      this.state.errors.set(errorKey, message); this.state.message = message; return undefined;
+      this.state.errors.set(errorKey, message); this.state.message = message; this.state.messageTone = 'error'; return undefined;
     } finally { this.state.pending.delete(key); this.render(); }
   }
   private current(taskId: string, sequence: number, generation: number): boolean { return this.state.snapshot?.selectedTaskId === taskId && this.selectionSequence === sequence && this.state.snapshot?.connection.generation === generation; }
@@ -80,6 +114,10 @@ export class WorkbenchApp {
   }
   async action(name: string, data: Record<string, string> = {}): Promise<void> {
     const snapshot = this.state.snapshot;
+    if (name === 'confirm.arm') { this.state.armedConfirm = data.key; this.render(); return; }
+    if (name === 'confirm.cancel') { this.disarmConfirm(); return; }
+    if (this.state.armedConfirm) this.state.armedConfirm = null;
+    if (name === 'message.dismiss') { this.state.message = ''; this.render(); return; }
     if (name === 'dismiss-action-receipt') { this.toasts.dismiss(data.key); this.render(); return; }
     if (name === 'page') { if (!['tasks', 'resources', 'settings'].includes(data.page)) return; this.state.page = data.page as 'tasks' | 'resources' | 'settings'; this.render(); this.focus('page-title'); return; }
     if (name === 'compose.open') {
@@ -271,14 +309,27 @@ export class WorkbenchApp {
       const tab = event.key === 'Home' ? tabs[0] : event.key === 'End' ? tabs[tabs.length - 1] : tabs[(index + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length];
       void this.action('tab', { tab }); this.focus(`tab-${tab}`); return;
     }
+    if (target.classList.contains('task-row') && ['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
+      // Roving focus through the task list; Enter/Space still selects (native button).
+      const rows = Array.from(this.root.querySelectorAll<HTMLElement>('.task-list .task-row')); const index = rows.indexOf(target);
+      const next = event.key === 'Home' ? rows[0] : event.key === 'End' ? rows[rows.length - 1] : rows[Math.min(rows.length - 1, Math.max(0, index + (event.key === 'ArrowDown' ? 1 : -1)))];
+      if (next) { event.preventDefault(); next.focus(); } return;
+    }
+    if (event.key === 'Escape' && this.state.armedConfirm) { event.preventDefault(); this.disarmConfirm(); return; }
     if (event.key === 'Escape' && this.state.page === 'tasks' && this.state.detailOpen && !(target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement)) { event.preventDefault(); void this.action('detail.back'); }
   };
+  private disarmConfirm(): void {
+    const key = this.state.armedConfirm; if (!key) return;
+    this.state.armedConfirm = null; this.render();
+    const target = Array.from(this.root.querySelectorAll<HTMLElement>('[data-focus]')).find(node => node.dataset.focus === key);
+    if (this.renderQueued || this.pointerGesture) this.focusAfterRender = `[data-focus="${key.replace(/["\\]/g, '\\$&')}"]`; else target?.focus();
+  }
   private focus(id: string): void { if (this.renderQueued || this.pointerGesture) this.focusAfterRender = `#${id}`; else this.root.querySelector<HTMLElement>(`#${id}`)?.focus({ preventScroll: false }); }
   private focusInvalid(): void { if (this.renderQueued || this.pointerGesture) this.focusAfterRender = '[aria-invalid="true"]'; else this.root.querySelector<HTMLElement>('[aria-invalid="true"]')?.focus(); }
   private focusTask(): void { if (this.renderQueued || this.pointerGesture) this.focusAfterRender = '.task-row.selected'; else this.root.querySelector<HTMLElement>('.task-row.selected')?.focus(); }
   dispose(): void {
     this.destroyed = true; this.disposeSubscription(); if (this.draftTimer) clearTimeout(this.draftTimer); if (this.filterTimer) clearTimeout(this.filterTimer); if (this.pointerReleaseTimer) clearTimeout(this.pointerReleaseTimer);
-    this.toasts.dispose();
+    this.toasts.dispose(); this.livePolite.remove(); this.liveAssertive.remove();
     this.root.removeEventListener('input', this.onInput); this.root.removeEventListener('change', this.onChange); this.root.removeEventListener('keydown', this.onKeyDown); clearTaskContent(this.state); this.state.draft = null; this.bridge.dispose();
     this.root.removeEventListener('pointerdown', this.onPointerDown, true); window.removeEventListener('pointerup', this.onPointerUp, true); window.removeEventListener('pointercancel', this.onPointerUp, true);
   }

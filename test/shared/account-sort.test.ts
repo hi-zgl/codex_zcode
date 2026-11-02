@@ -147,3 +147,18 @@ test('boundaries: empty list and single item return cleanly', () => {
   const single = [{ alias: 'only-one' }];
   assert.deepEqual(sortAccountsByQuota(single), single);
 });
+
+test('quota windows or raw buckets without numeric data do not mark an account exhausted', () => {
+  const windowsOnly = extractAccountQuotaMetrics(
+    { alias: 'a', health: 'available' },
+    { live: { windows: [{ windowType: 'token_pool', unit: 'tokens' }] } } as any,
+  );
+  assert.equal(windowsOnly.rank, 3);
+  const rawOnly = extractAccountQuotaMetrics({ alias: 'b', health: 'available', quota: { quota_raw: [{ show_name: 'GLM' }] } });
+  assert.equal(rawOnly.rank, 3);
+  const exhausted = extractAccountQuotaMetrics(
+    { alias: 'c', health: 'available' },
+    { live: { windows: [{ windowType: 'token_pool', unit: 'tokens', percentageUsed: 100 }] } } as any,
+  );
+  assert.equal(exhausted.rank, 2);
+});

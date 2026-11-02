@@ -3,6 +3,8 @@ import { chmod, lstat, mkdir, readFile, readdir, rename, writeFile } from 'node:
 import { join, resolve } from 'node:path';
 
 export type AccountProvider = 'zai' | 'bigmodel';
+/** Native ZCode provider id for an account's Start Plan entitlement. */
+export function startPlanProviderId(provider: AccountProvider): string { return `account:${provider}-start-plan`; }
 export type AccountHealth = 'unknown' | 'available' | 'cooling' | 'blocked' | 'invalid';
 export interface AccountSummary {
   alias: string;

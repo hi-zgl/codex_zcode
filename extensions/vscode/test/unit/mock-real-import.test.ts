@@ -1,12 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { loadMockFixture, MockTransport } from '../../src/host/mock.js';
 
 const fixturePath = resolve(__dirname, '../fixtures/pool-demo.json');
-const realAccountsPath = '/home/zgl/.local/share/zcode-pool/imports/zcode_accounts_2026-11-01.json';
+const realAccountsPath = process.env.ZCODE_POOL_REAL_ACCOUNTS_FILE ?? '/home/zgl/.local/share/zcode-pool/imports/zcode_accounts_2026-11-01.json';
+// These checks need a private 28-account export that only exists on the author's machine.
+// Point ZCODE_POOL_REAL_ACCOUNTS_FILE at a copy to run them elsewhere.
+const skipReal = existsSync(realAccountsPath) ? false : `real account export not found at ${realAccountsPath}`;
 
-test('MockTransport imports real account files and parses real quota structures', async () => {
+test('MockTransport imports real account files and parses real quota structures', { skip: skipReal }, async () => {
   const fixture = await loadMockFixture(fixturePath);
   const transport = new MockTransport(fixture);
 
@@ -59,7 +63,7 @@ test('MockTransport imports real account files and parses real quota structures'
   assert.equal(importedAcc.quota.quota_raw[0].show_name, 'GLM-5.3-Flash');
 });
 
-test('MockTransport deduplicates accounts on re-importing the same file', async () => {
+test('MockTransport deduplicates accounts on re-importing the same file', { skip: skipReal }, async () => {
   const fixture = await loadMockFixture(fixturePath);
   const transport = new MockTransport(fixture);
 

@@ -13,8 +13,7 @@
 
 .approval-card:hover {
   border-color: var(--warning);
-  box-shadow: var(--shadow-md), 0 0 12px var(--warning-glow);
-  transform: translateY(-1px);
+  box-shadow: var(--shadow-md);
 }
 
 .approval-title-wrap {
@@ -24,12 +23,12 @@
 }
 
 .approval-shield-icon {
-  color: var(--warning);
+  color: var(--warning-text);
   flex-shrink: 0;
 }
 
 .approval-card > p {
-  font-size: 12px;
+  font-size: var(--font-sm);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   line-height: 1.6;
@@ -42,14 +41,14 @@
 .approval-card > .approval-read-status {
   margin: 13px 0 8px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--font-xs);
   display: inline-flex;
   align-items: center;
   gap: 5px;
 }
 
 .approval-card > .approval-read-status.complete {
-  color: var(--success);
+  color: var(--success-text);
   font-weight: 500;
 }
 
@@ -79,7 +78,7 @@
   align-items: center;
   gap: 8px;
   cursor: pointer;
-  font-size: 11px;
+  font-size: var(--font-xs);
   font-weight: 500;
   color: var(--muted);
   padding: 10px 14px;
@@ -141,7 +140,7 @@
 
 .review-identity .metadata dd {
   font-family: var(--mono);
-  font-size: 11px;
+  font-size: var(--font-xs);
   word-break: break-all;
   overflow-wrap: anywhere;
 }
@@ -153,7 +152,7 @@
 }
 
 .permission-content .section > p {
-  font-size: 12px;
+  font-size: var(--font-sm);
   overflow-wrap: anywhere;
   line-height: 1.6;
 }
@@ -184,7 +183,7 @@
 
 .review-decision-meta {
   font-family: var(--mono);
-  font-size: 11px;
+  font-size: var(--font-xs);
   color: var(--muted);
   font-variant-numeric: tabular-nums;
   font-feature-settings: "tnum" 1;

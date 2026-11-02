@@ -17,13 +17,13 @@
 .qbar {
   height: var(--qbar-height, 19px);
   border-radius: var(--qbar-radius, 4px);
-  background: var(--qbar-track, #2b2e36);
-  border: 1px solid var(--qbar-track-border, rgba(255, 255, 255, 0.04));
+  background: var(--qbar-track);
+  border: 1px solid var(--qbar-track-border);
   overflow: hidden;
   margin-top: 4px;
   position: relative;
   box-sizing: border-box;
-  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.28);
+  box-shadow: var(--shadow-inset);
 }
 
 /* Fill Indicator */
@@ -55,10 +55,10 @@
   align-items: center;
   justify-content: center;
   font-family: var(--mono);
-  font-size: 11.5px;
+  font-size: var(--font-sm);
   font-weight: 500;
   letter-spacing: 0.02em;
-  color: var(--qbar-text-outside, #97a1b4);
+  color: var(--qbar-text-outside);
   font-variant-numeric: tabular-nums;
   font-feature-settings: "tnum" 1;
   pointer-events: none;
@@ -69,9 +69,9 @@
 
 /* In-Fill High Contrast Text Inversion (Remaining >= 58%) */
 .qbar-pct.in-fill {
-  color: var(--qbar-text-inside, #0e1116);
+  color: var(--qbar-text-inside);
   font-weight: 700;
-  text-shadow: 0 0 1px rgba(255, 255, 255, 0.15);
+  text-shadow: 0 0 1px color-mix(in srgb, #fff 15%, transparent);
 }
 
 /* Compact / Mini Variant */
@@ -80,7 +80,7 @@
 }
 
 .qbar.mini .qbar-pct {
-  font-size: 11px;
+  font-size: var(--font-xs);
 }
 
 /* Striped Diagnostic Mode */
@@ -105,34 +105,9 @@
   50% { opacity: 0.74; }
 }
 
-/* Light Theme Contrast Refinements */
-body.vscode-light .qbar {
-  background: #e4e7ea;
-  border-color: rgba(31, 35, 40, 0.12);
-  box-shadow: inset 0 1px 2px rgba(31, 35, 40, 0.12);
-}
-
-body.vscode-light .qbar-pct {
-  color: #4f5864;
-}
-
+/* Light theme: fills come from --mint/--amber/--red fallbacks; keep the inside text crisp. */
 body.vscode-light .qbar-pct.in-fill {
-  color: #0b0f14;
   text-shadow: none;
-}
-
-body.vscode-light .qbar-fill {
-  background: #2da44e;
-}
-
-body.vscode-light .qbar.warn .qbar-fill,
-body.vscode-light .qbar-fill.warn {
-  background: #bf8700;
-}
-
-body.vscode-light .qbar.danger .qbar-fill,
-body.vscode-light .qbar-fill.danger {
-  background: #cf222e;
 }
 
 /* High Contrast Mode Refinements */

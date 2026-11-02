@@ -14,7 +14,7 @@
 
 .tier-b {
   font-family: var(--mono);
-  font-size: 11.5px;
+  font-size: var(--font-sm);
   font-weight: 700;
   letter-spacing: 0.06em;
   border-radius: 3px;
@@ -35,46 +35,46 @@
 
 /* Tier Variants */
 .tier-b.max {
-  color: var(--tier-max-fg, #f0b055);
-  border: 1px solid var(--tier-max-border, #a06a22);
-  background: var(--tier-max-bg, rgba(232, 163, 61, 0.12));
+  color: var(--tier-max-fg);
+  border: 1px solid var(--tier-max-border);
+  background: var(--tier-max-bg);
 }
 
 .tier-b.pro {
-  color: var(--tier-pro-fg, #7fb3e8);
-  border: 1px solid var(--tier-pro-border, #33567c);
-  background: var(--tier-pro-bg, rgba(109, 168, 232, 0.12));
+  color: var(--tier-pro-fg);
+  border: 1px solid var(--tier-pro-border);
+  background: var(--tier-pro-bg);
 }
 
 .tier-b.lite {
-  color: var(--tier-lite-fg, #9fd4a8);
-  border: 1px solid var(--tier-lite-border, #3d6c46);
-  background: var(--tier-lite-bg, rgba(98, 195, 112, 0.12));
+  color: var(--tier-lite-fg);
+  border: 1px solid var(--tier-lite-border);
+  background: var(--tier-lite-bg);
 }
 
 .tier-b.start {
-  color: var(--tier-start-fg, #e8a33d);
-  border: 1px solid var(--tier-start-border, #c9862a);
-  background: var(--tier-start-bg, rgba(232, 163, 61, 0.10));
+  color: var(--tier-start-fg);
+  border: 1px solid var(--tier-start-border);
+  background: var(--tier-start-bg);
 }
 
 .tier-b.trial {
-  color: var(--tier-trial-fg, #c9a6e8);
-  border: 1px solid var(--tier-trial-border, #5c4179);
-  background: var(--tier-trial-bg, rgba(183, 138, 224, 0.12));
+  color: var(--tier-trial-fg);
+  border: 1px solid var(--tier-trial-border);
+  background: var(--tier-trial-bg);
 }
 
 .tier-b.free,
 .tier-b.other {
-  color: var(--tier-free-fg, var(--muted, #838794));
-  border: 1px solid var(--tier-free-border, var(--line, #2c2f37));
-  background: var(--tier-free-bg, var(--surface-hover, rgba(255, 255, 255, 0.04)));
+  color: var(--tier-free-fg);
+  border: 1px solid var(--tier-free-border);
+  background: var(--tier-free-bg);
 }
 
 /* Standalone / Hero Tier Badge */
 .tier {
   font-family: var(--mono);
-  font-size: 13px;
+  font-size: var(--font-md);
   font-weight: 700;
   letter-spacing: 0.08em;
   color: var(--amber, #e8a33d);
@@ -91,7 +91,7 @@
 /* Compact / Mini Badges */
 .tier-b.mini,
 .tier-b-mini {
-  font-size: 10px;
+  font-size: var(--font-xs);
   line-height: 15px;
   padding: 0 4px;
   letter-spacing: 0.04em;
@@ -103,15 +103,6 @@
   border-radius: var(--radius-full, 9999px);
   padding: 0 8px;
 }
-
-/* Light Theme WCAG AAA Contrast Calibrations */
-body.vscode-light .tier-b.max { color: #8c5300; border-color: #d4a72c; background: rgba(232, 163, 61, 0.16); }
-body.vscode-light .tier-b.pro { color: #0969da; border-color: #54aeff; background: rgba(9, 105, 218, 0.12); }
-body.vscode-light .tier-b.lite { color: #1a7f37; border-color: #4ac26b; background: rgba(26, 127, 55, 0.12); }
-body.vscode-light .tier-b.start { color: #9a6700; border-color: #d4a72c; background: rgba(154, 103, 0, 0.12); }
-body.vscode-light .tier-b.trial { color: #8250df; border-color: #c297ff; background: rgba(130, 80, 223, 0.12); }
-body.vscode-light .tier-b.free,
-body.vscode-light .tier-b.other { color: var(--muted, #57606a); border-color: var(--line, #d0d7de); background: rgba(31, 35, 40, 0.06); }
 
 /* High Contrast Mode Refinements */
 body.vscode-high-contrast .tier-b {

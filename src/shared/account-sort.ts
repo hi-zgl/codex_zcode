@@ -45,6 +45,7 @@ export function extractAccountQuotaMetrics(account: SortableAccount, quota?: UiQ
       let maxTokens = 0;
       let maxScalar = 0;
       let minPct = 100;
+      let sawPct = false;
 
       for (const w of snap.windows) {
         const rem = num(w.remaining);
@@ -56,13 +57,15 @@ export function extractAccountQuotaMetrics(account: SortableAccount, quota?: UiQ
         }
         const pct = num(w.percentageUsed);
         if (pct !== null) {
+          sawPct = true;
           minPct = Math.min(minPct, pct);
           if (pct < 100) hasPositive = true;
         }
       }
 
       if (hasPositive) return { rank: 4, remainingTokens: maxTokens, remainingScalar: maxScalar, minPercentageUsed: minPct, identifier };
-      if (hasZero || minPct >= 100) return { rank: 2, remainingTokens: 0, remainingScalar: 0, minPercentageUsed: 100, identifier };
+      // Windows without any numeric remaining/percentage carry no evidence of exhaustion.
+      if (hasZero || (sawPct && minPct >= 100)) return { rank: 2, remainingTokens: 0, remainingScalar: 0, minPercentageUsed: 100, identifier };
     }
 
     const rem = num(snap.remaining);
@@ -82,15 +85,17 @@ export function extractAccountQuotaMetrics(account: SortableAccount, quota?: UiQ
       let maxTokens = 0;
       let hasPos = false;
       let allZero = true;
+      let sawNumber = false;
       for (const b of raw) {
         const rem = num(b.remaining_units ?? b.available_units);
         if (rem !== null) {
+          sawNumber = true;
           if (rem > 0) { hasPos = true; allZero = false; maxTokens = Math.max(maxTokens, rem); }
           else if (rem < 0) { allZero = false; }
         }
       }
       if (hasPos) return { rank: 4, remainingTokens: maxTokens, remainingScalar: 0, minPercentageUsed: 0, identifier };
-      if (allZero) return { rank: 2, remainingTokens: 0, remainingScalar: 0, minPercentageUsed: 100, identifier };
+      if (sawNumber && allZero) return { rank: 2, remainingTokens: 0, remainingScalar: 0, minPercentageUsed: 100, identifier };
     }
 
     const rem = num(accQuota.remaining);

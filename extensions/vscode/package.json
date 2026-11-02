@@ -3,6 +3,7 @@
   "publisher": "zcode-pool",
   "displayName": "ZCode Pool",
   "description": "Explicit, trusted control of a local ZCode Pool daemon.",
+  "icon": "media/icon.png",
   "version": "0.1.0",
   "private": true,
   "type": "commonjs",
@@ -72,11 +73,13 @@
       "zcodePool": [
         {
           "id": "zcodePool.tasks",
-          "name": "任务"
+          "name": "任务",
+          "icon": "media/zcode-pool.svg"
         },
         {
           "id": "zcodePool.resources",
-          "name": "资源"
+          "name": "资源",
+          "icon": "media/zcode-pool.svg"
         }
       ]
     },
@@ -100,7 +103,8 @@
       {
         "command": "zcodePool.disconnect",
         "title": "ZCode Pool: Disconnect",
-        "enablement": "zcodePool.connected"
+        "enablement": "zcodePool.connected",
+        "icon": "$(debug-disconnect)"
       },
       {
         "command": "zcodePool.refresh",
@@ -111,7 +115,8 @@
       {
         "command": "zcodePool.openTask",
         "title": "ZCode Pool: Open Task",
-        "enablement": "zcodePool.connected"
+        "enablement": "zcodePool.connected",
+        "icon": "$(go-to-file)"
       },
       {
         "command": "zcodePool.newTask",
@@ -122,52 +127,62 @@
       {
         "command": "zcodePool.createWorkspace",
         "title": "ZCode Pool: Create Workspace",
-        "enablement": "zcodePool.canMutate"
+        "enablement": "zcodePool.canMutate",
+        "icon": "$(new-folder)"
       },
       {
         "command": "zcodePool.importAccounts",
         "title": "ZCode Pool: Import Accounts",
-        "enablement": "zcodePool.canMutate"
+        "enablement": "zcodePool.canMutate",
+        "icon": "$(add)"
       },
       {
         "command": "zcodePool.startWorker",
         "title": "ZCode Pool: Start Worker",
-        "enablement": "zcodePool.canMutate"
+        "enablement": "zcodePool.canMutate",
+        "icon": "$(play)"
       },
       {
         "command": "zcodePool.stopWorker",
         "title": "ZCode Pool: Stop Worker",
-        "enablement": "zcodePool.canMutate"
+        "enablement": "zcodePool.canMutate",
+        "icon": "$(debug-stop)"
       },
       {
         "command": "zcodePool.probeWorker",
         "title": "ZCode Pool: Query Authentication and Quota",
-        "enablement": "zcodePool.canMutate"
+        "enablement": "zcodePool.canMutate",
+        "icon": "$(pulse)"
       },
       {
         "command": "zcodePool.cancelTask",
         "title": "ZCode Pool: Request Cancellation",
-        "enablement": "zcodePool.canMutate"
+        "enablement": "zcodePool.canMutate",
+        "icon": "$(circle-slash)"
       },
       {
         "command": "zcodePool.reconcileTask",
         "title": "ZCode Pool: 核对执行状态",
-        "enablement": "zcodePool.canMutate"
+        "enablement": "zcodePool.canMutate",
+        "icon": "$(sync)"
       },
       {
         "command": "zcodePool.resumeTask",
         "title": "ZCode Pool: 恢复观察",
-        "enablement": "zcodePool.canMutate"
+        "enablement": "zcodePool.canMutate",
+        "icon": "$(debug-start)"
       },
       {
         "command": "zcodePool.respondApproval",
         "title": "ZCode Pool: Review Approval",
-        "enablement": "zcodePool.canMutate"
+        "enablement": "zcodePool.canMutate",
+        "icon": "$(shield)"
       },
       {
         "command": "zcodePool.openDiff",
         "title": "ZCode Pool: Open Immutable File Diff",
-        "enablement": "zcodePool.connected"
+        "enablement": "zcodePool.connected",
+        "icon": "$(diff)"
       },
       {
         "command": "zcodePool.openSettings",
@@ -194,7 +209,8 @@
       },
       {
         "command": "zcodePool.shutdownPool",
-        "title": "ZCode Pool: 收工（停止空闲实例与后台）"
+        "title": "ZCode Pool: 收工（停止空闲实例与后台）",
+        "icon": "$(stop-circle)"
       }
     ],
     "menus": {

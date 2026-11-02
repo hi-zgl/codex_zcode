@@ -1,10 +1,10 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { randomBytes, randomUUID } from 'node:crypto';
-import { chmod, lstat, mkdir, readFile, readdir, realpath, writeFile } from 'node:fs/promises';
+import { chmod, lstat, readFile, readdir, realpath, writeFile } from 'node:fs/promises';
 import { createWriteStream } from 'node:fs';
 import { connect } from 'node:net';
 import { homedir } from 'node:os';
-import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { privateDirectory, writePrivateJson, type AccountCredentials } from '../accounts/index.js';
 import { injectAccount, initializeMachineIdentity, type InjectedIdentity } from './injection.js';

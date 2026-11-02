@@ -1,5 +1,6 @@
 import type { UiSnapshot } from '../../../host/types.js';
 import { mutationReason, workerUnavailable } from '../../state.js';
+import { icon } from '../../icons.js';
 import type { RenderContext } from '../types.js';
 import { el, section, kv, field, input, select, code, heading } from '../dom.js';
 import { notice } from '../primitives.js';
@@ -12,7 +13,7 @@ export function renderComposer(ctx: RenderContext, snapshot: UiSnapshot): HTMLEl
   const workspace = snapshot.resources.workspaces.find(item => item.workspaceId === draft.workspaceId);
   const worker = snapshot.resources.workers.find(item => item.workerId === draft.workerId);
   const account = snapshot.resources.accounts.find(item => item.alias === worker?.accountAlias);
-  const node = el('div', 'composer-page', heading('ZCODE / 高级操作', '手动派发任务', '直接指定任务目录与执行器。日常可在 Codex 中描述目标，由 Codex 调度。草稿在关闭或重载窗口后可能丢失。', button(ctx, '返回任务列表', 'page', { page: 'tasks' })));
+  const node = el('div', 'composer-page', heading('ZCODE / 高级操作', '手动派发任务', '直接指定任务目录与执行器。日常可在 Codex 中描述目标，由 Codex 调度。草稿在关闭或重载窗口后可能丢失。', button(ctx, '返回任务列表', 'page', { page: 'tasks' }, { icon: icon('arrow-left', { size: 12 }) })));
   node.append(el('p', 'field-hint', '任务目录是代码修改的位置；执行器决定使用哪个账号。'));
   const form = el('form', 'composer-form');
   form.noValidate = true;
@@ -63,14 +64,14 @@ export function renderComposer(ctx: RenderContext, snapshot: UiSnapshot): HTMLEl
       field('命令名称', executable, undefined, ctx.state.validation[`verify.${index}.command`]),
       field('参数（JSON 字符串数组）', args, '如 ["--test","test/example.test.ts"]；不经过 shell。', ctx.state.validation[`verify.${index}.args`]),
       field('超时（毫秒）', timeout, undefined, ctx.state.validation[`verify.${index}.timeoutMs`]),
-      button(ctx, '移除此命令', 'verify.remove', { index: String(index) })
+      button(ctx, '移除此命令', 'verify.remove', { index: String(index) }, { variant: 'ghost', icon: icon('close', { size: 12 }) })
     ));
   }
   if (!draft.verifyCommands.length) commands.append(code('git diff --check', '未配置命令时使用此默认核验'));
-  commands.append(button(ctx, '添加核验命令', 'verify.add', {}, { reason: draft.verifyCommands.length >= 10 ? '已达 10 项上限。' : null }));
+  commands.append(button(ctx, '添加核验命令', 'verify.add', {}, { icon: icon('add', { size: 12 }), reason: draft.verifyCommands.length >= 10 ? '已达 10 项上限。' : null }));
   form.append(commands);
   const reason = mutationReason(snapshot, 'dispatchTask') ?? (ctx.state.submittedDraftToken === draft.submitToken ? '此草稿已提交，保留原请求身份。请检查回执或查询原请求；建立独立任务请返回列表使用“高级操作”。' : null);
-  form.append(actionWithReason(ctx, '提交任务', 'dispatch', {}, reason, true), messageFor(ctx, 'dispatch') ?? '', el('p', 'field-hint', '提交后可在任务列表查看进度。若结果待确认，请通过回执查询原请求。'));
+  form.append(actionWithReason(ctx, '提交任务', 'dispatch', {}, reason, true, 'dispatch', { icon: icon('play', { size: 12 }) }), messageFor(ctx, 'dispatch') ?? '', el('p', 'field-hint', '提交后可在任务列表查看进度。若结果待确认，请通过回执查询原请求。'));
   node.append(form);
   return node;
 }

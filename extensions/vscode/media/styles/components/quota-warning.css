@@ -23,9 +23,8 @@
   border-radius: var(--radius-lg, 8px);
   background: color-mix(in srgb, var(--warning) 10%, var(--surface-card, var(--surface-raised)));
   color: color-mix(in srgb, var(--warning) 85%, var(--text));
-  font-size: 12px;
+  font-size: var(--font-sm);
   line-height: 1.4;
-  backdrop-filter: var(--glass-blur, blur(8px));
   transition: border-color var(--transition-fast), background var(--transition-fast);
 }
 
@@ -33,7 +32,7 @@
 .quota-cache-warning-icon {
   flex: 0 0 auto;
   margin-top: 1px;
-  color: var(--warning);
+  color: var(--warning-text);
 }
 
 .quota-cache-warning-content {
@@ -54,7 +53,7 @@
 
 .quota-cache-warning-time {
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--font-xs);
   min-width: 0;
   overflow-wrap: anywhere;
   font-variant-numeric: tabular-nums;
@@ -71,9 +70,9 @@
 
 .quota-cache-warning-btn {
   font-family: inherit;
-  font-size: 11px;
+  font-size: var(--font-xs);
   font-weight: 600;
-  color: var(--warning);
+  color: var(--warning-text);
   background: transparent;
   border: 1px solid color-mix(in srgb, var(--warning) 40%, transparent);
   border-radius: 4px;
@@ -91,11 +90,11 @@
 .quota-cache-warning.table {
   margin: 2px 0 6px;
   padding: 6px 8px;
-  font-size: 11.5px;
+  font-size: var(--font-sm);
 }
 
 .quota-cache-warning.table .quota-cache-warning-time {
-  font-size: 10.5px;
+  font-size: var(--font-xs);
 }
 
 /* Error Severity Variant (Hard Failure / Network Down) */
@@ -107,11 +106,11 @@
 
 .quota-cache-warning.error > svg,
 .quota-cache-warning.error .quota-cache-warning-icon {
-  color: var(--danger);
+  color: var(--danger-text);
 }
 
 .quota-cache-warning.error .quota-cache-warning-btn {
-  color: var(--danger);
+  color: var(--danger-text);
   border-color: color-mix(in srgb, var(--danger) 40%, transparent);
 }
 
@@ -120,19 +119,19 @@
   border-color: var(--danger);
 }
 
-/* Light Theme Contrast Enhancements */
+/* Light theme: darken the warning hue toward the text colour for ≥ 4.5:1 contrast. */
 body.vscode-light .quota-cache-warning {
   border-color: color-mix(in srgb, var(--warning) 45%, var(--line));
-  background: color-mix(in srgb, var(--warning) 12%, #fff);
-  color: #6a4a00;
+  background: color-mix(in srgb, var(--warning) 12%, var(--surface));
+  color: color-mix(in srgb, var(--warning) 70%, var(--text));
 }
 
 body.vscode-light .quota-cache-warning-title {
-  color: #4a3400;
+  color: color-mix(in srgb, var(--warning) 45%, var(--text));
 }
 
 body.vscode-light .quota-cache-warning-time {
-  color: #7d6530;
+  color: color-mix(in srgb, var(--warning) 60%, var(--muted));
 }
 
 /* High Contrast Mode Refinements */

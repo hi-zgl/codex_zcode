@@ -31,25 +31,18 @@
  *    - themes.css: Explicit dark, light, and high-contrast theme overrides
  *    - responsive.css: Viewport width breakpoints (280px to 2560px)
  *
- * Design System Specifications & Standards:
- * - Badges: Monospace 11.5px bold letter-spacing 0.06em (.tier-b .max/.pro/.lite/.start/.trial/.free)
- * - Panels: 10px rounded dark glassmorphism (.quota-panel) with 3-column .q-win grid
- * - Progress: 18~20px height (.qbar) with mint (<70%), amber (>=70%), red (>=90%)
- * - Text Inversion: High contrast inverted text (.qbar-pct.in-fill) when fill >= 58%
- * - Warning: Soft warning banner (.quota-cache-warning) with last observed timestamp
- * - Tabular Figures: tabular-nums throughout all numeric values, timers, and percentages
- *
- * Design Token Ramps:
- * - --mint: #62c370 (Normal tier & positive metrics)
- * - --amber: #e8a33d (Warning tier >= 70% usage)
- * - --red: #e05252 (Danger tier >= 90% usage)
- * - --mono: Editor monospace stack with Cascadia, Consolas, SF Mono fallback
- * - --surface-card: Theme-aware dark/light elevation surface
- *
- * Architectural Boundaries:
- * - Zero node_modules or host references in webview styles
- * - Strict WCAG AAA color contrast ratios across light and dark themes
- * - File line count constraints strictly maintained between 100 and 300 lines
+ * Design system rules:
+ * - Colour: every colour is a --vscode-* variable or derived from one with
+ *   color-mix() in tokens.css, so light, dark, high-contrast and custom themes
+ *   recolour the Webview. Literal colours exist only as fallbacks.
+ * - Type: use the --font-xs…--font-display scale (11px minimum, enforced by
+ *   scripts/test-browser.mjs); numbers use tabular figures globally.
+ * - Focus: one :focus-visible ring (tokens.css); components must not remove it.
+ * - Icons: Codicons (CC BY 4.0) inlined via src/webview/icons.ts; fill=currentColor.
+ * - Quota bars: mint (<70%), amber (>=70%), red (>=90%); text inverts when the
+ *   fill passes 58% (.qbar-pct.in-fill).
+ * - Contrast target: WCAG 2.1 AA (4.5:1 text, 3:1 UI) in the shipped themes;
+ *   high-contrast themes add explicit outlines (themes.css).
  */
 
 /* ==========================================================================

@@ -1,5 +1,6 @@
 import type { UiSnapshot } from '../../../../host/types.js';
 import { mutationReason } from '../../../state.js';
+import { icon } from '../../../icons.js';
 import type { RenderContext } from '../../types.js';
 import { el, section, kv, field, input } from '../../dom.js';
 import { badge, pulseDot } from '../../primitives.js';
@@ -95,7 +96,9 @@ export function renderWorkspaceSection(ctx: RenderContext, snapshot: UiSnapshot)
       'workspace.create',
       {},
       createReason,
-      true
+      true,
+      'workspace.create',
+      { icon: icon('add', { size: 12 }) }
     )
   );
 

@@ -17,6 +17,13 @@ export interface ButtonOptions {
   readonly busy?: boolean;
   readonly className?: string;
   readonly icon?: SVGElement;
+  /** Destructive action: first activation arms an inline confirmation instead of acting. */
+  readonly confirm?: ConfirmOptions;
+}
+
+export interface ConfirmOptions {
+  readonly prompt: string;
+  readonly confirmLabel: string;
 }
 
 export interface EmptyOptions {

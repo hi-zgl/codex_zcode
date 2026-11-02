@@ -150,6 +150,9 @@ test('formatResetTime formats human-friendly countdown with tabular figures', ()
   assert.equal(formatResetTime(now + 3_600_000 * 2 + 15 * 60_000, now), '2小时15分后重置');
   assert.equal(formatResetTime(now + 86_400_000 * 3, now), '3天后重置');
   assert.equal(formatResetTime(null, now), '—');
+  // Rounding boundaries: never "0小时59分" or "0天".
+  assert.equal(formatResetTime(now + 59.5 * 60_000, now), '1小时后重置');
+  assert.equal(formatResetTime(now + (24 * 60 - 0.5) * 60_000, now), '1天后重置');
 });
 
 test('direct account probe triggers account.probe action and suppresses rapid double-clicks', async () => {

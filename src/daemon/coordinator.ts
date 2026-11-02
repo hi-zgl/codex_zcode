@@ -1,29 +1,26 @@
 import { join, resolve } from 'node:path';
-import { readFile } from 'node:fs/promises';
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
-import { createHash } from 'node:crypto';
-import { AccountVault } from '../accounts/index.js';
+import { AccountVault, startPlanProviderId } from '../accounts/index.js';
 import { WorkerSupervisor } from '../supervisor/index.js';
 import { ZCodeServerAdapter } from '../runtime/zcode-server/index.js';
-import type { RuntimeConnection, SessionRef, TurnRef, ExecutionMode, RuntimeEvent, SessionSnapshot, ModelSelection } from '../runtime/types.js';
-import { redact, record, classifyTurnFailure } from '../runtime/zcode-server/events.js';
+import type { RuntimeConnection, SessionSnapshot, ModelSelection } from '../runtime/types.js';
+import { record, classifyTurnFailure } from '../runtime/zcode-server/events.js';
 import { DurableTaskStore } from '../core/index.js';
-import type { Task, JsonValue, TaskResult, StopProof } from '../core/types.js';
+import type { JsonValue, TaskResult, StopProof } from '../core/types.js';
 import { validateMethod, type MethodName } from '../shared/methods.js';
-import { createWorkspace, snapshotWorkspace } from './workspace.js';
+import { createWorkspace } from './workspace.js';
 import { UiService } from './ui.js';
 import { UiRpcError } from './ui-support.js';
-
-const exec = promisify(execFile);
 import {
-  FINAL_STATUSES, TERMINAL_STATES, UNAVAILABLE_HEALTH, APPROVAL_REVIEW_HINT,
-  type TerminalEvent, type Policy, type Active, type Observation, type ApprovalView, type RecoveryResult,
-  compactTask, safeDetail, boundedText, approvalView, taskPolicy, observeSnapshot, ownApprovals, taskSummary,
+  FINAL_STATUSES, UNAVAILABLE_HEALTH,
+  type TerminalEvent, type Active, type ApprovalView, type RecoveryResult,
+  compactTask, safeDetail, approvalView, taskPolicy, observeSnapshot, ownApprovals, taskSummary,
   collectLogs, readDiffArtifact, executeVerification,
 } from './coordinator-helpers.js';
 import { directProbeAccount } from './quota-resolver.js';
 import { inspectTask } from './coordinator-recovery.js';
+
+/** Task states in which a native turn may still be live and must be marked interrupted if observation stops. */
+const LIVE_OBSERVATION_STATES = new Set(['running','waiting_approval','dispatching']);
 
 export class Coordinator {
  readonly vault: AccountVault;
@@ -68,7 +65,7 @@ export class Coordinator {
    canAcceptApproval:async task=>{
     const binding=record(task.runtimeBinding),active=this.active.get(task.taskId);
     if(typeof binding.accountAlias!=='string'||binding.accountAlias!==active?.accountAlias)return false;
-    try{const account=await this.vault.load(binding.accountAlias);return !UNAVAILABLE_HEALTH.has(account.health)&&binding.providerId===`account:${account.provider}-start-plan`;}catch{return false;}
+    try{const account=await this.vault.load(binding.accountAlias);return !UNAVAILABLE_HEALTH.has(account.health)&&binding.providerId===startPlanProviderId(account.provider);}catch{return false;}
    },
    sendApproval:async(task,approvalId,optionId)=>{
     const active=this.active.get(task.taskId);if(!active?.turn||active.turn.commandId!==task.currentCommandId)throw new UiRpcError('RECOVERY_REQUIRED');
@@ -80,24 +77,33 @@ export class Coordinator {
     const t=typeof target==='string'?{workerId:target}:target;
     if(t.workerId){
      const worker=await this.supervisor.status(t.workerId);if(worker.state!=='ready'||!worker.endpoint)throw new UiRpcError('WORKER_UNAVAILABLE',{outcome:'not_started'});
-     try{const result=await this.handle('probe_worker',{worker_id:t.workerId}) as {quota:Record<string,unknown>};const account=await this.vault.load(worker.accountAlias);return {accountAlias:worker.accountAlias,providerId:`account:${account.provider}-start-plan`,quota:result.quota};}
-     catch(error){throw Object.assign(new UiRpcError('NATIVE_UNAVAILABLE',{outcome:'may_have_applied'}),{accountAlias:worker.accountAlias});}
+     return this.probeReadyWorker(worker);
     }
     if(t.accountAlias){
      const workers=await this.supervisor.list();const ready=workers.find(w=>w.accountAlias===t.accountAlias&&w.state==='ready'&&w.endpoint);
-     if(ready){
-      try{const result=await this.handle('probe_worker',{worker_id:ready.workerId}) as {quota:Record<string,unknown>};const account=await this.vault.load(ready.accountAlias);return {accountAlias:ready.accountAlias,providerId:`account:${account.provider}-start-plan`,quota:result.quota};}
-      catch(error){throw Object.assign(new UiRpcError('NATIVE_UNAVAILABLE',{outcome:'may_have_applied'}),{accountAlias:ready.accountAlias});}
-     }
+     if(ready)return this.probeReadyWorker(ready);
      try{
       const account=await this.vault.load(t.accountAlias);const result=await directProbeAccount(account);
       if(account.health==='unknown')await this.vault.setHealth(account.alias,'available').catch(()=>{});
       return result;
-     }catch(error){throw Object.assign(new UiRpcError('NATIVE_UNAVAILABLE',{outcome:'may_have_applied'}),{accountAlias:t.accountAlias});}
+     }catch{throw Object.assign(new UiRpcError('NATIVE_UNAVAILABLE',{outcome:'may_have_applied'}),{accountAlias:t.accountAlias});}
     }
     throw new UiRpcError('UNSUPPORTED_SCHEMA');
    },
   });
+ }
+ /** Live quota probe through a ready Worker; any failure is reported as possibly applied. */
+ private async probeReadyWorker(worker:{workerId:string;accountAlias:string}):Promise<{accountAlias:string;providerId:string;quota:Record<string,unknown>}>{
+  try{
+   const result=await this.handle('probe_worker',{worker_id:worker.workerId}) as {quota:Record<string,unknown>};
+   const account=await this.vault.load(worker.accountAlias);
+   return {accountAlias:worker.accountAlias,providerId:startPlanProviderId(account.provider),quota:result.quota};
+  }catch{throw Object.assign(new UiRpcError('NATIVE_UNAVAILABLE',{outcome:'may_have_applied'}),{accountAlias:worker.accountAlias});}
+ }
+ /** Marks a task interrupted when its event observation ends without a confirmed terminal state. */
+ private markObservationLost(taskId:string):void{
+  const task=this.store.getTask(taskId);
+  if(LIVE_OBSERVATION_STATES.has(task.status))this.store.markInterrupted(taskId,{reason:this.closing?'Daemon connection closed; native execution was not stopped':'Event stream ended before confirmed terminal'});
  }
  private serialApproval<T>(taskId:string,action:()=>Promise<T>):Promise<T>{
   const previous=this.approvalOperations.get(taskId)??Promise.resolve();
@@ -138,6 +144,11 @@ export class Coordinator {
  private async handle(name: MethodName, p: any): Promise<unknown> {
   switch (name) {
    case 'daemon_stop': throw new Error('Daemon lifecycle is handled by the local server');
+   // A request reaching this handler proves the daemon is up; previously this fell
+   // through the switch and produced a JSON-RPC response without a result member.
+   case 'daemon_start': return {ready:true};
+   // shutdown_pool is routed to finishWork() in call() before reaching handle().
+   case 'shutdown_pool': return this.finishWork();
    case 'overview': return {accounts:await this.vault.list(),workers:(await this.supervisor.list()).map(({endpoint,...w})=>w),workspaces:this.store.listWorkspaces(),tasks:this.store.listTasks().slice(-50).map(compactTask),poolPolicy:this.store.getPoolPolicy()};
    case 'get_pool_policy': return this.store.getPoolPolicy();
    case 'set_pool_policy': return this.store.setPoolPolicy({maxConcurrentTasks:p.max_concurrent_tasks});
@@ -161,7 +172,7 @@ export class Coordinator {
     const account = await this.vault.load(worker.accountAlias);
     const connection = await this.adapter.connect(worker.endpoint);
     try {
-     const providerId = `account:${account.provider}-start-plan`;
+     const providerId = startPlanProviderId(account.provider);
      const quota = await connection.quota(providerId);
      if (account.health==='unknown'&&quota.authenticated===true&&(quota.provider as any)?.id===providerId&&typeof (quota.remaining as any)?.count==='number'&&(quota.remaining as any).count>0) await this.vault.setHealth(account.alias,'available');
      return {info,quota};
@@ -223,6 +234,10 @@ export class Coordinator {
     const current = this.store.getTask(task.taskId);
     return {accepted:true,awaitingNativeRevision:active.approvalResponses.size>0,pendingApprovalCount:record(current.detail).pendingApprovalCount??0,task:compactTask(current)};
    }
+   default: {
+    const unhandled: never = name;
+    throw new Error(`Unhandled method ${String(unhandled)}`);
+   }
   }
  }
 
@@ -259,7 +274,7 @@ export class Coordinator {
    const ws = this.store.getWorkspace(task.workspaceId);
    const prior = task.session==='continue' ? this.store.listTasks().filter(t=>t.taskId!==taskId&&t.workspaceId===task.workspaceId&&t.workerId===workerId&&t.sessionId&&t.executionStopped).at(-1) : undefined;
    const policy = taskPolicy(task);
-   const selection = {providerId:`account:${account.provider}-start-plan`,modelId:policy.modelId};
+   const selection = {providerId:startPlanProviderId(account.provider),modelId:policy.modelId};
    task = this.store.beginDispatch(taskId,{workerId,sessionId:prior?.sessionId??undefined,runtimeBinding:{accountAlias:account.alias,...selection}});
    connection = await this.adapter.connect(worker.endpoint);
    const active: Active = {connection,accountAlias:account.alias};
@@ -274,8 +289,7 @@ export class Coordinator {
    await this.consumeEvents(taskId,active);
   } finally {
    if (connection && !this.active.has(taskId)) await connection.close().catch(() => {});
-   const task = this.store.getTask(taskId);
-   if (['running','waiting_approval','dispatching'].includes(task.status)) this.store.markInterrupted(taskId,{reason:this.closing?'Daemon connection closed; native execution was not stopped':'Event stream ended before confirmed terminal'});
+   this.markObservationLost(taskId);
   }
  }
  private async sendAttempt(taskId: string, active: Active, prompt: string): Promise<void> {
@@ -323,7 +337,7 @@ export class Coordinator {
   if (typeof binding.accountAlias!=='string' || typeof binding.providerId!=='string' || typeof binding.modelId!=='string'
    || active.accountAlias!==binding.accountAlias || binding.modelId!==policy.modelId) return false;
   const account = await this.vault.load(binding.accountAlias);
-  if (UNAVAILABLE_HEALTH.has(account.health) || `account:${account.provider}-start-plan`!==binding.providerId) return false;
+  if (UNAVAILABLE_HEALTH.has(account.health) || startPlanProviderId(account.provider)!==binding.providerId) return false;
   if (history.modelSelection && (history.modelSelection.providerId!==binding.providerId || history.modelSelection.modelId!==binding.modelId)) throw new Error('Native session provider/model changed; busy continuation refused');
   task = this.store.getTask(taskId);
   if (task.cancelRequestedAt!==null || this.closing) return false;
@@ -418,8 +432,7 @@ export class Coordinator {
     }
    }
   } finally {
-   const task = this.store.getTask(taskId);
-   if (['running','waiting_approval','dispatching'].includes(task.status)) this.store.markInterrupted(taskId,{reason:this.closing?'Daemon connection closed; native execution was not stopped':'Event stream ended before confirmed terminal'});
+   this.markObservationLost(taskId);
   }
  }
  async finishTask(taskId: string, active: Active, type: TerminalEvent, proof: StopProof): Promise<void> {

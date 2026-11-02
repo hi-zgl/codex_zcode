@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
-import { DatabaseSync } from 'node:sqlite';
+import { DatabaseSync, type StatementSync } from 'node:sqlite';
 import {
   CoreError,
   MAX_POOL_CONCURRENT_TASKS,
@@ -214,6 +214,8 @@ export class DurableTaskStore {
   private readonly listeners = new Set<() => void>();
   private readonly closeListeners = new Set<() => void>();
   private closed = false;
+  /** Prepared statements are compiled once per connection; SQL text is always static. */
+  private readonly statements = new Map<string, StatementSync>();
 
   constructor(readonly databasePath: string, options: StoreOptions = {}) {
     requiredString(databasePath, 'databasePath');
@@ -238,7 +240,7 @@ export class DurableTaskStore {
     try {
     // Recheck after acquiring the write lock: another process may have migrated
     // between opening this connection and obtaining schema ownership.
-    const version = this.db.prepare('PRAGMA user_version').get() as { user_version: number };
+    const version = this.sql('PRAGMA user_version').get() as { user_version: number };
     if (version.user_version > 4) fail('UNSUPPORTED_SCHEMA', `State schema ${version.user_version} is newer than this program`);
     if (version.user_version === 4) {this.db.exec('COMMIT');return;}
     if (version.user_version === 0) this.db.exec(`
@@ -329,7 +331,7 @@ export class DurableTaskStore {
         task_id TEXT NOT NULL REFERENCES tasks(task_id), fingerprint TEXT NOT NULL, payload TEXT NOT NULL) STRICT;
       PRAGMA user_version = 3;
     `);
-    this.db.prepare('INSERT OR IGNORE INTO ui_metadata(key,value) VALUES(?,?)').run('store_id',randomUUID());
+    this.sql('INSERT OR IGNORE INTO ui_metadata(key,value) VALUES(?,?)').run('store_id',randomUUID());
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS pool_policy (
         singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
@@ -343,6 +345,12 @@ export class DurableTaskStore {
       try {this.db.exec('ROLLBACK');} catch { /* Preserve the original migration failure. */ }
       throw error;
     }
+  }
+
+  private sql(text: string): StatementSync {
+    let statement = this.statements.get(text);
+    if (!statement) { statement = this.db.prepare(text); this.statements.set(text, statement); }
+    return statement;
   }
 
   private ensureOpen(): void {
@@ -367,16 +375,16 @@ export class DurableTaskStore {
   private taskRow(taskId: string): TaskRow {
     this.ensureOpen();
     requiredString(taskId, 'taskId');
-    const row = this.db.prepare('SELECT * FROM tasks WHERE task_id = ?').get(taskId) as unknown as TaskRow | undefined;
+    const row = this.sql('SELECT * FROM tasks WHERE task_id = ?').get(taskId) as unknown as TaskRow | undefined;
     return row ?? fail('TASK_NOT_FOUND', `Task ${taskId} was not found`);
   }
 
   private event(taskId: string, type: string, status: TaskStatus, detail: JsonValue, at: number): number {
     const encoded = canonicalJson(detail);
-    const inserted = this.db.prepare('INSERT INTO task_events(task_id,type,status,detail,created_at) VALUES(?,?,?,?,?)')
+    const inserted = this.sql('INSERT INTO task_events(task_id,type,status,detail,created_at) VALUES(?,?,?,?,?)')
       .run(taskId, type, status, encoded, at);
     const revision = Number(inserted.lastInsertRowid);
-    this.db.prepare('UPDATE tasks SET revision = ?, updated_at = ? WHERE task_id = ?').run(revision, at, taskId);
+    this.sql('UPDATE tasks SET revision = ?, updated_at = ? WHERE task_id = ?').run(revision, at, taskId);
     return revision;
   }
 
@@ -385,7 +393,7 @@ export class DurableTaskStore {
     if (input.workspaceId !== undefined) requiredString(input.workspaceId, 'workspaceId');
     const workspaceId = input.workspaceId ?? `ws_${randomUUID()}`;
     return this.write(() => {
-      const existing = this.db.prepare('SELECT * FROM workspaces WHERE workspace_id = ? OR worktree_path = ?')
+      const existing = this.sql('SELECT * FROM workspaces WHERE workspace_id = ? OR worktree_path = ?')
         .get(workspaceId, input.worktreePath) as unknown as WorkspaceRow | undefined;
       if (existing) {
         if ((input.workspaceId !== undefined && existing.workspace_id !== input.workspaceId)
@@ -395,7 +403,7 @@ export class DurableTaskStore {
         }
         return this.getWorkspace(existing.workspace_id);
       }
-      this.db.prepare('INSERT INTO workspaces(workspace_id,repository_path,worktree_path,branch,base_commit,created_at) VALUES(?,?,?,?,?,?)')
+      this.sql('INSERT INTO workspaces(workspace_id,repository_path,worktree_path,branch,base_commit,created_at) VALUES(?,?,?,?,?,?)')
         .run(workspaceId, input.repositoryPath, input.worktreePath, input.branch, input.baseCommit, this.now());
       return this.getWorkspace(workspaceId);
     });
@@ -404,7 +412,7 @@ export class DurableTaskStore {
   getWorkspace(workspaceId: string): Workspace {
     this.ensureOpen();
     requiredString(workspaceId, 'workspaceId');
-    const row = this.db.prepare(`SELECT w.*, t.task_id AS active_task_id FROM workspaces w
+    const row = this.sql(`SELECT w.*, t.task_id AS active_task_id FROM workspaces w
       LEFT JOIN tasks t ON t.workspace_id = w.workspace_id AND t.lease_held = 1 WHERE w.workspace_id = ?`)
       .get(workspaceId) as unknown as WorkspaceRow | undefined;
     return row ? workspaceFromRow(row) : fail('WORKSPACE_NOT_FOUND', `Workspace ${workspaceId} was not found`);
@@ -412,7 +420,7 @@ export class DurableTaskStore {
 
   listWorkspaces(): Workspace[] {
     this.ensureOpen();
-    return (this.db.prepare(`SELECT w.*, t.task_id AS active_task_id FROM workspaces w
+    return (this.sql(`SELECT w.*, t.task_id AS active_task_id FROM workspaces w
       LEFT JOIN tasks t ON t.workspace_id = w.workspace_id AND t.lease_held = 1 ORDER BY w.created_at, w.workspace_id`)
       .all() as unknown as WorkspaceRow[]).map(workspaceFromRow);
   }
@@ -422,7 +430,7 @@ export class DurableTaskStore {
     return this.write(() => {
       const workspace = this.getWorkspace(workspaceId);
       if (workspace.activeTaskId !== null) fail('WORKSPACE_BUSY', 'Cannot change workspace lifecycle while a task holds its lease');
-      this.db.prepare('UPDATE workspaces SET state = ? WHERE workspace_id = ?').run(state, workspaceId);
+      this.sql('UPDATE workspaces SET state = ? WHERE workspace_id = ?').run(state, workspaceId);
       return this.getWorkspace(workspaceId);
     });
   }
@@ -430,7 +438,7 @@ export class DurableTaskStore {
   getPoolPolicy(): PoolPolicy {
     this.ensureOpen();
     // A single statement keeps the setting and occupancy in one SQLite snapshot.
-    const row = this.db.prepare(`SELECT max_concurrent_tasks,
+    const row = this.sql(`SELECT max_concurrent_tasks,
       (SELECT count(*) FROM tasks WHERE lease_held = 1) AS occupied_slots FROM pool_policy WHERE singleton = 1`)
       .get() as { max_concurrent_tasks: number | null; occupied_slots: number };
     return {
@@ -447,7 +455,7 @@ export class DurableTaskStore {
       if (limit > MAX_POOL_CONCURRENT_TASKS) fail('INVALID_ARGUMENT', `maxConcurrentTasks must be at most ${MAX_POOL_CONCURRENT_TASKS}`);
     }
     return this.write(() => {
-      this.db.prepare('UPDATE pool_policy SET max_concurrent_tasks = ? WHERE singleton = 1').run(limit);
+      this.sql('UPDATE pool_policy SET max_concurrent_tasks = ? WHERE singleton = 1').run(limit);
       // Existing leases are unchanged, even when occupancy exceeds the new limit.
       return this.getPoolPolicy();
     });
@@ -469,7 +477,7 @@ export class DurableTaskStore {
       session, executionPolicy: idempotencyPolicy,
     });
     return this.write(() => {
-      const duplicate = this.db.prepare('SELECT * FROM tasks WHERE request_id = ?').get(input.requestId) as unknown as TaskRow | undefined;
+      const duplicate = this.sql('SELECT * FROM tasks WHERE request_id = ?').get(input.requestId) as unknown as TaskRow | undefined;
       if (duplicate) {
         if (duplicate.payload !== payload) fail('IDEMPOTENCY_CONFLICT', 'requestId was already used with a different dispatch payload');
         return { task: taskFromRow(duplicate), created: false };
@@ -483,7 +491,7 @@ export class DurableTaskStore {
       if (this.getPoolPolicy().availableSlots === 0) fail('POOL_CAPACITY_REACHED', 'Pool concurrency limit reached; wait for held tasks to finish or update the pool policy');
       const taskId = `task_${randomUUID()}`;
       const at = this.now();
-      this.db.prepare(`INSERT INTO tasks(task_id,request_id,workspace_id,payload,prompt,requested_worker_id,worker_id,
+      this.sql(`INSERT INTO tasks(task_id,request_id,workspace_id,payload,prompt,requested_worker_id,worker_id,
         session_mode,execution_policy,current_command_id,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,'queued',?,?)`)
         .run(taskId, input.requestId, input.workspaceId, payload, input.prompt, input.workerId ?? null,
           input.workerId ?? null, session, executionPolicy, input.requestId, at, at);
@@ -493,7 +501,7 @@ export class DurableTaskStore {
   }
 
   private assertWorkerAvailable(workerId: string, excludingTaskId?: string): void {
-    const holder = this.db.prepare('SELECT task_id FROM tasks WHERE worker_id = ? AND lease_held = 1 AND task_id != ?')
+    const holder = this.sql('SELECT task_id FROM tasks WHERE worker_id = ? AND lease_held = 1 AND task_id != ?')
       .get(workerId, excludingTaskId ?? '') as { task_id: string } | undefined;
     if (holder) fail('WORKER_BUSY', `Worker ${workerId} is held by task ${holder.task_id}`);
   }
@@ -510,9 +518,9 @@ export class DurableTaskStore {
       if (row.requested_worker_id !== null && workerId !== row.requested_worker_id) fail('WORKER_MISMATCH', 'Cannot silently change the requested worker');
       this.assertWorkerAvailable(workerId, taskId);
       const at = this.now();
-      this.db.prepare(`UPDATE tasks SET status = 'dispatching', worker_id = ?, session_id = ?, dispatch_attempted_at = ?, runtime_binding = ? WHERE task_id = ?`)
+      this.sql(`UPDATE tasks SET status = 'dispatching', worker_id = ?, session_id = ?, dispatch_attempted_at = ?, runtime_binding = ? WHERE task_id = ?`)
         .run(workerId, input.sessionId ?? null, at, canonicalJson(input.runtimeBinding ?? null), taskId);
-      this.db.prepare('INSERT INTO task_attempts(task_id,attempt_index,command_id,session_id,intent_at) VALUES(?,0,?,?,?)')
+      this.sql('INSERT INTO task_attempts(task_id,attempt_index,command_id,session_id,intent_at) VALUES(?,0,?,?,?)')
         .run(taskId,row.current_command_id,input.sessionId ?? null,at);
       this.event(taskId, 'dispatch_intent', 'dispatching', { workerId, sessionId: input.sessionId ?? null }, at);
       return this.getTask(taskId);
@@ -531,9 +539,9 @@ export class DurableTaskStore {
       if (row.status === 'running' && (refs.sessionId === undefined || refs.sessionId === row.session_id)
         && (refs.turnId === undefined || refs.turnId === row.turn_id)) return taskFromRow(row);
       if (row.status !== 'dispatching' || row.execution_stopped === 1) fail('INVALID_TRANSITION', 'Only a pending dispatch can be acknowledged');
-      this.db.prepare("UPDATE tasks SET status = 'running', session_id = ?, turn_id = ? WHERE task_id = ?")
+      this.sql("UPDATE tasks SET status = 'running', session_id = ?, turn_id = ? WHERE task_id = ?")
         .run(refs.sessionId ?? row.session_id, refs.turnId ?? row.turn_id, taskId);
-      this.db.prepare('UPDATE task_attempts SET session_id = ?, turn_id = ?, acknowledged_at = ? WHERE task_id = ? AND command_id = ?')
+      this.sql('UPDATE task_attempts SET session_id = ?, turn_id = ?, acknowledged_at = ? WHERE task_id = ? AND command_id = ?')
         .run(refs.sessionId ?? row.session_id,refs.turnId ?? row.turn_id,this.now(),taskId,row.current_command_id);
       const detail: JsonValue = { sessionId: refs.sessionId ?? row.session_id, turnId: refs.turnId ?? row.turn_id };
       this.event(taskId, 'dispatch_acknowledged', 'running', detail, this.now());
@@ -551,8 +559,8 @@ export class DurableTaskStore {
         if (row.session_id !== sessionId) fail('RUNTIME_REFERENCE_CONFLICT', 'Runtime session identity cannot be changed');
         return taskFromRow(row);
       }
-      this.db.prepare('UPDATE tasks SET session_id = ? WHERE task_id = ?').run(sessionId, taskId);
-      this.db.prepare('UPDATE task_attempts SET session_id = ? WHERE task_id = ? AND command_id = ?')
+      this.sql('UPDATE tasks SET session_id = ? WHERE task_id = ?').run(sessionId, taskId);
+      this.sql('UPDATE task_attempts SET session_id = ? WHERE task_id = ? AND command_id = ?')
         .run(sessionId,taskId,row.current_command_id);
       this.event(taskId, 'session_bound', row.status, { sessionId }, this.now());
       return this.getTask(taskId);
@@ -561,12 +569,12 @@ export class DurableTaskStore {
 
   listAttempts(taskId: string): TaskAttempt[] {
     this.taskRow(taskId);
-    return (this.db.prepare('SELECT * FROM task_attempts WHERE task_id = ? ORDER BY attempt_index').all(taskId) as unknown as AttemptRow[]).map(attemptFromRow);
+    return (this.sql('SELECT * FROM task_attempts WHERE task_id = ? ORDER BY attempt_index').all(taskId) as unknown as AttemptRow[]).map(attemptFromRow);
   }
 
   getCurrentAttempt(taskId: string): TaskAttempt | null {
     const task = this.taskRow(taskId);
-    const row = this.db.prepare('SELECT * FROM task_attempts WHERE task_id = ? AND command_id = ?')
+    const row = this.sql('SELECT * FROM task_attempts WHERE task_id = ? AND command_id = ?')
       .get(taskId,task.current_command_id) as unknown as AttemptRow | undefined;
     return row ? attemptFromRow(row) : null;
   }
@@ -582,7 +590,7 @@ export class DurableTaskStore {
       // A disqualifying owned failure is never erased by a later busy diagnostic.
       const blocked = current.continuationBlocked || !eligible;
       if (current.failureCategory===input.category && current.busyRetryEligible===eligible && current.continuationBlocked===blocked) return current;
-      this.db.prepare('UPDATE task_attempts SET failure_category = ?, busy_retry_eligible = ?, continuation_blocked = ? WHERE task_id = ? AND command_id = ?')
+      this.sql('UPDATE task_attempts SET failure_category = ?, busy_retry_eligible = ?, continuation_blocked = ? WHERE task_id = ? AND command_id = ?')
         .run(input.category,eligible?1:0,blocked?1:0,taskId,commandId);
       this.event(taskId,'attempt_failure_observed',row.status,{commandId,category:input.category,busyRetryEligible:eligible,continuationBlocked:blocked},this.now());
       return this.getCurrentAttempt(taskId)!;
@@ -599,7 +607,7 @@ export class DurableTaskStore {
       if (attempt.terminalState && attempt.terminalState !== state) fail('RUNTIME_REFERENCE_CONFLICT','Observed native terminal state cannot change');
       if (attempt.terminalState === state && attempt.stopProof?.kind === proof.kind) return attempt;
       const normalized = this.normalizeProof(row,proof);
-      this.db.prepare('UPDATE task_attempts SET terminal_state = ?, stop_proof = ? WHERE task_id = ? AND command_id = ?')
+      this.sql('UPDATE task_attempts SET terminal_state = ?, stop_proof = ? WHERE task_id = ? AND command_id = ?')
         .run(state,canonicalJson(normalized),taskId,commandId);
       this.event(taskId,'attempt_terminal_observed',row.status,{commandId,state,proof:normalized as unknown as JsonValue},this.now());
       return this.getCurrentAttempt(taskId)!;
@@ -626,9 +634,9 @@ export class DurableTaskStore {
       const commandId = `continue_${randomUUID()}`;
       const index = row.busy_retry_count+1;
       const at = this.now();
-      this.db.prepare('INSERT INTO task_attempts(task_id,attempt_index,command_id,session_id,intent_at) VALUES(?,?,?,?,?)')
+      this.sql('INSERT INTO task_attempts(task_id,attempt_index,command_id,session_id,intent_at) VALUES(?,?,?,?,?)')
         .run(taskId,index,commandId,row.session_id,at);
-      this.db.prepare("UPDATE tasks SET status = 'dispatching', current_command_id = ?, turn_id = NULL, busy_retry_count = ?, execution_stopped = 0, stop_proof = NULL, detail = ? WHERE task_id = ?")
+      this.sql("UPDATE tasks SET status = 'dispatching', current_command_id = ?, turn_id = NULL, busy_retry_count = ?, execution_stopped = 0, stop_proof = NULL, detail = ? WHERE task_id = ?")
         .run(commandId,index,canonicalJson({reason:'model_busy',retry:{used:index,max:maxContinuations,reason:'model_busy'}}),taskId);
       this.event(taskId,'busy_continue_intent','dispatching',{commandId,previousCommandId:expectedCommandId,retry:{used:index,max:maxContinuations,reason:'model_busy'}},at);
       return this.getTask(taskId);
@@ -640,7 +648,7 @@ export class DurableTaskStore {
       const row = this.taskRow(taskId);
       if (row.cancel_requested_at !== null || FINAL_STATUSES.has(row.status)) return taskFromRow(row);
       const at = this.now();
-      this.db.prepare('UPDATE tasks SET cancel_requested_at = ? WHERE task_id = ?').run(at,taskId);
+      this.sql('UPDATE tasks SET cancel_requested_at = ? WHERE task_id = ?').run(at,taskId);
       this.event(taskId,'cancellation_requested',row.status,{currentCommandId:row.current_command_id},at);
       return this.getTask(taskId);
     });
@@ -664,9 +672,9 @@ export class DurableTaskStore {
       }
       const detail = canonicalJson(refs.detail ?? null);
       if (row.status === refs.status && row.turn_id === refs.turnId && row.detail === detail) return taskFromRow(row);
-      this.db.prepare('UPDATE tasks SET status = ?, turn_id = ?, detail = ? WHERE task_id = ?')
+      this.sql('UPDATE tasks SET status = ?, turn_id = ?, detail = ? WHERE task_id = ?')
         .run(refs.status, refs.turnId, detail, taskId);
-      this.db.prepare('UPDATE task_attempts SET turn_id = ?, acknowledged_at = COALESCE(acknowledged_at,?) WHERE task_id = ? AND command_id = ?')
+      this.sql('UPDATE task_attempts SET turn_id = ?, acknowledged_at = COALESCE(acknowledged_at,?) WHERE task_id = ? AND command_id = ?')
         .run(refs.turnId,this.now(),taskId,row.current_command_id);
       this.event(taskId, 'execution_reattached', refs.status, JSON.parse(detail) as JsonValue, this.now());
       return this.getTask(taskId);
@@ -676,7 +684,7 @@ export class DurableTaskStore {
   /** Verification commands may have side effects, including child processes surviving a crash. */
   hasEnteredVerification(taskId: string): boolean {
     this.taskRow(taskId);
-    return this.db.prepare("SELECT 1 FROM task_events WHERE task_id = ? AND status = 'verifying' LIMIT 1").get(taskId) !== undefined;
+    return this.sql("SELECT 1 FROM task_events WHERE task_id = ? AND status = 'verifying' LIMIT 1").get(taskId) !== undefined;
   }
 
   /** Preserve occupancy when verification cannot be completed or safely retried. */
@@ -686,7 +694,7 @@ export class DurableTaskStore {
       if (row.status !== 'verifying' || row.lease_held !== 1 || row.execution_stopped !== 1) {
         fail('INVALID_TRANSITION', 'Only occupied verification can be interrupted without releasing its lease');
       }
-      this.db.prepare("UPDATE tasks SET status = 'interrupted', detail = ? WHERE task_id = ?")
+      this.sql("UPDATE tasks SET status = 'interrupted', detail = ? WHERE task_id = ?")
         .run(canonicalJson(detail), taskId);
       this.event(taskId, 'verification_interrupted', 'interrupted', detail, this.now());
       return this.getTask(taskId);
@@ -699,7 +707,7 @@ export class DurableTaskStore {
       const row = this.taskRow(taskId);
       const encoded = canonicalJson(detail);
       if (row.detail === encoded) return taskFromRow(row);
-      this.db.prepare('UPDATE tasks SET detail = ? WHERE task_id = ?').run(encoded, taskId);
+      this.sql('UPDATE tasks SET detail = ? WHERE task_id = ?').run(encoded, taskId);
       this.event(taskId, 'recovery_requires_inspection', row.status, detail, this.now());
       return this.getTask(taskId);
     });
@@ -720,7 +728,7 @@ export class DurableTaskStore {
       const row = this.taskRow(taskId);
       const normalized = this.normalizeProof(row, proof);
       const release = RELEASE_STATUSES.has(row.status);
-      this.db.prepare('UPDATE tasks SET execution_stopped = 1, stop_proof = ?, lease_held = ? WHERE task_id = ?')
+      this.sql('UPDATE tasks SET execution_stopped = 1, stop_proof = ?, lease_held = ? WHERE task_id = ?')
         .run(canonicalJson(normalized), release ? 0 : row.lease_held, taskId);
       this.event(taskId, 'execution_stopped', row.status, normalized as unknown as JsonValue, this.now());
       return this.getTask(taskId);
@@ -739,13 +747,13 @@ export class DurableTaskStore {
     if ((FINAL_STATUSES.has(status) || status === 'verifying') && !stopped) fail('EXECUTION_NOT_STOPPED', 'Observed stopped execution is required before verification or a final state');
     if (status === 'verifying' && row.lease_held !== 1) fail('LEASE_RELEASED', 'Cannot verify a task after releasing its workspace lease');
     if ((status === 'running' || status === 'waiting_approval') && stopped) fail('INVALID_TRANSITION', 'A stopped task cannot resume execution');
-    if (status === 'succeeded' && !this.db.prepare('SELECT task_id FROM task_results WHERE task_id = ?').get(row.task_id)) {
+    if (status === 'succeeded' && !this.sql('SELECT task_id FROM task_results WHERE task_id = ?').get(row.task_id)) {
       fail('RESULT_REQUIRED', 'Success requires an immutable task result');
     }
     const detail = options.detail === undefined ? row.detail : canonicalJson(options.detail);
     if (row.status === status && proof === null && detail === row.detail) return taskFromRow(row);
     const release = stopped && RELEASE_STATUSES.has(status);
-    this.db.prepare('UPDATE tasks SET status = ?, execution_stopped = ?, stop_proof = ?, lease_held = ?, detail = ? WHERE task_id = ?')
+    this.sql('UPDATE tasks SET status = ?, execution_stopped = ?, stop_proof = ?, lease_held = ?, detail = ? WHERE task_id = ?')
       .run(status, stopped ? 1 : 0, proof === null ? row.stop_proof : canonicalJson(proof), release ? 0 : row.lease_held, detail, row.task_id);
     const eventDetail: JsonValue = proof === null
       ? JSON.parse(detail) as JsonValue
@@ -769,13 +777,13 @@ export class DurableTaskStore {
   /** Run once after obtaining the daemon lock. Never replay an uncertain turn. */
   recoverInterruptedTasks(): Task[] {
     return this.write(() => {
-      const rows = this.db.prepare("SELECT * FROM tasks WHERE status IN ('dispatching','running','waiting_approval','verifying') ORDER BY created_at,task_id")
+      const rows = this.sql("SELECT * FROM tasks WHERE status IN ('dispatching','running','waiting_approval','verifying') ORDER BY created_at,task_id")
         .all() as unknown as TaskRow[];
       return rows.map((row) => {
         const detail: JsonValue = { reason: 'daemon_restarted', previousStatus: row.status, action: 'reconcile_before_any_new_dispatch' };
         // Retain leases even when a previous runtime stop proof exists: interrupted
         // verification may itself still have an external process to reconcile.
-        this.db.prepare("UPDATE tasks SET status = 'interrupted', detail = ? WHERE task_id = ?")
+        this.sql("UPDATE tasks SET status = 'interrupted', detail = ? WHERE task_id = ?")
           .run(canonicalJson(detail), row.task_id);
         this.event(row.task_id, 'recovery_interrupted', 'interrupted', detail, this.now());
         return this.getTask(row.task_id);
@@ -785,13 +793,13 @@ export class DurableTaskStore {
 
   private putResult(row: TaskRow, result: Required<TaskResult>): boolean {
     const payload = canonicalJson(result);
-    const existing = this.db.prepare('SELECT payload,created_at FROM task_results WHERE task_id = ?')
+    const existing = this.sql('SELECT payload,created_at FROM task_results WHERE task_id = ?')
       .get(row.task_id) as unknown as ResultRow | undefined;
     if (existing) {
       if (existing.payload !== payload) fail('RESULT_IMMUTABLE', 'A task result and its artifact metadata cannot be overwritten');
       return false;
     }
-    this.db.prepare('INSERT INTO task_results(task_id,payload,created_at) VALUES(?,?,?)').run(row.task_id, payload, this.now());
+    this.sql('INSERT INTO task_results(task_id,payload,created_at) VALUES(?,?,?)').run(row.task_id, payload, this.now());
     return true;
   }
 
@@ -823,17 +831,17 @@ export class DurableTaskStore {
 
   listTasks(): Task[] {
     this.ensureOpen();
-    return (this.db.prepare('SELECT * FROM tasks ORDER BY created_at,task_id').all() as unknown as TaskRow[]).map(taskFromRow);
+    return (this.sql('SELECT * FROM tasks ORDER BY created_at,task_id').all() as unknown as TaskRow[]).map(taskFromRow);
   }
 
   get storeId(): string {
     this.ensureOpen();
-    return (this.db.prepare("SELECT value FROM ui_metadata WHERE key='store_id'").get() as {value:string}).value;
+    return (this.sql("SELECT value FROM ui_metadata WHERE key='store_id'").get() as {value:string}).value;
   }
 
   findTaskByRequestId(requestId: string): Task | null {
     this.ensureOpen(); requiredString(requestId,'requestId');
-    const row = this.db.prepare('SELECT * FROM tasks WHERE request_id=?').get(requestId) as unknown as TaskRow | undefined;
+    const row = this.sql('SELECT * FROM tasks WHERE request_id=?').get(requestId) as unknown as TaskRow | undefined;
     return row ? taskFromRow(row) : null;
   }
 
@@ -848,75 +856,75 @@ export class DurableTaskStore {
     return this.readSnapshot(()=>{
       const revision=this.getRevision(),tasks=this.listTasks(),workspaces=this.listWorkspaces();
       const approvalActions:Record<string,JsonValue[]>={};
-      for(const row of this.db.prepare('SELECT task_id,payload FROM ui_approval_actions').all() as {task_id:string;payload:string}[])(approvalActions[row.task_id]??=[]).push(JSON.parse(row.payload) as JsonValue);
+      for(const row of this.sql('SELECT task_id,payload FROM ui_approval_actions').all() as {task_id:string;payload:string}[])(approvalActions[row.task_id]??=[]).push(JSON.parse(row.payload) as JsonValue);
       return {revision,tasks,workspaces,approvalActions};
     });
   }
 
   getUiRecord<T>(kind: string, key: string): T | null {
     this.ensureOpen();
-    const row = this.db.prepare('SELECT payload FROM ui_records WHERE kind=? AND key=?').get(kind,key) as {payload:string}|undefined;
+    const row = this.sql('SELECT payload FROM ui_records WHERE kind=? AND key=?').get(kind,key) as {payload:string}|undefined;
     return row ? JSON.parse(row.payload) as T : null;
   }
 
   listUiRecords<T>(kind: string, taskId: string): T[] {
     this.taskRow(taskId);
-    return (this.db.prepare('SELECT payload FROM ui_records WHERE kind=? AND task_id=? ORDER BY key').all(kind,taskId) as {payload:string}[]).map(r=>JSON.parse(r.payload) as T);
+    return (this.sql('SELECT payload FROM ui_records WHERE kind=? AND task_id=? ORDER BY key').all(kind,taskId) as {payload:string}[]).map(r=>JSON.parse(r.payload) as T);
   }
 
   putUiImmutableRecord(kind: string, key: string, taskId: string, value: unknown): void {
     const payload = canonicalJson(value);
     this.write(()=>{
       this.taskRow(taskId);
-      const existing = this.db.prepare('SELECT payload FROM ui_records WHERE kind=? AND key=?').get(kind,key) as {payload:string}|undefined;
+      const existing = this.sql('SELECT payload FROM ui_records WHERE kind=? AND key=?').get(kind,key) as {payload:string}|undefined;
       if (existing && existing.payload!==payload) fail('UI_RECORD_IMMUTABLE','An immutable UI record cannot be overwritten');
-      if (!existing) this.db.prepare('INSERT INTO ui_records(kind,key,task_id,payload) VALUES(?,?,?,?)').run(kind,key,taskId,payload);
+      if (!existing) this.sql('INSERT INTO ui_records(kind,key,task_id,payload) VALUES(?,?,?,?)').run(kind,key,taskId,payload);
     });
   }
 
   getUiApprovalAction<T>(actionId: string): {fingerprint:string;payload:T}|null {
     this.ensureOpen();
-    const row = this.db.prepare('SELECT fingerprint,payload FROM ui_approval_actions WHERE action_id=?').get(actionId) as {fingerprint:string;payload:string}|undefined;
+    const row = this.sql('SELECT fingerprint,payload FROM ui_approval_actions WHERE action_id=?').get(actionId) as {fingerprint:string;payload:string}|undefined;
     return row ? {fingerprint:row.fingerprint,payload:JSON.parse(row.payload) as T} : null;
   }
 
   listUiApprovalActions<T>(taskId: string): T[] {
     this.taskRow(taskId);
-    return (this.db.prepare('SELECT payload FROM ui_approval_actions WHERE task_id=?').all(taskId) as {payload:string}[]).map(r=>JSON.parse(r.payload) as T);
+    return (this.sql('SELECT payload FROM ui_approval_actions WHERE task_id=?').all(taskId) as {payload:string}[]).map(r=>JSON.parse(r.payload) as T);
   }
 
   /** The UNIQUE owner key makes an uncertain intent non-replayable across restarts and clients. */
   recordUiApprovalIntent(actionId: string, ownerKey: string, taskId: string, fingerprint: string, value: unknown): void {
     this.write(()=>{
       this.taskRow(taskId);
-      if (this.db.prepare('SELECT action_id FROM ui_approval_actions WHERE action_id=?').get(actionId)) fail('ACTION_CONFLICT','Approval action ID already exists');
-      if (this.db.prepare('SELECT action_id FROM ui_approval_actions WHERE owner_key=?').get(ownerKey)) fail('APPROVAL_RESPONSE_PENDING','An approval already has a response intent');
-      this.db.prepare('INSERT INTO ui_approval_actions(action_id,owner_key,task_id,fingerprint,payload) VALUES(?,?,?,?,?)').run(actionId,ownerKey,taskId,fingerprint,canonicalJson(value));
+      if (this.sql('SELECT action_id FROM ui_approval_actions WHERE action_id=?').get(actionId)) fail('ACTION_CONFLICT','Approval action ID already exists');
+      if (this.sql('SELECT action_id FROM ui_approval_actions WHERE owner_key=?').get(ownerKey)) fail('APPROVAL_RESPONSE_PENDING','An approval already has a response intent');
+      this.sql('INSERT INTO ui_approval_actions(action_id,owner_key,task_id,fingerprint,payload) VALUES(?,?,?,?,?)').run(actionId,ownerKey,taskId,fingerprint,canonicalJson(value));
       const row=this.taskRow(taskId);this.event(taskId,'ui_approval_send_intent',row.status,{actionId},this.now());
     });
   }
 
   updateUiApprovalAction(actionId: string, value: unknown): void {
     this.write(()=>{
-      const existing=this.db.prepare('SELECT task_id,payload FROM ui_approval_actions WHERE action_id=?').get(actionId) as {task_id:string;payload:string}|undefined;
+      const existing=this.sql('SELECT task_id,payload FROM ui_approval_actions WHERE action_id=?').get(actionId) as {task_id:string;payload:string}|undefined;
       if(!existing)fail('ACTION_NOT_FOUND','Approval action does not exist');
       const previous=JSON.parse(existing.payload),next=JSON.parse(canonicalJson(value));
       for(const key of ['taskId','approvalId','actionId','ownerKey','decision','intentAtMs','nativeRevisionAtCheck'])if(canonicalJson(previous[key])!==canonicalJson(next[key]))fail('ACTION_CONFLICT','Approval action identity cannot be changed');
       if(previous.responseState===next.responseState)return;
       const row=this.taskRow(existing.task_id);
       next.taskRevision=this.event(row.task_id,'ui_approval_response_state',row.status,{actionId,responseState:next.responseState},this.now());
-      this.db.prepare('UPDATE ui_approval_actions SET payload=? WHERE action_id=?').run(canonicalJson(next),actionId);
+      this.sql('UPDATE ui_approval_actions SET payload=? WHERE action_id=?').run(canonicalJson(next),actionId);
     });
   }
 
   markUiApprovalActionsUnknown(): void {
     this.write(()=>{
-      for (const row of this.db.prepare('SELECT action_id,payload FROM ui_approval_actions').all() as {action_id:string;payload:string}[]) {
+      for (const row of this.sql('SELECT action_id,payload FROM ui_approval_actions').all() as {action_id:string;payload:string}[]) {
         const value=JSON.parse(row.payload);
         if (value.responseState==='awaiting_native'||value.responseState==='intent_recorded') {
           value.responseState='unknown';
           const task=this.taskRow(value.taskId);value.taskRevision=this.event(task.task_id,'ui_approval_response_recovered',task.status,{actionId:row.action_id,responseState:'unknown'},this.now());
-          this.db.prepare('UPDATE ui_approval_actions SET payload=? WHERE action_id=?').run(canonicalJson(value),row.action_id);
+          this.sql('UPDATE ui_approval_actions SET payload=? WHERE action_id=?').run(canonicalJson(value),row.action_id);
         }
       }
     });
@@ -924,7 +932,7 @@ export class DurableTaskStore {
 
   getResult(taskId: string): PersistedTaskResult | null {
     this.taskRow(taskId);
-    const result = this.db.prepare('SELECT payload,created_at FROM task_results WHERE task_id = ?')
+    const result = this.sql('SELECT payload,created_at FROM task_results WHERE task_id = ?')
       .get(taskId) as unknown as ResultRow | undefined;
     return result ? { ...JSON.parse(result.payload) as Required<TaskResult>, taskId, createdAt: result.created_at } : null;
   }
@@ -937,7 +945,7 @@ export class DurableTaskStore {
     const limit = (typeof options === 'number' ? positionalLimit : options.limit) ?? 100;
     nonnegativeInteger(afterRevision, 'afterRevision');
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 500) fail('INVALID_ARGUMENT', 'Event limit must be between 1 and 500');
-    return (this.db.prepare('SELECT * FROM task_events WHERE task_id = ? AND revision > ? ORDER BY revision LIMIT ?')
+    return (this.sql('SELECT * FROM task_events WHERE task_id = ? AND revision > ? ORDER BY revision LIMIT ?')
       .all(taskId, afterRevision, limit) as unknown as EventRow[]).map((row) => ({
         revision: row.revision, taskId: row.task_id, type: row.type,
         status: row.status, detail: JSON.parse(row.detail) as JsonValue, createdAt: row.created_at,
@@ -956,7 +964,7 @@ export class DurableTaskStore {
 
   getRevision(): number {
     this.ensureOpen();
-    return (this.db.prepare('SELECT COALESCE(MAX(revision), 0) AS revision FROM task_events').get() as { revision: number }).revision;
+    return (this.sql('SELECT COALESCE(MAX(revision), 0) AS revision FROM task_events').get() as { revision: number }).revision;
   }
 
   wait(input: WaitInput): Promise<WaitResult> {
@@ -1040,6 +1048,7 @@ export class DurableTaskStore {
     for (const listener of [...this.closeListeners]) listener();
     this.listeners.clear();
     this.closeListeners.clear();
+    this.statements.clear();
     this.db.close();
   }
 }

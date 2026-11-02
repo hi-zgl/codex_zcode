@@ -1,112 +1,148 @@
-:root {
+/*
+ * Layer 1 — design tokens.
+ *
+ * Rule of thumb: every colour starts from a VS Code theme variable
+ * (`--vscode-*`), so dark, light and high-contrast themes (including custom
+ * ones) recolour the Webview automatically. Tints, borders, glows and shadows
+ * are derived with color-mix() from those base tokens instead of being
+ * hard-coded per theme; themes.css only supplies fallbacks and HC contracts.
+ */
+:root,
+body {
   color-scheme: light dark;
 
-  /* Surface & Base */
+  /* Surfaces */
   --surface: var(--vscode-editor-background, #181b1c);
   --surface-raised: var(--vscode-sideBar-background, #202425);
   --surface-hover: var(--vscode-list-hoverBackground, #2b3031);
   --surface-active: var(--vscode-list-activeSelectionBackground, #343b3d);
-  --surface-card: var(--vscode-sideBar-background, #1e2223);
+  --surface-card: color-mix(in srgb, var(--text) 3%, var(--surface));
+  --surface-sunken: var(--vscode-textCodeBlock-background, color-mix(in srgb, #000 18%, var(--surface)));
 
-  /* Glassmorphism Material Tokens */
-  --glass-bg: color-mix(in srgb, var(--surface-raised) 88%, transparent);
-  --glass-blur: blur(12px);
-  --glass-border: rgba(255, 255, 255, 0.1);
-
-  /* Typography Colors */
+  /* Text */
   --text: var(--vscode-foreground, #d9dddc);
   --muted: var(--vscode-descriptionForeground, #9ba6a2);
-  --muted-light: var(--vscode-disabledForeground, #76827e);
+  --muted-light: var(--vscode-disabledForeground, color-mix(in srgb, var(--muted) 75%, var(--surface)));
 
-  /* Borders & Lines */
+  /* Lines */
   --line: var(--vscode-widget-border, var(--vscode-panel-border, #3a4140));
-  --line-subtle: rgba(255, 255, 255, 0.08);
-  --line-bright: rgba(255, 255, 255, 0.16);
+  --line-subtle: color-mix(in srgb, var(--text) 8%, transparent);
+  --line-bright: color-mix(in srgb, var(--text) 16%, transparent);
 
-  /* Focus & Accents */
+  /* Glass material (raised panels) */
+  --glass-bg: color-mix(in srgb, var(--surface-raised) 88%, transparent);
+  --glass-blur: none; /* kept for compatibility; Webviews are opaque, blur only costs GPU time */
+  --glass-border: color-mix(in srgb, var(--text) 10%, transparent);
+
+  /* Focus & accent */
   --focus: var(--vscode-focusBorder, #d3ae69);
-  --focus-border: var(--vscode-focusBorder, #d3ae69);
+  --focus-border: var(--focus);
   --accent: var(--vscode-textLink-foreground, #d9b678);
-  --accent-hover: var(--vscode-textLink-activeForeground, #eac68e);
-  --accent-subtle: rgba(217, 182, 120, 0.12);
-  --accent-subtle-hover: rgba(217, 182, 120, 0.2);
-  --accent-glow: rgba(217, 182, 120, 0.35);
-  --accent-border: rgba(217, 182, 120, 0.3);
+  --accent-hover: var(--vscode-textLink-activeForeground, color-mix(in srgb, var(--accent) 80%, var(--text)));
+  --accent-subtle: color-mix(in srgb, var(--accent) 12%, transparent);
+  --accent-subtle-hover: color-mix(in srgb, var(--accent) 20%, transparent);
+  --accent-glow: color-mix(in srgb, var(--accent) 35%, transparent);
+  --accent-border: color-mix(in srgb, var(--accent) 30%, transparent);
 
-  /* Semantic Color Scales (Soft Alpha Tints) */
+  /* Semantic colours (base hue from the theme, derived tints) */
   --warning: var(--vscode-editorWarning-foreground, #d7b16e);
-  --warning-bg: rgba(215, 177, 110, 0.12);
-  --warning-border: rgba(215, 177, 110, 0.3);
-  --warning-glow: rgba(215, 177, 110, 0.25);
-
   --success: var(--vscode-testing-iconPassed, #8bb89e);
-  --success-bg: rgba(139, 184, 158, 0.12);
-  --success-border: rgba(139, 184, 158, 0.3);
-  --success-glow: rgba(139, 184, 158, 0.25);
-
   --danger: var(--vscode-errorForeground, #f18c88);
-  --danger-bg: rgba(241, 140, 136, 0.12);
-  --danger-border: rgba(241, 140, 136, 0.3);
-  --danger-glow: rgba(241, 140, 136, 0.25);
+  --info: var(--vscode-editorInfo-foreground, var(--vscode-textLink-foreground, #80b3d6));
+  /* Text-safe status hues: equal to the base hue on dark themes; themes.css
+     darkens them on light themes where raw warning/success hues fall below 4.5:1. */
+  --warning-text: var(--warning);
+  --success-text: var(--success);
+  --danger-text: var(--danger);
+  --info-text: var(--info);
+  --warning-bg: color-mix(in srgb, var(--warning) 12%, transparent);
+  --warning-border: color-mix(in srgb, var(--warning) 30%, transparent);
+  --warning-glow: color-mix(in srgb, var(--warning) 25%, transparent);
+  --success-bg: color-mix(in srgb, var(--success) 12%, transparent);
+  --success-border: color-mix(in srgb, var(--success) 30%, transparent);
+  --success-glow: color-mix(in srgb, var(--success) 25%, transparent);
+  --danger-bg: color-mix(in srgb, var(--danger) 12%, transparent);
+  --danger-border: color-mix(in srgb, var(--danger) 30%, transparent);
+  --danger-glow: color-mix(in srgb, var(--danger) 25%, transparent);
+  --info-bg: color-mix(in srgb, var(--info) 12%, transparent);
+  --info-border: color-mix(in srgb, var(--info) 30%, transparent);
+  --info-glow: color-mix(in srgb, var(--info) 25%, transparent);
 
-  --info: var(--vscode-textLink-foreground, #80b3d6);
-  --info-bg: rgba(128, 179, 214, 0.12);
-  --info-border: rgba(128, 179, 214, 0.3);
-  --info-glow: rgba(128, 179, 214, 0.25);
-
-  /* Accent & Status Hues (ZCode Design System) */
-  --amber: var(--vscode-editorWarning-foreground, #e8a33d);
-  --amber-deep: #c9862a;
+  /* Status hues used by meters and charts */
+  --amber: var(--vscode-charts-yellow, var(--vscode-editorWarning-foreground, #e8a33d));
+  --amber-deep: color-mix(in srgb, var(--amber) 80%, #000);
   --amber-ink: #241a09;
-  --mint: var(--vscode-testing-iconPassed, #62c370);
-  --mint-dim: #3d8a4a;
-  --red: var(--vscode-errorForeground, #e05252);
-  --red-dim: #8f3434;
+  --mint: var(--vscode-charts-green, var(--vscode-testing-iconPassed, #62c370));
+  --mint-dim: color-mix(in srgb, var(--mint) 60%, #000);
+  --red: var(--vscode-charts-red, var(--vscode-errorForeground, #e05252));
+  --red-dim: color-mix(in srgb, var(--red) 60%, #000);
 
-  /* Quota Bar Tokens */
-  --qbar-track: var(--surface-hover, #2b2e36);
-  --qbar-track-border: var(--line-subtle, rgba(255, 255, 255, 0.06));
+  /* Buttons (native VS Code button tokens) */
+  --button-bg: var(--vscode-button-background, #8a6a32);
+  --button-fg: var(--vscode-button-foreground, #fff);
+  --button-hover-bg: var(--vscode-button-hoverBackground, color-mix(in srgb, var(--button-bg) 88%, #fff));
+  --button-border: var(--vscode-button-border, transparent);
+  --button-secondary-bg: var(--vscode-button-secondaryBackground, var(--surface-raised));
+  --button-secondary-fg: var(--vscode-button-secondaryForeground, var(--text));
+  --button-secondary-hover-bg: var(--vscode-button-secondaryHoverBackground, var(--surface-hover));
+
+  /* Inputs */
+  --input-bg: var(--vscode-input-background, var(--surface));
+  --input-fg: var(--vscode-input-foreground, var(--text));
+  --input-border: var(--vscode-input-border, var(--line));
+  --input-placeholder: var(--vscode-input-placeholderForeground, var(--muted));
+
+  /* Quota bar */
+  --qbar-track: var(--surface-hover);
+  --qbar-track-border: var(--line-subtle);
   --qbar-fill-normal: var(--mint);
   --qbar-fill-warn: var(--amber);
   --qbar-fill-danger: var(--red);
-  --qbar-text-outside: var(--muted, #97a1b4);
+  --qbar-text-outside: var(--muted);
   --qbar-text-inside: #0e1116;
   --qbar-height: 19px;
   --qbar-height-mini: 17px;
   --qbar-radius: 4px;
 
-  /* Quota Panel Tokens */
-  --quota-panel-bg: var(--glass-bg, rgba(31, 33, 39, 0.85));
-  --quota-panel-border: var(--line, #2c2f37);
-  --quota-panel-border-soft: var(--line-subtle, rgba(255, 255, 255, 0.08));
-  --quota-panel-radius: 10px;
+  /* Quota panel */
+  --quota-panel-bg: var(--glass-bg);
+  --quota-panel-border: var(--line);
+  --quota-panel-border-soft: var(--line-subtle);
+  --quota-panel-radius: var(--radius-lg);
 
-  /* Tier Badge Design Tokens */
-  --tier-max-fg: #f0b055;
-  --tier-max-border: #a06a22;
-  --tier-max-bg: rgba(232, 163, 61, 0.12);
+  /* Subscription tier badges: one chart hue each, tint/border derived */
+  --tier-max-fg: var(--vscode-charts-orange, #f0b055);
+  --tier-pro-fg: var(--vscode-charts-blue, #7fb3e8);
+  --tier-lite-fg: var(--vscode-charts-green, #9fd4a8);
+  --tier-start-fg: var(--vscode-charts-yellow, #e8a33d);
+  --tier-trial-fg: var(--vscode-charts-purple, #c9a6e8);
+  --tier-free-fg: var(--muted);
+  --tier-max-border: color-mix(in srgb, var(--tier-max-fg) 55%, transparent);
+  --tier-pro-border: color-mix(in srgb, var(--tier-pro-fg) 55%, transparent);
+  --tier-lite-border: color-mix(in srgb, var(--tier-lite-fg) 55%, transparent);
+  --tier-start-border: color-mix(in srgb, var(--tier-start-fg) 55%, transparent);
+  --tier-trial-border: color-mix(in srgb, var(--tier-trial-fg) 55%, transparent);
+  --tier-free-border: var(--line);
+  --tier-max-bg: color-mix(in srgb, var(--tier-max-fg) 12%, transparent);
+  --tier-pro-bg: color-mix(in srgb, var(--tier-pro-fg) 12%, transparent);
+  --tier-lite-bg: color-mix(in srgb, var(--tier-lite-fg) 12%, transparent);
+  --tier-start-bg: color-mix(in srgb, var(--tier-start-fg) 10%, transparent);
+  --tier-trial-bg: color-mix(in srgb, var(--tier-trial-fg) 12%, transparent);
+  --tier-free-bg: var(--surface-hover);
 
-  --tier-pro-fg: #7fb3e8;
-  --tier-pro-border: #33567c;
-  --tier-pro-bg: rgba(109, 168, 232, 0.12);
+  /* Type scale (13px = VS Code default UI size) */
+  --font-xs: 11px;
+  --font-sm: 12px;
+  --font-md: var(--vscode-font-size, 13px);
+  --font-lg: 14px;
+  --font-xl: 16px;
+  --font-2xl: 20px;
+  --font-3xl: 24px;
+  --font-display: 32px;
+  --line-height-tight: 1.3;
+  --line-height-body: 1.55;
 
-  --tier-lite-fg: #9fd4a8;
-  --tier-lite-border: #3d6c46;
-  --tier-lite-bg: rgba(98, 195, 112, 0.12);
-
-  --tier-start-fg: #e8a33d;
-  --tier-start-border: #c9862a;
-  --tier-start-bg: rgba(232, 163, 61, 0.10);
-
-  --tier-trial-fg: #c9a6e8;
-  --tier-trial-border: #5c4179;
-  --tier-trial-bg: rgba(183, 138, 224, 0.12);
-
-  --tier-free-fg: var(--muted, #838794);
-  --tier-free-border: var(--line, #2c2f37);
-  --tier-free-bg: var(--surface-hover, rgba(255, 255, 255, 0.04));
-
-  /* Spacing Scale */
+  /* Spacing (4px grid) */
   --space-2xs: 2px;
   --space-xs: 4px;
   --space-sm: 8px;
@@ -117,7 +153,7 @@
   --space-3xl: 28px;
   --space-4xl: 32px;
 
-  /* Radius System */
+  /* Radii */
   --radius-xs: 2px;
   --radius-sm: 4px;
   --radius-md: 6px;
@@ -125,22 +161,24 @@
   --radius-xl: 12px;
   --radius-full: 9999px;
 
-  /* Shadows & Depth Glows */
-  --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.12);
-  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.15), 0 1px 2px rgba(0, 0, 0, 0.1);
-  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.2), 0 2px 4px rgba(0, 0, 0, 0.12);
-  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.28), 0 4px 8px rgba(0, 0, 0, 0.16);
+  /* Elevation: shadows follow the theme's widget shadow colour */
+  --shadow-color: var(--vscode-widget-shadow, rgba(0, 0, 0, 0.36));
+  --shadow-xs: 0 1px 2px color-mix(in srgb, var(--shadow-color) 35%, transparent);
+  --shadow-sm: 0 1px 3px color-mix(in srgb, var(--shadow-color) 45%, transparent);
+  --shadow-md: 0 4px 12px color-mix(in srgb, var(--shadow-color) 60%, transparent);
+  --shadow-lg: 0 8px 24px color-mix(in srgb, var(--shadow-color) 80%, transparent);
+  --shadow-inset: inset 0 1px 2px color-mix(in srgb, var(--shadow-color) 60%, transparent);
   --shadow-glow: 0 0 16px var(--accent-glow);
   --shadow-glow-sm: 0 0 8px var(--accent-glow);
 
-  /* Elevation & Z-Index Scale */
+  /* Z-index */
   --z-base: 1;
   --z-raised: 2;
   --z-nav: 10;
   --z-overlay: 100;
   --z-toast: 1000;
 
-  /* Motion & Transition Curves */
+  /* Motion */
   --transition-fast: 0.15s ease;
   --transition-normal: 0.2s cubic-bezier(0.16, 1, 0.3, 1);
   --transition-slow: 0.25s cubic-bezier(0.16, 1, 0.3, 1);
@@ -150,95 +188,31 @@
   /* Fonts */
   --mono: var(--vscode-editor-font-family, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
   font-family: var(--vscode-font-family, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif);
-  font-size: var(--vscode-font-size, 13px);
+  font-size: var(--font-md);
   font-weight: var(--vscode-font-weight, 400);
-  line-height: 1.55;
+  line-height: var(--line-height-body);
   background: var(--surface);
   color: var(--text);
-}
-
-/* Accessible Focus Ring Scale */
-button, input, select, textarea, a, summary, [role="tab"], [tabindex] {
-  outline-offset: 2px;
-}
-
-:focus-visible {
-  outline: 2px solid var(--focus-border, var(--focus));
-  outline-offset: 2px;
-}
-
-button:focus-visible,
-.button:focus-visible,
-a:focus-visible,
-summary:focus-visible,
-[role="tab"]:focus-visible,
-[role="tabpanel"]:focus-visible,
-[tabindex]:not([tabindex="-1"]):focus-visible {
-  outline: 2px solid var(--focus-border, var(--focus));
-  outline-offset: 2px;
-}
-
-/* Tabular Numerics Scale - Prevention of jitter during rapid data updates */
-.metric strong,
-.metric-number,
-.metric p,
-.meter span,
-progress + .field-hint,
-progress + span,
-.quota-detail .field-hint,
-.task-time,
-.sync-time,
-.retry-strip strong,
-.retry-strip span,
-.task-chip,
-.task-id,
-.identity-code,
-.detail-heading h2,
-.terminal-receipt code,
-.terminal-cmd,
-.verification-row code,
-.verification-command h4,
-.review-decision-meta,
-.quota-value,
-.quota-value span,
-.tier-b,
-.qbar-pct,
-.q-win-pct,
-.q-win-reset,
-.q-item-nums,
-.pg-exp,
-.pg-name,
-.quota-cache-warning-time,
-.badge,
-.change-badge,
-.change-symbol,
-.attempt-list li > strong,
-.event-list .section-toolbar span,
-.event-list .section-toolbar .muted,
-.event-list .field-hint,
-.metadata dd,
-.metadata dd code,
-.action-receipt code,
-.scope-note,
-.detail-tabs .button,
-input[type="number"],
-.artifact-file .field-hint,
-.empty-hint,
-.field-hint,
-.field-error,
-.code-block,
-.diff-line,
-.diff-hunk {
+  /* Dashboard numbers (counts, timers, percentages) must not jitter while updating. */
   font-variant-numeric: tabular-nums;
-  font-feature-settings: "tnum" 1;
 }
 
-/* Vector Iconography Base Sizing */
+/* Focus ring: one rule, VS Code focusBorder, keyboard-only. */
+:focus-visible {
+  outline: 2px solid var(--focus-border);
+  outline-offset: 2px;
+}
+
+:focus:not(:focus-visible) {
+  outline: none;
+}
+
+/* Codicon sizing */
 .v-icon {
   display: inline-block;
   vertical-align: -0.15em;
   flex-shrink: 0;
-  stroke: currentColor;
+  fill: currentColor;
 }
 .button .v-icon {
   margin-right: 2px;

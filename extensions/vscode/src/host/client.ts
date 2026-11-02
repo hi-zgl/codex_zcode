@@ -5,6 +5,9 @@ import { z } from 'zod';
 import { uiMethods, uiErrorDataSchema, type UiMethodName, type UiRpcParams, type UiRpcResult } from '../../../../src/shared/ui-contract.js';
 import { methods, poolPolicySchema } from '../../../../src/shared/methods.js';
 
+/** JSON-RPC envelope; built once instead of per response frame. */
+const rpcResponseSchema = z.object({jsonrpc:z.literal('2.0'),id:z.string(),result:z.unknown().optional(),error:z.object({code:z.number(),message:z.string(),data:z.unknown().optional()}).optional()});
+
 export class HostError extends Error {
   constructor(readonly code: string, message: string, readonly unknownOutcome = false, readonly rpcCode?: number) { super(message); }
 }
@@ -42,7 +45,7 @@ export class SocketTransport implements Transport {
         if (buffer.length > 1048576 || newline > 1048576) return finish(new HostError('OUTPUT_BUDGET_EXCEEDED','The daemon response exceeds the transport limit.',mutating && sent));
         if (newline < 0) return;
         try {
-          const response = z.object({jsonrpc:z.literal('2.0'),id:z.string(),result:z.unknown().optional(),error:z.object({code:z.number(),message:z.string(),data:z.unknown().optional()}).optional()}).parse(JSON.parse(buffer.subarray(0,newline).toString('utf8')));
+          const response = rpcResponseSchema.parse(JSON.parse(buffer.subarray(0,newline).toString('utf8')));
           if (response.id !== id || (!!response.error === Object.hasOwn(response,'result'))) throw new Error();
           if (response.error) {
             if(response.error.message==='Pool has active or uncertain tasks; finish or reconcile before shutdown')return finish(new HostError('POOL_BUSY','仍有执行中或状态未确认的任务。请先完成、取消并确认停止，或核对执行状态；本次未停止任何实例。'));

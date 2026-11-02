@@ -8,7 +8,7 @@
 }
 
 .field label {
-  font-size: 11px;
+  font-size: var(--font-xs);
   color: var(--muted);
   font-weight: 500;
   letter-spacing: 0.2px;
@@ -20,13 +20,12 @@ textarea {
   width: 100%;
   min-width: 0;
   max-width: 100%;
-  border: 1px solid var(--vscode-input-border, var(--line));
+  border: 1px solid var(--input-border);
   border-radius: var(--radius-md);
   min-height: 32px;
   padding: 6px 11px;
-  color: var(--vscode-input-foreground, var(--text));
-  background: var(--vscode-input-background, var(--surface-raised));
-  box-shadow: var(--shadow-xs);
+  color: var(--input-fg);
+  background: var(--input-bg);
   transition: border-color 0.18s ease, box-shadow 0.18s ease, background-color 0.18s ease;
 }
 
@@ -36,21 +35,16 @@ textarea:hover:not(:disabled):not(:focus) {
   border-color: var(--line-bright, var(--line));
 }
 
+/* Native VS Code input focus: the border itself becomes the 1px focus ring. */
 input:focus,
 select:focus,
-textarea:focus {
-  outline: none;
-  border-color: var(--focus-border, var(--focus));
-  box-shadow: 0 0 0 2px var(--accent-subtle), var(--shadow-xs);
-}
-
+textarea:focus,
 input:focus-visible,
 select:focus-visible,
 textarea:focus-visible {
-  outline: 2px solid var(--focus-border, var(--focus));
-  outline-offset: 1px;
-  border-color: var(--focus-border, var(--focus));
-  box-shadow: 0 0 0 2px var(--accent-subtle), var(--shadow-xs);
+  outline: 1px solid var(--focus-border);
+  outline-offset: -1px;
+  border-color: var(--focus-border);
 }
 
 input:disabled,
@@ -58,7 +52,7 @@ select:disabled,
 textarea:disabled {
   opacity: 0.55;
   cursor: not-allowed;
-  background: var(--surface);
+  background-color: var(--surface);
   border-color: var(--line-subtle, var(--line));
   box-shadow: none;
 }
@@ -69,10 +63,13 @@ select {
   -moz-appearance: none;
   color: var(--vscode-dropdown-foreground, var(--text));
   background-color: var(--vscode-dropdown-background, var(--surface-raised));
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 16 16' fill='none' stroke='%239ba6a2' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 6l4 4 4-4'/%3E%3C/svg%3E");
+  /* Chevron drawn from theme colours, so no per-theme data-URI overrides are needed. */
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--muted) 50%),
+    linear-gradient(135deg, var(--muted) 50%, transparent 50%);
   background-repeat: no-repeat;
-  background-position: right 10px center;
-  background-size: 12px 12px;
+  background-position: calc(100% - 15px) 55%, calc(100% - 10px) 55%;
+  background-size: 5px 5px, 5px 5px;
   padding-right: 30px;
   text-overflow: ellipsis;
   cursor: pointer;
@@ -80,12 +77,11 @@ select {
 
 select:disabled {
   cursor: not-allowed;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 16 16' fill='none' stroke='%23555555' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 6l4 4 4-4'/%3E%3C/svg%3E");
 }
 
 input::placeholder,
 textarea::placeholder {
-  color: var(--vscode-input-placeholderForeground, var(--muted));
+  color: var(--input-placeholder);
 }
 
 textarea {
@@ -103,7 +99,7 @@ textarea[aria-invalid=true] {
 .field-hint,
 .disabled-reason,
 .scope-note {
-  font-size: 11px;
+  font-size: var(--font-xs);
   color: var(--muted);
   line-height: 1.6;
   overflow-wrap: anywhere;
@@ -119,8 +115,8 @@ textarea[aria-invalid=true] {
 }
 
 .field-error {
-  color: var(--danger);
-  font-size: 11px;
+  color: var(--danger-text);
+  font-size: var(--font-xs);
   margin-top: 4px;
   overflow-wrap: anywhere;
 }
@@ -143,7 +139,7 @@ textarea[aria-invalid=true] {
   border-radius: var(--radius-md);
   padding: 11px 14px;
   margin: 12px 0;
-  font-size: 11px;
+  font-size: var(--font-xs);
   line-height: 1.6;
   min-width: 0;
   overflow-wrap: anywhere;
@@ -170,7 +166,7 @@ textarea[aria-invalid=true] {
 }
 
 .notice.warning .notice-symbol {
-  color: var(--warning);
+  color: var(--warning-text);
 }
 
 .notice.error {
@@ -180,7 +176,17 @@ textarea[aria-invalid=true] {
 }
 
 .notice.error .notice-symbol {
-  color: var(--danger);
+  color: var(--danger-text);
+}
+
+.notice.success {
+  border-color: var(--success-border);
+  border-left-color: var(--success);
+  background: var(--success-bg);
+}
+
+.notice.success .notice-symbol {
+  color: var(--success-text);
 }
 
 .workbench > .notice {
@@ -198,11 +204,11 @@ textarea[aria-invalid=true] {
   padding: 12px 14px;
   margin: 9px 0 13px;
   font-family: var(--mono);
-  font-size: 11.5px;
+  font-size: var(--font-sm);
   line-height: 1.65;
   tab-size: 2;
   max-height: 620px;
-  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.16), var(--shadow-xs);
+  box-shadow: var(--shadow-inset);
   font-variant-numeric: tabular-nums;
   font-feature-settings: "tnum" 1;
 }
@@ -238,20 +244,20 @@ textarea[aria-invalid=true] {
 }
 
 .diff-line.diff-hunk {
-  color: var(--info);
+  color: var(--info-text);
   background: var(--info-bg);
   border-left-color: var(--info);
   font-weight: 600;
 }
 
 .diff-line.diff-add {
-  color: var(--success);
+  color: var(--success-text);
   background: var(--success-bg);
   border-left-color: var(--success);
 }
 
 .diff-line.diff-del {
-  color: var(--danger);
+  color: var(--danger-text);
   background: var(--danger-bg);
   border-left-color: var(--danger);
 }

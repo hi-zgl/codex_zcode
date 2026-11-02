@@ -9,7 +9,7 @@
   border: 1px solid var(--line);
   border-radius: var(--radius-full);
   background: var(--surface-raised);
-  font-size: 11px;
+  font-size: var(--font-xs);
   font-weight: 500;
   line-height: 1.5;
   white-space: normal;
@@ -24,30 +24,26 @@
 .badge.running {
   background: var(--info-bg);
   border-color: var(--info-border);
-  color: var(--info);
-  box-shadow: 0 0 8px var(--info-glow);
+  color: var(--info-text);
 }
 
 .badge.attention {
   background: var(--warning-bg);
   border-color: var(--warning-border);
-  color: var(--warning);
-  box-shadow: 0 0 6px var(--warning-glow);
+  color: var(--warning-text);
 }
 
 .badge.success {
   background: var(--success-bg);
   border-color: var(--success-border);
-  color: var(--success);
-  box-shadow: 0 0 6px var(--success-glow);
+  color: var(--success-text);
 }
 
 .badge.failed,
 .badge.danger {
   background: var(--danger-bg);
   border-color: var(--danger-border);
-  color: var(--danger);
-  box-shadow: 0 0 6px var(--danger-glow);
+  color: var(--danger-text);
 }
 
 .badge.idle {
@@ -61,7 +57,7 @@
   background: var(--warning-bg);
   border-style: dashed;
   border-color: var(--warning-border);
-  color: var(--warning);
+  color: var(--warning-text);
 }
 
 .badge.quiet {

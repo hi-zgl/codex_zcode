@@ -16,10 +16,25 @@ export class TaskTree implements vscode.TreeDataProvider<vscode.TreeItem>,vscode
     const item=new vscode.TreeItem(task.taskId);item.id=task.taskId;item.description=`${labels[task.status]??task.status}${task.leaseHeld?' · 占用中':''}`;
     (item as vscode.TreeItem&{taskId:string}).taskId=task.taskId;
     item.contextValue=active.has(task.status)?'task.active':task.leaseHeld||task.status==='interrupted'?'task.uncertain':'task.finished';
-    item.iconPath=new vscode.ThemeIcon(task.status==='waiting_approval'?'shield':task.status==='succeeded'?'pass':task.leaseHeld?'circle-filled':'circle-outline');
+    const glyph=taskStatusIcon(task.status);item.iconPath=new vscode.ThemeIcon(glyph.id,glyph.color?new vscode.ThemeColor(glyph.color):undefined);
     item.command={command:'zcodePool.openTask',title:'Open task',arguments:[{taskId:task.taskId}]};
     item.tooltip=`Task ${task.taskId}\n${task.status}\nWorker: ${task.workerId??'unassigned'}\nWorkspace: ${task.workspaceId}\nRevision: ${task.revision}\n${task.leaseHeld?'Occupancy retained.':''}`;
     item.accessibilityInformation={label:`Task ${task.taskId}, ${task.status}${task.leaseHeld?', occupancy retained':''}`};return item;
   }
   dispose():void{this.changed.dispose();}
+}
+
+/** Codicon + theme color per task status; mirrors the Webview status badges. */
+export function taskStatusIcon(status:string):{id:string;color?:string}{
+  switch(status){
+    case 'queued':return {id:'watch'};
+    case 'dispatching':case 'running':case 'verifying':return {id:'loading~spin',color:'charts.blue'};
+    case 'waiting_approval':return {id:'shield',color:'editorWarning.foreground'};
+    case 'succeeded':return {id:'pass',color:'testing.iconPassed'};
+    case 'failed':return {id:'error',color:'testing.iconFailed'};
+    case 'blocked':return {id:'circle-slash',color:'editorWarning.foreground'};
+    case 'interrupted':return {id:'debug-disconnect',color:'editorWarning.foreground'};
+    case 'cancelled':return {id:'circle-slash'};
+    default:return {id:'circle-outline'};
+  }
 }

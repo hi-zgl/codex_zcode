@@ -1,5 +1,5 @@
 import {constants} from 'node:fs';
-import {chmod,lstat,mkdir,open,readFile,readlink,realpath,writeFile} from 'node:fs/promises';
+import {chmod,lstat,mkdir,open,readlink,realpath,writeFile} from 'node:fs/promises';
 import {dirname,isAbsolute,join,relative,resolve,sep} from 'node:path';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
