@@ -80,10 +80,16 @@
         }
       ]
     },
+    "viewsWelcome": [
+      {
+        "view": "zcodePool.resources",
+        "contents": "查看配额、账号与执行器状态。\n[打开工作台与额度监控仪表盘](command:zcodePool.openWorkbench)\n[启动后台并连接](command:zcodePool.startDaemon)"
+      }
+    ],
     "commands": [
       {
         "command": "zcodePool.openWorkbench",
-        "title": "ZCode Pool: Open Workbench",
+        "title": "ZCode Pool: 打开控制台与额度监控仪表盘 (Open Workbench)",
         "icon": "$(open-preview)"
       },
       {
@@ -196,6 +202,11 @@
         {
           "command": "zcodePool.openWorkbench",
           "when": "view == zcodePool.tasks",
+          "group": "navigation@1"
+        },
+        {
+          "command": "zcodePool.openWorkbench",
+          "when": "view == zcodePool.resources",
           "group": "navigation@1"
         },
         {

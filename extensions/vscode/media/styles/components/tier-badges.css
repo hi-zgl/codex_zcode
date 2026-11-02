@@ -1,0 +1,129 @@
+/**
+ * Tier Badges Component System
+ *
+ * Implements monospace tier badges corresponding to ZCode subscription levels:
+ * - Max (Amber Gold)
+ * - Pro (Tech Blue)
+ * - Lite (Mint Green)
+ * - Start (Warm Amber)
+ * - Trial (Elegant Violet)
+ * - Free / Other (Muted Slate)
+ *
+ * Designed for pixel-perfect alignment, tabular figures, and full VS Code theme compatibility.
+ */
+
+.tier-b {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  border-radius: 3px;
+  padding: 0 5px;
+  line-height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  box-sizing: border-box;
+  text-transform: uppercase;
+  white-space: nowrap;
+  user-select: none;
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+  transition: border-color var(--transition-fast), background var(--transition-fast), color var(--transition-fast);
+}
+
+/* Tier Variants */
+.tier-b.max {
+  color: var(--tier-max-fg, #f0b055);
+  border: 1px solid var(--tier-max-border, #a06a22);
+  background: var(--tier-max-bg, rgba(232, 163, 61, 0.12));
+}
+
+.tier-b.pro {
+  color: var(--tier-pro-fg, #7fb3e8);
+  border: 1px solid var(--tier-pro-border, #33567c);
+  background: var(--tier-pro-bg, rgba(109, 168, 232, 0.12));
+}
+
+.tier-b.lite {
+  color: var(--tier-lite-fg, #9fd4a8);
+  border: 1px solid var(--tier-lite-border, #3d6c46);
+  background: var(--tier-lite-bg, rgba(98, 195, 112, 0.12));
+}
+
+.tier-b.start {
+  color: var(--tier-start-fg, #e8a33d);
+  border: 1px solid var(--tier-start-border, #c9862a);
+  background: var(--tier-start-bg, rgba(232, 163, 61, 0.10));
+}
+
+.tier-b.trial {
+  color: var(--tier-trial-fg, #c9a6e8);
+  border: 1px solid var(--tier-trial-border, #5c4179);
+  background: var(--tier-trial-bg, rgba(183, 138, 224, 0.12));
+}
+
+.tier-b.free,
+.tier-b.other {
+  color: var(--tier-free-fg, var(--muted, #838794));
+  border: 1px solid var(--tier-free-border, var(--line, #2c2f37));
+  background: var(--tier-free-bg, var(--surface-hover, rgba(255, 255, 255, 0.04)));
+}
+
+/* Standalone / Hero Tier Badge */
+.tier {
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--amber, #e8a33d);
+  border: 1px solid var(--amber-deep, #c9862a);
+  border-radius: 4px;
+  padding: 1px 7px;
+  line-height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Compact / Mini Badges */
+.tier-b.mini,
+.tier-b-mini {
+  font-size: 10px;
+  line-height: 15px;
+  padding: 0 4px;
+  letter-spacing: 0.04em;
+  border-radius: 2px;
+}
+
+/* Rounded Pill Variant */
+.tier-b.pill {
+  border-radius: var(--radius-full, 9999px);
+  padding: 0 8px;
+}
+
+/* Light Theme WCAG AAA Contrast Calibrations */
+body.vscode-light .tier-b.max { color: #8c5300; border-color: #d4a72c; background: rgba(232, 163, 61, 0.16); }
+body.vscode-light .tier-b.pro { color: #0969da; border-color: #54aeff; background: rgba(9, 105, 218, 0.12); }
+body.vscode-light .tier-b.lite { color: #1a7f37; border-color: #4ac26b; background: rgba(26, 127, 55, 0.12); }
+body.vscode-light .tier-b.start { color: #9a6700; border-color: #d4a72c; background: rgba(154, 103, 0, 0.12); }
+body.vscode-light .tier-b.trial { color: #8250df; border-color: #c297ff; background: rgba(130, 80, 223, 0.12); }
+body.vscode-light .tier-b.free,
+body.vscode-light .tier-b.other { color: var(--muted, #57606a); border-color: var(--line, #d0d7de); background: rgba(31, 35, 40, 0.06); }
+
+/* High Contrast Mode Refinements */
+body.vscode-high-contrast .tier-b {
+  border-width: 1px;
+  border-style: solid;
+  forced-color-adjust: none;
+}
+
+@media (forced-colors: active) {
+  .tier-b {
+    border-width: 1px;
+    border-style: solid;
+    forced-color-adjust: none;
+  }
+}

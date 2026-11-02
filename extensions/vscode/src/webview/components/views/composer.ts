@@ -5,7 +5,7 @@ import { el, section, kv, field, input, select, code, heading } from '../dom.js'
 import { notice } from '../primitives.js';
 import { button, actionWithReason } from '../button.js';
 import { messageFor } from '../feedback.js';
-import { resourceState } from './resources.js';
+import { resourceState } from './resources/index.js';
 
 export function renderComposer(ctx: RenderContext, snapshot: UiSnapshot): HTMLElement {
   const draft = ctx.state.draft ?? snapshot.draft;

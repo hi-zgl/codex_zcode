@@ -74,7 +74,7 @@ function fixedMessage(code: string): string {
 }
 const id = z.string().min(1).max(150);
 const task = z.object({taskId:id,workspaceId:id,workerId:id.nullable(),status:z.string(),revision:z.number().int().nonnegative(),leaseHeld:z.boolean(),sessionId:id.nullable().optional(),retry:z.object({used:z.number(),max:z.number(),reason:z.literal('model_busy')}).optional()});
-const account = z.object({alias:id,provider:z.string(),health:z.string(),plan:z.string().optional()});
+const account = z.object({alias:id,provider:z.string(),health:z.string(),plan:z.string().optional(),email:z.string().optional(),name:z.string().optional()});
 const workspace = z.object({workspaceId:id,repositoryPath:z.string(),worktreePath:z.string(),branch:z.string(),baseCommit:z.string(),state:z.string(),activeTaskId:id.nullable()});
 const worker = z.object({workerId:id,accountAlias:id,state:z.string(),processOwned:z.boolean(),runningTaskCount:z.number().optional(),version:z.string().optional()});
 const result = z.object({summary:z.string(),changedFiles:z.array(z.string()).optional(),verification:z.array(z.object({command:z.string(),exitCode:z.number().nullable(),summary:z.string().optional()})).optional(),blockers:z.array(z.string()).optional()}).nullable();

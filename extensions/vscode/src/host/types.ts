@@ -8,7 +8,7 @@ export interface UiTask {
   retry?: { used: number; max: number; reason: 'model_busy' };
   deliveryReview?: 'unknown' | 'pending' | 'reviewed';
 }
-export interface UiAccount { alias: string; provider: string; health: string; plan?: string }
+export interface UiAccount { alias: string; provider: string; health: string; plan?: string; email?: string; name?: string }
 export interface UiWorker { workerId: string; accountAlias: string; state: string; processOwned: boolean; runningTaskCount?: number; version?: string; leaseTaskIds: string[] }
 export interface UiWorkspace { workspaceId: string; repositoryPath: string; worktreePath: string; branch: string; baseCommit: string; state: string; activeTaskId: string | null }
 export interface UiConnection {

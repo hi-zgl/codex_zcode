@@ -24,7 +24,8 @@ export type IconName =
   | 'file-minus'
   | 'git-commit'
   | 'terminal'
-  | 'list-tree';
+  | 'list-tree'
+  | 'list-ordered';
 
 export interface IconOptions {
   readonly size?: number;
@@ -58,7 +59,8 @@ const ICONS: Readonly<Record<IconName, string>> = {
   'file-minus': '<path d="M9.5 2H4.5C3.9 2 3.5 2.4 3.5 3V13C3.5 13.6 3.9 14 4.5 14H11.5C12.1 14 12.5 13.6 12.5 13V5L9.5 2Z"/><path d="M9.5 2V5H12.5M6 9.5H10"/>',
   'git-commit': '<circle cx="8" cy="8" r="2.75"/><path d="M1.5 8H5.25M10.75 8H14.5"/>',
   terminal: '<path d="M3 5L6.5 8.5L3 12M8 12H13"/>',
-  'list-tree': '<path d="M3 4H13M6.5 8H13M6.5 12H13M3 4V12M3 8H5M3 12H5"/>'
+  'list-tree': '<path d="M3 4H13M6.5 8H13M6.5 12H13M3 4V12M3 8H5M3 12H5"/>',
+  'list-ordered': '<path d="M2.5 3.5H4V7M2 7H4.5M7 4H13.5M7 8H13.5M7 12H13.5M2 10.5C2 9.5 4.5 9.5 4.5 11C4.5 12.5 2 13 2 13H4.5"/>'
 };
 
 export function icon(name: IconName, options: IconOptions = {}): SVGSVGElement {

@@ -11,6 +11,12 @@
     "storeId": "mock-store",
     "servedAtMs": 1793491200000,
     "capabilities": {
+      "poolPolicy": {
+        "version": 1
+      },
+      "poolLifecycle": {
+        "version": 1
+      },
       "taskDetail": {
         "version": 1
       },
@@ -58,12 +64,6 @@
       },
       "cancelTask": {
         "version": 1
-      },
-      "poolPolicy": {
-        "version": 1
-      },
-      "poolLifecycle": {
-        "version": 1
       }
     },
     "limits": {
@@ -89,17 +89,81 @@
         "alias": "account-demo",
         "provider": "zai",
         "health": "available",
-        "plan": "demo"
+        "plan": "ZCODE WEEKEND BUILD",
+        "email": "pjsc45sv1w@xenveroes.pro",
+        "name": "pjsc45sv1w@xenveroes.pro",
+        "quota": {
+          "total": 500000000,
+          "used": 0,
+          "remaining": 500000000,
+          "updatedAt": 1793491200000,
+          "quota_raw": [
+            {
+              "available_units": 500000000,
+              "bucket_id": "bucket_2116409240354062336",
+              "capabilities": [
+                "model:glm-5.3-flash"
+              ],
+              "entitlement_id": "ent-zcode-v3-start-plan-1030-wk-1",
+              "entitlement_priority": 101,
+              "expires_at": 1793581200,
+              "meter": "model_usage",
+              "period_end": 1793581200,
+              "period_start": 1793371312,
+              "plan_id": "zcode-v3-start-plan-1030-wk",
+              "plan_priority": 101,
+              "priority": 101,
+              "remaining_units": 500000000,
+              "show_name": "GLM-5.3-Flash",
+              "total_units": 500000000,
+              "unit_type": "token",
+              "used_units": 0,
+              "user_plan_id": "upl_2116178779393183744"
+            }
+          ],
+          "subscription_raw": [
+            {
+              "description": "",
+              "ends_at": 1793581200,
+              "entitlements": [
+                {
+                  "capabilities": [
+                    "model:glm-5.3-flash"
+                  ],
+                  "effective_at": 1793372400,
+                  "entitlement_id": "ent-zcode-v3-start-plan-1030-wk-1",
+                  "grant_units": 500000000,
+                  "meter": "model_usage",
+                  "period": "one_time",
+                  "priority": 101,
+                  "show_name": "GLM-5.3-Flash",
+                  "unit_type": "token"
+                }
+              ],
+              "name": "ZCODE WEEKEND BUILD",
+              "plan_id": "zcode-v3-start-plan-1030-wk",
+              "priority": 101,
+              "starts_at": 1793371312,
+              "status": "active",
+              "user_plan_id": "upl_2116178779393183744"
+            }
+          ]
+        }
       },
       {
         "alias": "account-review",
         "provider": "zai",
-        "health": "available"
+        "health": "available",
+        "plan": "ZCode 1024 Dev Day",
+        "email": "iloveyou@globalsmv.com",
+        "name": "iloveyou"
       },
       {
         "alias": "account-unknown",
         "provider": "bigmodel",
-        "health": "unknown"
+        "health": "unknown",
+        "email": "h40t15oyr4@globalsmv.com",
+        "name": "h40t15oyr4"
       }
     ],
     "workers": [

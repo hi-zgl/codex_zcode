@@ -10,7 +10,7 @@ export class BridgeError extends Error {
   constructor(readonly detail: UiError) { super(detail.message); this.name = 'BridgeError'; }
 }
 type Pending = { generation: number; type: RequestType; resolve(value: unknown): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout> };
-const writes = new Set<RequestType>(['dispatch', 'cancel', 'reconcile', 'resume', 'approval.respond', 'accounts.import', 'workspace.create', 'worker.start', 'worker.stop', 'worker.probe', 'daemon.start', 'pool.shutdown', 'pool.policy.set']);
+const writes = new Set<RequestType>(['dispatch', 'cancel', 'reconcile', 'resume', 'approval.respond', 'accounts.import', 'workspace.create', 'worker.start', 'worker.stop', 'worker.probe', 'account.probe', 'daemon.start', 'pool.shutdown', 'pool.policy.set']);
 const connectionRequests = new Set<RequestType>(['ready', 'connect', 'disconnect', 'connection.configure', 'connection.codexSetup', 'daemon.start', 'pool.shutdown']);
 
 /** The only Webview message boundary. Never forwards RPC methods or filesystem paths. */

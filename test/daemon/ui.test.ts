@@ -72,14 +72,17 @@ test('task pages have exact server filters, stable tie ordering and revision-gat
  store.appendEvent(tasks[2].taskId,'unrelated_event');await assert.rejects(ui.call('ui_list_tasks',{apiVersion:1,limit:1,cursor:first.data.nextCursor}),kind('CURSOR_STALE'));
 });
 
-test('quota reads preserve imported provenance, real zero and prior live state after probe failure',async t=>{
- const {ui,state,root,store,backend}=await fixture(t);let q=(await ui.call('ui_get_quota',{apiVersion:1,account_id:'account-fixture'}) as any).data;
- assert.equal(state.quotaReads,0);assert.equal(q.imported.remaining,0);assert.equal(q.imported.observedAtMs,null);assert.equal(q.imported.generatedAt.unit,'unknown');assert.equal(q.imported.generatedAt.atMs,null);assert.equal(q.live,null);
- q=(await ui.call('ui_probe_quota',{apiVersion:1,worker_id:'worker'}) as any).data;assert.equal(q.live.remaining,0);assert.equal(q.live.unit,'unknown');assert.equal(q.live.percentage.scale,'unknown');assert.equal(q.live.nextReset.unit,'unknown');assert.equal(q.lastProbe.state,'succeeded');
- state.quotaFails=true;await assert.rejects(ui.call('ui_probe_quota',{apiVersion:1,worker_id:'worker'}),kind('NATIVE_UNAVAILABLE'));
- const after=(await ui.call('ui_get_quota',{apiVersion:1,account_id:'account-fixture'}) as any).data;assert.equal(after.live.observedAtMs,q.live.observedAtMs);assert.equal(after.lastProbe.state,'failed');
- const ui2=new UiService(root,store,backend);assert.equal((await ui2.call('ui_get_quota',{apiVersion:1,account_id:'account-fixture'}) as any).data.live,null);
-});
+ test('quota reads preserve imported provenance, real zero and prior live state after probe failure',async t=>{
+  const {ui,state,root,store,backend}=await fixture(t);let q=(await ui.call('ui_get_quota',{apiVersion:1,account_id:'account-fixture'}) as any).data;
+  assert.equal(state.quotaReads,0);assert.equal(q.imported.remaining,0);assert.equal(q.imported.observedAtMs,null);assert.equal(q.imported.generatedAt.unit,'unknown');assert.equal(q.imported.generatedAt.atMs,null);assert.equal(q.live,null);
+  q=(await ui.call('ui_probe_quota',{apiVersion:1,account_id:'account-fixture'}) as any).data;assert.equal(q.live.remaining,0);assert.equal(q.live.unit,'tokens');assert.equal(q.live.percentage.scale,'unknown');assert.equal(q.live.nextReset.unit,'unknown');assert.equal(q.lastProbe.state,'succeeded');assert.equal(q.live.freshness,'fresh');
+  q=(await ui.call('ui_probe_quota',{apiVersion:1,worker_id:'worker'}) as any).data;assert.equal(q.live.remaining,0);assert.equal(q.lastProbe.state,'succeeded');
+  await assert.rejects(ui.call('ui_probe_quota',{apiVersion:1,account_id:'account-fixture',worker_id:'worker'}),e=>e instanceof UiRpcError&&e.code===-32602);
+  await assert.rejects(ui.call('ui_probe_quota',{apiVersion:1}),e=>e instanceof UiRpcError&&e.code===-32602);
+  state.quotaFails=true;await assert.rejects(ui.call('ui_probe_quota',{apiVersion:1,worker_id:'worker'}),kind('NATIVE_UNAVAILABLE'));
+  const after=(await ui.call('ui_get_quota',{apiVersion:1,account_id:'account-fixture'}) as any).data;assert.equal(after.live.observedAtMs,q.live.observedAtMs);assert.equal(after.lastProbe.state,'failed');assert.equal(after.live.freshness,'stale');
+  const ui2=new UiService(root,store,backend);assert.equal((await ui2.call('ui_get_quota',{apiVersion:1,account_id:'account-fixture'}) as any).data.live,null);
+ });
 
 test('complete approvals exceed legacy budgets, persist canonical UTF8 and bind one durable response',async t=>{
  const {ui,create,state,store}=await fixture(t);const task=create();const source=permission(task,'改动😀'.repeat(9000));state.approvals=[source];

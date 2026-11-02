@@ -5,7 +5,7 @@ import { uiCapabilitiesSchema,uiTaskDetailSchema,uiApprovalReviewSchema,uiArtifa
 import { HostError, type Transport } from './client.js';
 const hash=(bytes:string|Buffer)=>createHash('sha256').update(bytes).digest('hex');
 const fixtureSchema=z.object({version:z.literal(1),clock:z.number().int(),capabilities:uiCapabilitiesSchema,
-  overview:z.object({accounts:z.array(z.object({alias:z.string(),provider:z.string(),health:z.string(),plan:z.string().optional()})),workers:z.array(z.object({workerId:z.string(),accountAlias:z.string(),state:z.string(),processOwned:z.boolean(),runningTaskCount:z.number(),version:z.string().optional()})),workspaces:z.array(z.object({workspaceId:z.string(),repositoryPath:z.string(),worktreePath:z.string(),branch:z.string(),baseCommit:z.string(),activeTaskId:z.string().nullable(),state:z.string()})),tasks:z.array(z.unknown())}),
+  overview:z.object({accounts:z.array(z.object({alias:z.string(),provider:z.string(),health:z.string(),plan:z.string().optional(),quota:z.record(z.unknown()).optional(),email:z.string().optional(),name:z.string().optional()})),workers:z.array(z.object({workerId:z.string(),accountAlias:z.string(),state:z.string(),processOwned:z.boolean(),runningTaskCount:z.number(),version:z.string().optional()})),workspaces:z.array(z.object({workspaceId:z.string(),repositoryPath:z.string(),worktreePath:z.string(),branch:z.string(),baseCommit:z.string(),activeTaskId:z.string().nullable(),state:z.string()})),tasks:z.array(z.unknown())}),
   details:z.record(uiTaskDetailSchema),reviews:z.record(uiApprovalReviewSchema),approvalContents:z.record(z.string()),manifests:z.record(uiArtifactManifestSchema),files:z.record(z.array(uiArtifactFileSchema)),fileContents:z.record(z.string()),patches:z.record(z.string()),events:z.array(z.object({taskId:z.string(),revision:z.number(),type:z.string(),status:z.string(),createdAt:z.number()})),
 }).strict();
 export type MockFixture=z.infer<typeof fixtureSchema>;
@@ -41,6 +41,7 @@ export class MockTransport implements Transport {
   private maxConcurrentTasks:number|null=null;
   private policy(){const occupiedSlots=Object.values(this.fixture.details).filter(t=>t.leaseHeld).length;return {maxConcurrentTasks:this.maxConcurrentTasks,occupiedSlots,availableSlots:this.maxConcurrentTasks===null?null:Math.max(0,this.maxConcurrentTasks-occupiedSlots)};}
   private readonly responseTicks=new Map<string,number>();
+  private readonly probeCounts=new Map<string,number>();
   failNext?:string;
   constructor(fixture:MockFixture){this.fixture=structuredClone(validateMockFixture(fixture));}
   private envelope(data:unknown):unknown{return {meta:{apiVersion:1,instanceId:this.fixture.capabilities.instanceId,storeId:this.fixture.capabilities.storeId,servedAtMs:this.fixture.clock},data};}
@@ -86,7 +87,49 @@ export class MockTransport implements Transport {
       case 'ui_get_artifact_manifest':return this.envelope(f.manifests[p.task_id??'']??{taskId:p.task_id??'',state:'not_captured',schemaVersion:1,manifestSha256:null,scope:'workspace_base_cumulative',baseCommit:task?.workspace.baseCommit??'',sourceScope:'git_tracked_plus_nonignored_untracked',captureStartedAtMs:null,captureCompletedAtMs:null,consistency:'legacy_unknown',fileCount:null,availableFileCount:0,unavailableFileCount:0,fileListComplete:false,patch:{available:false,sha256:null,sizeBytes:null},unavailableReason:'No immutable delivery was captured.'});
       case 'ui_list_artifact_files':{const files=p.manifest_sha256?f.files[p.manifest_sha256]:undefined;if(!files||!p.task_id||f.manifests[p.task_id]?.manifestSha256!==p.manifest_sha256)throw new HostError('ARTIFACT_UNAVAILABLE','Unknown mock manifest.');return this.envelope({items:files,total:files.length,nextCursor:null,manifestSha256:p.manifest_sha256});}
       case 'ui_read_artifact_file':{if(!p.task_id||!p.manifest_sha256||f.manifests[p.task_id]?.manifestSha256!==p.manifest_sha256)throw new HostError('ARTIFACT_UNAVAILABLE','Unknown mock manifest.');const file=f.files[p.manifest_sha256]?.find(item=>item.fileId===p.file_id);const side=p.side??'final';const content=f.fileContents[`${p.file_id}:${side}`];if(!file||content===undefined)throw new HostError('ARTIFACT_UNAVAILABLE','Immutable mock side is absent.');const chunk=this.chunk(content,p.offset_bytes??0,p.limit_bytes);return this.envelope({...chunk,manifestSha256:p.manifest_sha256,fileId:p.file_id,side,fileSha256:file[side].sha256,chunkSha256:hash(Buffer.from(chunk.dataBase64,'base64')),encoding:'utf8'});}
-      case 'ui_get_quota':case 'ui_probe_quota':{const alias=method==='ui_get_quota'?p.account_id:f.overview.workers.find(w=>w.workerId===p.worker_id)?.accountAlias;if(!alias)throw new HostError('NOT_FOUND','Mock account not found.');const live=method==='ui_probe_quota';return this.envelope({accountAlias:alias,imported:{source:'imported_snapshot',accountAlias:alias,providerId:'account:zai-start-plan',observedAtMs:null,storedAtMs:null,generatedAt:{value:1793491000,unit:'unknown',atMs:null},serverTime:null,nextReset:null,unit:'unknown',total:null,used:null,remaining:0,percentage:null,authenticated:null,freshness:'unknown'},live:live?{source:'live_probe',accountAlias:alias,providerId:'account:zai-start-plan',observedAtMs:Date.now(),storedAtMs:Date.now(),generatedAt:null,serverTime:null,nextReset:null,unit:'unknown',total:100,used:20,remaining:80,percentage:null,authenticated:true,freshness:'fresh'}:null,lastProbe:{state:live?'succeeded':'never',attemptedAtMs:live?Date.now():null,errorCode:null},displayFreshnessWindowMs:120000});}
+      case 'ui_get_quota':case 'ui_probe_quota':{
+        const alias=p.account_id??f.overview.workers.find(w=>w.workerId===p.worker_id)?.accountAlias;if(!alias)throw new HostError('NOT_FOUND','Mock account not found.');
+        const targetAcc=f.overview.accounts.find(a=>a.alias===alias);
+        const live=method==='ui_probe_quota';const now=Date.now();
+        const probeCount=(this.probeCounts.get(alias)??0)+(live?1:0);if(live)this.probeCounts.set(alias,probeCount);
+        const rawBucket=Array.isArray(targetAcc?.quota?.quota_raw)?(targetAcc!.quota!.quota_raw[0] as Record<string,any>):undefined;
+        const bucketName=rawBucket?.show_name||rawBucket?.name||'GLM-5.3-Flash';
+        const tokenTotal=typeof rawBucket?.total_units==='number'?rawBucket.total_units:(typeof targetAcc?.quota?.total==='number'?targetAcc.quota.total:500000000);
+        const baseUsed=typeof rawBucket?.used_units==='number'?rawBucket.used_units:(typeof targetAcc?.quota?.used==='number'?targetAcc.quota.used:0);
+        const usedDelta=(probeCount>0?(probeCount-1)*3:0)%60;const used=Math.min(95,20+usedDelta);const remaining=100-used;
+        const tokenDelta=(probeCount>0?(probeCount-1)*15000000:0)%350000000;
+        const tokenUsed=Math.min(tokenTotal,baseUsed+tokenDelta);
+        const tokenRemaining=Math.max(0,tokenTotal-tokenUsed);
+        const tokenPct=Math.round((tokenUsed/tokenTotal)*100);
+        const rawReset=rawBucket?.period_end??rawBucket?.expires_at??1793581200;
+        const resetsAtMs=rawReset<1e11?rawReset*1000:rawReset;
+        const planName=targetAcc?.plan||(Array.isArray(targetAcc?.quota?.subscription_raw)?(targetAcc!.quota!.subscription_raw[0] as any)?.name:undefined)||'ZCODE WEEKEND BUILD';
+        return this.envelope({
+          accountAlias:alias,
+          imported:{
+            source:'imported_snapshot',accountAlias:alias,providerId:`account:${targetAcc?.provider??'zai'}-start-plan`,
+            observedAtMs:null,storedAtMs:null,tier:'start',tierName:planName,
+            windows:[{id:`win-${alias}-imported`,name:bucketName,windowType:'token_pool',total:tokenTotal,used:baseUsed,remaining:Math.max(0,tokenTotal-baseUsed),percentageUsed:Math.round((baseUsed/tokenTotal)*100),unit:'tokens',resetsAtMs,resetsLabel:'1天后重置'}],
+            generatedAt:{value:1793491000,unit:'unknown',atMs:null},serverTime:null,nextReset:null,unit:'tokens',total:tokenTotal,used:baseUsed,remaining:Math.max(0,tokenTotal-baseUsed),percentage:{value:Math.round((baseUsed/tokenTotal)*100),scale:'0_to_100'},authenticated:null,freshness:'unknown'
+          },
+          live:live?{
+            source:'live_probe',accountAlias:alias,providerId:`account:${targetAcc?.provider??'zai'}-start-plan`,
+            observedAtMs:now,storedAtMs:now,tier:'pro',tierName:'GLM Pro Plan',
+            windows:[
+              {id:'win-5h',name:'5小时周期',windowType:'hourly_window',total:100,used,remaining,percentageUsed:used,unit:'次',resetsAtMs:now+18000000,resetsLabel:'5小时后重置'},
+              {id:`win-${alias}-live`,name:bucketName,windowType:'token_pool',total:tokenTotal,used:tokenUsed,remaining:tokenRemaining,percentageUsed:tokenPct,unit:'tokens',resetsAtMs:now+86400000,resetsLabel:'1天后重置'}
+            ],
+            generatedAt:null,serverTime:null,nextReset:null,unit:'requests',total:100,used,remaining,percentage:{value:used,scale:'0_to_100'},authenticated:true,freshness:'fresh'
+          }:null,
+          lastProbe:{state:live?'succeeded':'never',attemptedAtMs:live?now:null,errorCode:null},
+          displayFreshnessWindowMs:120000
+        });
+      }
+      case 'accounts.probeAll':{
+        const accounts=f.overview.accounts.filter(a=>a.health==='available');
+        for(const a of accounts)this.probeCounts.set(a.alias,(this.probeCounts.get(a.alias)??0)+1);
+        return {probed:accounts.length};
+      }
       case 'dispatch_task':{
         const prior=Object.values(f.details).find(d=>d.requestId===p.request_id);if(prior)return {task:this.compact(prior),created:false};
         if(this.policy().availableSlots===0)throw new HostError('POOL_CAPACITY_REACHED','并发已满或新任务已暂停；等待现有任务释放占用。');
@@ -109,7 +152,40 @@ export class MockTransport implements Transport {
       case 'create_workspace':{const item={workspaceId:`workspace-${++this.revision}`,repositoryPath:p.repository??'',worktreePath:`/mock/worktrees/${this.revision}`,branch:`zcode/mock-${this.revision}`,baseCommit:p.base_ref??'HEAD',state:'active',activeTaskId:null};f.overview.workspaces.push(item);return item;}
       case 'start_worker':{const worker={workerId:p.worker_id??'',accountAlias:p.account_id??'',state:'ready',processOwned:true,runningTaskCount:0,version:'3.16.3'};f.overview.workers.push(worker);return worker;}
       case 'stop_worker':{const worker=f.overview.workers.find(w=>w.workerId===p.worker_id);if(worker)worker.state='stopped';return {workerId:p.worker_id,stopped:true};}
-      case 'import_accounts':{const count=p.files?.length??0;return {fileCount:count,recordCount:count,duplicateCount:0,summaries:f.overview.accounts.slice(0,1)};}
+      case 'import_accounts':{
+        const files=p.files??[];let recordCount=0;let duplicateCount=0;const importedSummaries:any[]=[];
+        for(const filePath of files){
+          try{
+            const content=await readFile(filePath,'utf8');
+            const data=JSON.parse(content);
+            const list=Array.isArray(data)?data:(Array.isArray(data?.accounts)?data.accounts:[data]);
+            for(const a of list){
+              if(!a||typeof a!=='object')continue;
+              recordCount++;
+              const accHash=hash(String(a.email||a.user_id||a.id||JSON.stringify(a))).slice(0,12);
+              const alias=a.alias||`account-${accHash}`;
+              const email=a.email||a.user_info_raw?.email;
+              const name=a.display_name??a.name;
+              const provider=a.provider||'zai';
+              const health=a.health||'available';
+              const subList=Array.isArray(a.subscription_raw)?a.subscription_raw:(Array.isArray(a.quota?.subscription_raw)?a.quota.subscription_raw:[]);
+              const plan=a.plan_type||subList[0]?.name||a.plan;
+              const quota:Record<string,unknown>={
+                total:a.quota_total??a.quota?.total,
+                used:a.quota_used??a.quota?.used,
+                remaining:a.quota_remaining??a.quota?.remaining,
+                quota_raw:a.quota_raw??a.quota?.quota_raw,
+                subscription_raw:a.subscription_raw??a.quota?.subscription_raw,
+              };
+              const accObj={alias,provider,health,...(plan?{plan}:{}),...(email?{email}:{}),...(name?{name}:{}),quota};
+              const existingIdx=f.overview.accounts.findIndex(acc=>acc.alias===alias);
+              if(existingIdx>=0){duplicateCount++;f.overview.accounts[existingIdx]=accObj;}else{f.overview.accounts.push(accObj);}
+              importedSummaries.push({alias,provider,health,...(plan?{plan}:{}),...(email?{email}:{}),...(name?{name}:{})});
+            }
+          }catch{}
+        }
+        return {fileCount:files.length,recordCount,duplicateCount,summaries:importedSummaries.length>0?importedSummaries:f.overview.accounts.slice(0,1)};
+      }
       default:throw new HostError('METHOD_NOT_FOUND','The mock has no such interface.');
     }
   }

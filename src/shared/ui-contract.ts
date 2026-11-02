@@ -47,10 +47,40 @@ export const uiTaskDetailSchema = uiTaskSummarySchema.extend({requestId:uiIdSche
     verification:z.array(z.object({commandDisplay:text,exitCode:z.number().int().nullable(),summary:text,summaryTruncated:z.boolean()})),blockers:z.array(text),
     manifestState:z.enum(['available','legacy_patch_only','not_captured','unavailable'])}),diagnostic:z.object({code:text,message:text}).nullable()});
 export const uiSourceTimeSchema = z.object({value:z.union([z.number().finite(),text]),unit:z.enum(['s','ms','iso8601','unknown']),atMs:time});
-export const uiQuotaSnapshotSchema = z.object({source:z.enum(['imported_snapshot','live_probe']),accountAlias:uiIdSchema,providerId:text,observedAtMs:time,storedAtMs:time,
-  generatedAt:uiSourceTimeSchema.nullable(),serverTime:uiSourceTimeSchema.nullable(),nextReset:uiSourceTimeSchema.nullable(),unit:z.enum(['credits','tokens','requests','unknown']),
-  total:z.number().finite().nullable(),used:z.number().finite().nullable(),remaining:z.number().finite().nullable(),
-  percentage:z.object({value:z.number().finite(),scale:z.enum(['0_to_100','0_to_1','unknown'])}).nullable(),authenticated:z.boolean().nullable(),freshness:z.enum(['fresh','stale','unknown'])});
+export const uiQuotaTierSchema = z.enum(['max','pro','lite','start','trial','free','unknown']);
+export const uiQuotaWindowItemSchema = z.object({
+  id: z.string(),
+  name: text,
+  windowType: z.enum(['hourly_window','daily','weekly','monthly','token_pool','custom']),
+  total: z.number().finite().nullable(),
+  used: z.number().finite().nullable(),
+  remaining: z.number().finite().nullable(),
+  percentageUsed: z.number().finite().min(0).max(100),
+  unit: text,
+  resetsAtMs: time,
+  resetsLabel: text.nullable(),
+});
+export const uiQuotaSnapshotSchema = z.object({
+  source: z.enum(['imported_snapshot','live_probe']),
+  accountAlias: uiIdSchema,
+  providerId: text,
+  observedAtMs: time,
+  storedAtMs: time,
+  tier: uiQuotaTierSchema.default('unknown'),
+  tierName: text.nullable().default(null),
+  windows: z.array(uiQuotaWindowItemSchema).default([]),
+  generatedAt: uiSourceTimeSchema.nullable().default(null),
+  serverTime: uiSourceTimeSchema.nullable().default(null),
+  nextReset: uiSourceTimeSchema.nullable().default(null),
+  unit: z.enum(['credits','tokens','requests','unknown']).default('unknown'),
+  total: z.number().finite().nullable().default(null),
+  used: z.number().finite().nullable().default(null),
+  remaining: z.number().finite().nullable().default(null),
+  percentage: z.object({value:z.number().finite(),scale:z.enum(['0_to_100','0_to_1','unknown'])}).nullable().default(null),
+  authenticated: z.boolean().nullable().default(null),
+  freshness: z.enum(['fresh','stale','unknown']).default('unknown'),
+  rawSnapshot: z.record(z.unknown()).optional(),
+});
 export const uiQuotaSchema = z.object({accountAlias:uiIdSchema,imported:uiQuotaSnapshotSchema.nullable(),live:uiQuotaSnapshotSchema.nullable(),
   lastProbe:z.object({state:z.enum(['never','succeeded','failed']),attemptedAtMs:time,errorCode:text.nullable()}),displayFreshnessWindowMs:uint});
 export const uiApprovalOwnerSchema = z.object({attemptIndex:uint,commandId:uiIdSchema,sessionId:uiIdSchema,nativeTurnId:uiIdSchema});
@@ -103,7 +133,16 @@ export const uiMethods = {
   ui_list_tasks:{params:z.object({...v,filter:z.object({repository_path:text.max(4096).optional(),workspace_id:uiIdSchema.optional(),worker_id:uiIdSchema.optional(),statuses:z.array(uiTaskStatusSchema).max(10).optional(),lease_held:z.boolean().optional(),query:text.max(200).optional()}).strict().optional(),sort:z.literal('created_desc').default('created_desc'),limit:uint.min(1).max(100).default(50),cursor:cursor.optional()}).strict(),
     result:uiEnvelopeSchema(z.object({items:z.array(uiTaskSummarySchema),total:uint,nextCursor:cursor.nullable(),listRevision:uint,observedAtMs:uint,scope:z.literal('all_matching_tasks')}))},
   ui_get_quota:{params:z.object({...v,account_id:uiIdSchema}).strict(),result:uiEnvelopeSchema(uiQuotaSchema)},
-  ui_probe_quota:{params:z.object({...v,worker_id:uiIdSchema}).strict(),result:uiEnvelopeSchema(uiQuotaSchema)},
+  ui_probe_quota:{
+    params:z.object({
+      ...v,
+      account_id:uiIdSchema.optional(),
+      worker_id:uiIdSchema.optional(),
+    }).strict().refine(p=>!!p.account_id!==!!p.worker_id,{
+      message:'Exactly one of account_id or worker_id must be provided',
+    }),
+    result:uiEnvelopeSchema(uiQuotaSchema),
+  },
   ui_list_approvals:{params:z.object({...task,limit:uint.min(1).max(50).default(20),cursor:cursor.optional()}).strict(),result:uiEnvelopeSchema(z.object({items:z.array(uiApprovalPreviewSchema),total:uint.nullable(),nextCursor:cursor.nullable(),approvalSetRevision:text,stateKnown:z.boolean(),unattributedCount:uint}))},
   ui_get_approval:{params:z.object(approval).strict(),result:uiEnvelopeSchema(uiApprovalReviewSchema)},
   ui_read_approval:{params:z.object({...approval,review_id:uiIdSchema,...chunkParams}).strict(),result:uiEnvelopeSchema(z.object({...chunkResult,reviewId:uiIdSchema,contentSha256:uiHashSchema}))},
@@ -119,6 +158,8 @@ export type UiRpcResult<M extends UiMethodName> = z.infer<(typeof uiMethods)[M][
 export type UiCapabilities = z.infer<typeof uiCapabilitiesSchema>;
 export type UiTaskSummary = z.infer<typeof uiTaskSummarySchema>;
 export type UiTaskDetail = z.infer<typeof uiTaskDetailSchema>;
+export type UiQuotaTier = z.infer<typeof uiQuotaTierSchema>;
+export type UiQuotaWindowItem = z.infer<typeof uiQuotaWindowItemSchema>;
 export type UiQuota = z.infer<typeof uiQuotaSchema>;
 export type UiQuotaSnapshot = z.infer<typeof uiQuotaSnapshotSchema>;
 export type UiApprovalReview = z.infer<typeof uiApprovalReviewSchema>;

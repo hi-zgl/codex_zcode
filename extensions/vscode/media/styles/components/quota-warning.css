@@ -1,0 +1,147 @@
+/**
+ * Quota Cache Warning & Stale Data Degradation Alert
+ *
+ * Sourced and refined from cockpit-tools:
+ * - .quota-cache-warning (Warm amber tinted alert box with fine border)
+ * - .quota-cache-warning-content (Vertical layout with title and observed timestamp)
+ * - .quota-cache-warning-title (Bold alert message explaining cached state)
+ * - .quota-cache-warning-time (Tabular timestamp showing last observed probe)
+ * - .quota-cache-warning-action (Inline retry button / link)
+ * - .table modifier for high-density slot contexts
+ */
+
+.quota-cache-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  margin: 4px 0 8px;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--warning) 30%, var(--line));
+  border-radius: var(--radius-lg, 8px);
+  background: color-mix(in srgb, var(--warning) 10%, var(--surface-card, var(--surface-raised)));
+  color: color-mix(in srgb, var(--warning) 85%, var(--text));
+  font-size: 12px;
+  line-height: 1.4;
+  backdrop-filter: var(--glass-blur, blur(8px));
+  transition: border-color var(--transition-fast), background var(--transition-fast);
+}
+
+.quota-cache-warning > svg,
+.quota-cache-warning-icon {
+  flex: 0 0 auto;
+  margin-top: 1px;
+  color: var(--warning);
+}
+
+.quota-cache-warning-content {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.quota-cache-warning-title {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-weight: 600;
+  color: var(--text);
+  letter-spacing: 0.01em;
+}
+
+.quota-cache-warning-time {
+  color: var(--muted);
+  font-size: 11px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+
+/* Actions & Retry Triggers */
+.quota-cache-warning-action {
+  flex: 0 0 auto;
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+}
+
+.quota-cache-warning-btn {
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--warning);
+  background: transparent;
+  border: 1px solid color-mix(in srgb, var(--warning) 40%, transparent);
+  border-radius: 4px;
+  padding: 2px 7px;
+  cursor: pointer;
+  transition: background var(--transition-fast), border-color var(--transition-fast);
+}
+
+.quota-cache-warning-btn:hover {
+  background: color-mix(in srgb, var(--warning) 20%, transparent);
+  border-color: var(--warning);
+}
+
+/* Compact Table Context Modifier */
+.quota-cache-warning.table {
+  margin: 2px 0 6px;
+  padding: 6px 8px;
+  font-size: 11.5px;
+}
+
+.quota-cache-warning.table .quota-cache-warning-time {
+  font-size: 10.5px;
+}
+
+/* Error Severity Variant (Hard Failure / Network Down) */
+.quota-cache-warning.error {
+  border-color: color-mix(in srgb, var(--danger) 35%, var(--line));
+  background: color-mix(in srgb, var(--danger) 10%, var(--surface-card, var(--surface-raised)));
+  color: color-mix(in srgb, var(--danger) 85%, var(--text));
+}
+
+.quota-cache-warning.error > svg,
+.quota-cache-warning.error .quota-cache-warning-icon {
+  color: var(--danger);
+}
+
+.quota-cache-warning.error .quota-cache-warning-btn {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 40%, transparent);
+}
+
+.quota-cache-warning.error .quota-cache-warning-btn:hover {
+  background: color-mix(in srgb, var(--danger) 20%, transparent);
+  border-color: var(--danger);
+}
+
+/* Light Theme Contrast Enhancements */
+body.vscode-light .quota-cache-warning {
+  border-color: color-mix(in srgb, var(--warning) 45%, var(--line));
+  background: color-mix(in srgb, var(--warning) 12%, #fff);
+  color: #6a4a00;
+}
+
+body.vscode-light .quota-cache-warning-title {
+  color: #4a3400;
+}
+
+body.vscode-light .quota-cache-warning-time {
+  color: #7d6530;
+}
+
+/* High Contrast Mode Refinements */
+body.vscode-high-contrast .quota-cache-warning {
+  border: 1px solid CanvasText;
+}
+
+@media (forced-colors: active) {
+  .quota-cache-warning {
+    border: 1px solid CanvasText;
+  }
+}

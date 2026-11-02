@@ -9,7 +9,7 @@ import type { UiSnapshot, UiActionState } from './types.js';
 import {
   blankDraft, sha256, createInitialSnapshot, resetDisconnectedSnapshot, buildTaskListWireFilter, mergeTaskDetail, buildDispatchPayload, validateDispatchResources,
   decodeChunk, validatePermissionContent, assertReadApprovalReady, decodeAndVerifyApprovalBytes, assertApprovalRespondable, assertTaskCanAcceptApproval, handleApprovalRespondFailure,
-  requireSelectedArtifactFile, applyArtifactListPage, verifyArtifactChunkPage, assertSafeWorktreePath, assertReviewPreconditions, formatDiagnosticsPayload, decodeUtf8Artifact,
+  requireSelectedArtifactFile, applyArtifactListPage, assertReviewPreconditions, formatDiagnosticsPayload, reviewStorageKey, openArtifactDiff, openCurrentDiskFile, readArtifactChunk, fetchFullArtifact,
   assertWorkerStartable, assertWorkerStoppable, assertRealHostAction, type NativeAdapter, type ServiceOptions, type Recovery, type ReviewEntry
 } from './action-helpers.js';
 
@@ -221,19 +221,20 @@ export class ActionService implements RouterTarget {
     applyArtifactListPage(this.state, this.options.native, this.deliveryOpened, this.reviewStorageKey(taskId, manifest.manifestSha256), taskId, manifest, page, cursor); this.emit(); return { manifest, ...page };
   }
   private artifactFile(taskId: string, manifestSha256: string, fileId: string): UiArtifactFile { return requireSelectedArtifactFile(this.state, taskId, manifestSha256, fileId); }
-  private async readArtifact(taskId: string, manifestSha256: string, fileId: string, side: 'base' | 'final', offsetBytes = 0): Promise<UiRpcResult<'ui_read_artifact_file'>['data']> {
-    this.requireCapability('artifactSnapshots'); const file = this.artifactFile(taskId, manifestSha256, fileId); const expected = file[side];
-    if (expected.state !== 'available' || expected.sizeBytes === null || !expected.sha256) throw new HostError('ARTIFACT_UNAVAILABLE', expected.reason ?? 'This immutable file side is absent or unavailable.');
-    const page = (await this.ui('ui_read_artifact_file', { apiVersion: 1, task_id: taskId, manifest_sha256: manifestSha256, file_id: fileId, side, offset_bytes: offsetBytes, limit_bytes: 65536 }, this.selectionAbort.signal)).data;
-    return verifyArtifactChunkPage(page, manifestSha256, fileId, side, offsetBytes, expected);
+  private readArtifact(taskId: string, manifestSha256: string, fileId: string, side: 'base' | 'final', offsetBytes = 0): Promise<UiRpcResult<'ui_read_artifact_file'>['data']> {
+    this.requireCapability('artifactSnapshots'); return readArtifactChunk((m, p, s) => this.ui(m, p, s), this.state, taskId, manifestSha256, fileId, side, offsetBytes, this.selectionAbort.signal);
   }
-  private async fullArtifact(taskId: string, hash: string, file: UiArtifactFile, side: 'base' | 'final'): Promise<string> {
-    const expected = file[side]; if (expected.state === 'absent') return '';
-    if (expected.state !== 'available' || expected.encoding !== 'utf8' || expected.sizeBytes === null || expected.sizeBytes > 2097152 || expected.kind === 'gitlink' || expected.kind === 'unknown') throw new HostError('ARTIFACT_UNAVAILABLE', 'Native Diff requires a complete UTF-8 snapshot of at most 2 MiB per side.');
-    const chunks: Buffer[] = []; let offset = 0; do { const page = await this.readArtifact(taskId, hash, file.fileId, side, offset); chunks.push(Buffer.from(page.dataBase64, 'base64')); if (page.nextOffsetBytes === null) break; offset = page.nextOffsetBytes; } while (true);
-    return decodeUtf8Artifact(chunks, expected.sizeBytes, expected.sha256!);
+  private fullArtifact(taskId: string, hash: string, file: UiArtifactFile, side: 'base' | 'final'): Promise<string> {
+    return fetchFullArtifact((m, p, s) => this.ui(m, p, s), this.state, taskId, hash, file, side, this.selectionAbort.signal);
   }
-  private reviewStorageKey(taskId: string, hash: string): string { return `review:${sha256(`${this.poolKey()}|${taskId}|${hash}`)}`; }
+  private reviewStorageKey(taskId: string, hash: string): string { return reviewStorageKey(this.poolKey(), taskId, hash); }
+  private async probeAvailableAccounts(): Promise<void> {
+    const targets = this.state.resources.accounts.filter(a => a.health === 'available');
+    await Promise.all(targets.map(async a => {
+      try { const q = (await this.ui('ui_probe_quota', { apiVersion: 1, account_id: a.alias })).data; this.state.resources.quotas[q.accountAlias] = q; } catch {}
+    }));
+    this.emit();
+  }
   async execute(request: WebviewRequest): Promise<unknown> {
     if (this.disposed) throw new HostError('DISPOSED', 'This workbench has closed.');
     if (request.type !== 'ready' && request.generation !== this.generation()) throw new HostError('STALE_CONNECTION', 'Reload the current workbench state.');
@@ -252,7 +253,14 @@ export class ActionService implements RouterTarget {
       case 'daemon.start': assertRealHostAction(this.options, this.state, 'daemon'); await this.options.native.startDaemon!(); return { started: true };
       case 'connect': return this.connect();
       case 'disconnect': this.disconnect(); return this.state;
-      case 'refresh': case 'resources.refresh': await this.refresh(); return this.state;
+      case 'refresh': await this.refresh(); return this.state;
+      case 'resources.refresh':
+        await this.refresh();
+        if (this.state.connection.capabilities.quotaProbe?.version && this.options.native.trusted() && !this.state.connection.stale) await this.probeAvailableAccounts();
+        return this.state;
+      case 'accounts.probeAll':
+        this.requireCapability('quotaProbe', true);
+        return this.mutate('probe:accounts:all', async () => { await this.probeAvailableAccounts(); return { probed: true }; });
       case 'tasks.list': return this.listTasks(request.payload);
       case 'task.select': return this.selectTask(request.payload.taskId);
       case 'draft.change': this.state.draft = request.payload.draft; this.emit(); return { saved: true };
@@ -270,11 +278,12 @@ export class ActionService implements RouterTarget {
       case 'worker.start': this.requireCapability('startWorker', true); assertWorkerStartable(this.state, request.payload.workerId, request.payload.accountAlias); return this.mutate(`worker:${request.payload.workerId}`, () => this.requireConnection().legacy('start_worker', { worker_id: request.payload.workerId, account_id: request.payload.accountAlias }, this.connectionAbort.signal));
       case 'worker.stop': { this.requireCapability('stopWorker', true); const workerId = assertWorkerStoppable(this.state, request.payload.workerId); return this.mutate(`worker:${workerId}`, () => this.requireConnection().legacy('stop_worker', { worker_id: workerId }, this.connectionAbort.signal)); }
       case 'worker.probe': { this.requireCapability('quotaProbe', true); const worker = this.state.resources.workers.find(w => w.workerId === request.payload.workerId); if (!worker || worker.state !== 'ready') throw new HostError('WORKER_UNAVAILABLE', 'Choose a currently ready worker.'); return this.mutate(`probe:${worker.workerId}`, async () => { const quota = (await this.ui('ui_probe_quota', { apiVersion: 1, worker_id: worker.workerId })).data; this.state.resources.quotas[quota.accountAlias] = quota; return quota; }); }
+      case 'account.probe': { this.requireCapability('quotaProbe', true); if (!this.state.resources.accounts.some(a => a.alias === request.payload.accountAlias)) throw new HostError('NOT_FOUND', 'The account is not in the current pool.'); return this.mutate(`probe:account:${request.payload.accountAlias}`, async () => { const quota = (await this.ui('ui_probe_quota', { apiVersion: 1, account_id: request.payload.accountAlias })).data; this.state.resources.quotas[quota.accountAlias] = quota; this.emit(); return quota; }); }
       case 'quota.read': { this.requireCapability('quotaSnapshots'); if (!this.state.resources.accounts.some(a => a.alias === request.payload.accountAlias)) throw new HostError('NOT_FOUND', 'The account is not in the current pool.'); const quota = (await this.ui('ui_get_quota', { apiVersion: 1, account_id: request.payload.accountAlias })).data; this.state.resources.quotas[quota.accountAlias] = quota; this.emit(); return quota; }
       case 'artifacts.list': return this.artifacts(request.payload.taskId, request.payload.cursor);
       case 'artifact.read': return this.readArtifact(request.payload.taskId, request.payload.manifestSha256, request.payload.fileId, request.payload.side, request.payload.offsetBytes);
-      case 'diff.open': { const { taskId, manifestSha256, fileId } = request.payload; const file = this.artifactFile(taskId, manifestSha256, fileId); if (!file.nativeDiff.available) throw new HostError('ARTIFACT_UNAVAILABLE', file.nativeDiff.reason ?? 'This file has no complete immutable Diff.'); await this.options.native.openDiff(taskId, manifestSha256, file, side => this.fullArtifact(taskId, manifestSha256, file, side)); this.viewedFiles.add(`${taskId}|${manifestSha256}|${fileId}`); return { opened: true }; }
-      case 'file.current.open': { const { taskId, manifestSha256, fileId } = request.payload; const file = this.artifactFile(taskId, manifestSha256, fileId); const path = assertSafeWorktreePath(file); if (this.options.mode === 'mock') throw new HostError('MOCK_READ_ONLY', 'Mock mode does not read the fixture workspace or current disk files.'); const detail = await this.freshTask(taskId); if (!this.options.native.openCurrentFile) throw new HostError('CAPABILITY_UNAVAILABLE', 'This Host cannot open current disk files.'); await this.options.native.openCurrentFile(detail.workspace.worktreePath, path); return { opened: true, version: 'current_disk' }; }
+      case 'diff.open': { const { taskId, manifestSha256, fileId } = request.payload; const file = this.artifactFile(taskId, manifestSha256, fileId); await openArtifactDiff(this.options, taskId, manifestSha256, file, side => this.fullArtifact(taskId, manifestSha256, file, side)); this.viewedFiles.add(`${taskId}|${manifestSha256}|${fileId}`); return { opened: true }; }
+      case 'file.current.open': { const { taskId, manifestSha256, fileId } = request.payload; const file = this.artifactFile(taskId, manifestSha256, fileId); await openCurrentDiskFile(this.options, file, await this.freshTask(taskId)); return { opened: true, version: 'current_disk' }; }
       case 'review.set': { const { taskId, manifestSha256, reviewed } = request.payload; assertReviewPreconditions(this.state, this.deliveryOpened, this.viewedFiles, taskId, manifestSha256, reviewed); await this.options.native.setState(this.reviewStorageKey(taskId, manifestSha256), reviewed); this.state.delivery.reviewed = reviewed; const summary = this.state.tasks.find(task => task.taskId === taskId); if (summary) summary.deliveryReview = reviewed ? 'reviewed' : 'pending'; this.emit(); return { reviewed }; }
       case 'settings.open': await this.options.native.openSettings(); return { opened: true };
       case 'settings.save': await this.options.native.saveInterval(request.payload.overviewIntervalSeconds); this.setOverviewInterval(request.payload.overviewIntervalSeconds); return { saved: true };

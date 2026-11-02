@@ -101,6 +101,11 @@ export class WorkbenchApp {
       return;
     }
     if (name === 'account.toggle') { if (this.state.expandedAccounts.has(data.alias)) this.state.expandedAccounts.delete(data.alias); else this.state.expandedAccounts.add(data.alias); this.render(); return; }
+    if (name === 'account.sort') {
+      this.state.accountSortMode = data.mode === 'default' ? 'default' : 'quota_first';
+      this.render();
+      return;
+    }
     if (name === 'verify.add' || name === 'verify.remove') {
       if (!this.state.draft) return;
       if (name === 'verify.add' && this.state.draft.verifyCommands.length < 10) this.state.draft.verifyCommands.push({ command: '', args: [], timeoutMs: 60_000 });
@@ -127,6 +132,9 @@ export class WorkbenchApp {
     if (name === 'tasks.more' || name === 'tasks.reload') { await this.run('tasks.list', () => this.bridge.request('tasks.list', name === 'tasks.more' && snapshot?.listNextCursor ? { cursor: snapshot.listNextCursor } : buildListPayload(this.state))); return; }
     if (name === 'refresh' || name === 'resources.refresh' || name === 'settings.open' || name === 'diagnostics.copy') {
       await this.run(name, async () => { await this.bridge.request(name, {}); this.state.message = name === 'diagnostics.copy' ? '已复制脱敏诊断。' : name === 'settings.open' ? '已打开当前计算环境的 VS Code 设置。' : '已更新任务和资源。'; }); return;
+    }
+    if (name === 'accounts.probeAll') {
+      await this.run(name, async () => { await this.bridge.request(name, {}); this.state.message = '已探查所有可用账号的配额。'; }); return;
     }
     if (name === 'guidance.open') { await this.run(name, () => this.bridge.request('guidance.open', { topic: data.topic as 'connection' | 'approval' | 'workspace' | 'recovery' })); return; }
     if (name === 'settings.save') {
@@ -157,6 +165,7 @@ export class WorkbenchApp {
     }
     if (name === 'worker.start') { await this.run(name, () => this.bridge.request('worker.start', { workerId: this.state.workerId, accountAlias: this.state.workerAccount })); return; }
     if (name === 'worker.stop' || name === 'worker.probe') { await this.run(`worker:${data.workerId}:${name.split('.')[1]}`, () => this.bridge.request(name, { workerId: data.workerId }), `worker:${data.workerId}`); return; }
+    if (name === 'account.probe') { await this.run(`account:${data.accountAlias}:probe`, () => this.bridge.request('account.probe', { accountAlias: data.accountAlias }), `quota:${data.accountAlias}`); return; }
     if (name === 'quota.read') { await this.run(`quota:${data.accountAlias}`, () => this.bridge.request('quota.read', { accountAlias: data.accountAlias })); return; }
     if (name === 'dispatch') {
       if (!this.state.draft || !snapshot) return;

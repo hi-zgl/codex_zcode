@@ -372,7 +372,7 @@ test('invalid command args are preserved as entered and block dispatch', async (
 
 test('quota zero, unknown timestamps and failed live probe remain different facts', () => {
   const s = snapshot(); const alias = s.resources.accounts[0]!.alias;
-  s.resources.quotas[alias] = { accountAlias: alias, imported: { source: 'imported_snapshot', accountAlias: alias, providerId: 'provider', observedAtMs: null, storedAtMs: null, generatedAt: { value: 1793491000, unit: 'unknown', atMs: null }, serverTime: null, nextReset: null, unit: 'unknown', total: null, used: null, remaining: 0, percentage: { value: 80, scale: 'unknown' }, authenticated: null, freshness: 'unknown' }, live: null, lastProbe: { state: 'failed', attemptedAtMs: Date.now(), errorCode: 'NATIVE_UNAVAILABLE' }, displayFreshnessWindowMs: 120000 };
+  s.resources.quotas[alias] = { accountAlias: alias, imported: { source: 'imported_snapshot', accountAlias: alias, providerId: 'provider', observedAtMs: null, storedAtMs: null, tier: 'unknown', tierName: null, windows: [], generatedAt: { value: 1793491000, unit: 'unknown', atMs: null }, serverTime: null, nextReset: null, unit: 'unknown', total: null, used: null, remaining: 0, percentage: { value: 80, scale: 'unknown' }, authenticated: null, freshness: 'unknown' }, live: null, lastProbe: { state: 'failed', attemptedAtMs: Date.now(), errorCode: 'NATIVE_UNAVAILABLE' }, displayFreshnessWindowMs: 120000 };
   const state = createState(); applySnapshot(state, s); state.page = 'resources'; state.expandedAccounts.add(alias);
   const dom = renderApp({ state, action: () => {} });
   assert.equal(dom.querySelector('.quota-value')?.firstChild?.textContent, '0');

@@ -7,6 +7,7 @@ import {record,redact} from '../runtime/zcode-server/events.js';
 import type {SessionSnapshot} from '../runtime/types.js';
 import {loadManifest,manifestView,publicArtifactFile,readSavedFile} from './artifacts.js';
 import {bounded,canonicalJson,digest,UiCursors,UiRpcError} from './ui-support.js';
+import {resolveQuotaSnapshot} from './quota-resolver.js';
 
 export interface UiApprovalObservation {snapshot:SessionSnapshot;approvals:Record<string,unknown>[];nativeTurnId:string;sourceComplete:boolean;stablePermissionIds:boolean;unattributedCount:number}
 export interface UiBackend {
@@ -16,7 +17,7 @@ export interface UiBackend {
  canAcceptApproval(task:Task):Promise<boolean>;
  sendApproval(task:Task,approvalId:string,optionId:string):Promise<void>;
  accounts():Promise<AccountSummary[]>;
- probeQuota(workerId:string):Promise<{accountAlias:string;providerId:string;quota:Record<string,unknown>}>;
+ probeQuota(target:{workerId?:string;accountAlias?:string}):Promise<{accountAlias:string;providerId:string;quota:Record<string,unknown>}>;
 }
 interface StoredReview {descriptor:UiApprovalReview;snapshotKey:string|null}
 interface ActionReceipt {taskId:string;approvalId:string;actionId:string;ownerKey:string;decision:string;responseState:'intent_recorded'|'awaiting_native'|'resolved_unattributed'|'unknown';nativeRevisionAtCheck:number;taskRevision:number;intentAtMs:number}
@@ -96,8 +97,13 @@ export class UiService {
  private async quota(accountAlias:string):Promise<UiQuota>{
   const account=(await this.backend.accounts()).find(a=>a.alias===accountAlias);if(!account)throw new UiRpcError('NOT_FOUND');
   const q=account.quota;const cache=this.live.get(accountAlias);const now=Date.now();let live=cache?.snapshot??null;
-  if(live)live={...live,freshness:live.observedAtMs===null||now<live.observedAtMs?'unknown':now-live.observedAtMs<=FRESH?'fresh':'stale'};
-  const imported:UiQuotaSnapshot|null=q?{source:'imported_snapshot',accountAlias,providerId:`account:${account.provider}-start-plan`,observedAtMs:null,storedAtMs:null,generatedAt:sourceTime(q.updatedAt),serverTime:null,nextReset:null,unit:'unknown',total:finite(q.total),used:finite(q.used),remaining:finite(q.remaining),percentage:null,authenticated:null,freshness:'unknown'}:null;
+  if(live){
+   const freshness=cache?.lastProbe.state==='failed'?'stale':(live.observedAtMs===null||now<live.observedAtMs?'unknown':now-live.observedAtMs<=FRESH?'fresh':'stale');
+   live={...live,freshness};
+  }
+  const rawQuota:Record<string,unknown>={...(q?{...q}:{}),quota_raw:account.quotaRaw,subscription_raw:account.subscriptionRaw,plan_type:account.plan};
+  const hasImported=!!(q||account.quotaRaw!==undefined||account.subscriptionRaw!==undefined||account.plan);
+  const imported:UiQuotaSnapshot|null=hasImported?resolveQuotaSnapshot({source:'imported_snapshot',accountAlias,providerId:`account:${account.provider}-start-plan`,observedAtMs:null,storedAtMs:null,rawQuota,authenticated:null,freshness:'unknown'}):null;
   return {accountAlias,imported,live,lastProbe:cache?.lastProbe??{state:'never',attemptedAtMs:null,errorCode:null},displayFreshnessWindowMs:FRESH};
  }
  private actionFor(taskId:string,approvalId:string,owner:UiApprovalReview['owner']):ActionReceipt|undefined{
@@ -170,11 +176,37 @@ export class UiService {
   }
   if(name==='ui_get_quota')return this.envelope(await this.quota(p.account_id));
   if(name==='ui_probe_quota'){
-   const attempted=Date.now();let accountAlias:string|undefined;
-   try{const result=await this.backend.probeQuota(p.worker_id);accountAlias=result.accountAlias;const q=result.quota,remaining=record(q.remaining);if(record(q.provider).id!==result.providerId)throw new UiRpcError('AUTH_INVALID');const observed=Date.now();
-    const snapshot:UiQuotaSnapshot={source:'live_probe',accountAlias,providerId:result.providerId,observedAtMs:observed,storedAtMs:observed,generatedAt:sourceTime(q.generatedAt),serverTime:sourceTime(q.serverTime),nextReset:sourceTime(remaining.nextResetTime),unit:'unknown',total:finite(q.total),used:finite(q.used),remaining:finite(remaining.count),percentage:finite(remaining.percentage)===null?null:{value:remaining.percentage,scale:'unknown'},authenticated:typeof q.authenticated==='boolean'?q.authenticated:null,freshness:'fresh'};
-    this.live.set(accountAlias,{snapshot,lastProbe:{state:'succeeded',attemptedAtMs:attempted,errorCode:null}});return this.envelope(await this.quota(accountAlias));
-   }catch(e){const alias=accountAlias??(e as {accountAlias?:string}).accountAlias;if(alias){const previous=this.live.get(alias);this.live.set(alias,{snapshot:previous?.snapshot??null,lastProbe:{state:'failed',attemptedAtMs:attempted,errorCode:e instanceof UiRpcError?e.data?.kind??'NATIVE_UNAVAILABLE':'NATIVE_UNAVAILABLE'}});}throw e instanceof UiRpcError?e:new UiRpcError('NATIVE_UNAVAILABLE',{outcome:'may_have_applied'});}
+   const attempted=Date.now();let accountAlias:string|undefined=p.account_id;
+   try{
+    const target=p.worker_id?{workerId:p.worker_id}:{accountAlias:p.account_id};
+    const result=await this.backend.probeQuota(target);
+    accountAlias=result.accountAlias;
+    const q=result.quota;
+    if(record(q.provider).id&&record(q.provider).id!==result.providerId)throw new UiRpcError('AUTH_INVALID');
+    const observed=Date.now();
+    const snapshot=resolveQuotaSnapshot({source:'live_probe',accountAlias,providerId:result.providerId,observedAtMs:observed,storedAtMs:observed,rawQuota:q,authenticated:typeof q.authenticated==='boolean'?q.authenticated:null,freshness:'fresh'});
+    this.live.set(accountAlias,{snapshot,lastProbe:{state:'succeeded',attemptedAtMs:attempted,errorCode:null}});
+    return this.envelope(await this.quota(accountAlias));
+   }catch(e){
+    const alias=accountAlias??(e as {accountAlias?:string}).accountAlias??p.account_id;
+    if(alias){
+     const previous=this.live.get(alias);
+     let staleSnapshot:UiQuotaSnapshot|null=previous?.snapshot?{...previous.snapshot,freshness:'stale'}:null;
+     if(!staleSnapshot){
+      try{
+       const acc=(await this.backend.accounts()).find(a=>a.alias===alias);
+       if(acc){
+        const hasImported=!!(acc.quota||acc.quotaRaw!==undefined||acc.subscriptionRaw!==undefined||acc.plan);
+        if(hasImported){
+         staleSnapshot=resolveQuotaSnapshot({source:'imported_snapshot',accountAlias:alias,providerId:`account:${acc.provider}-start-plan`,observedAtMs:null,storedAtMs:null,rawQuota:{...(acc.quota?{...acc.quota}:{}),quota_raw:acc.quotaRaw,subscription_raw:acc.subscriptionRaw,plan_type:acc.plan},authenticated:null,freshness:'stale'});
+        }
+       }
+      }catch{}
+     }
+     this.live.set(alias,{snapshot:staleSnapshot,lastProbe:{state:'failed',attemptedAtMs:attempted,errorCode:e instanceof UiRpcError?e.data?.kind??'NATIVE_UNAVAILABLE':'NATIVE_UNAVAILABLE'}});
+    }
+    throw e instanceof UiRpcError?e:new UiRpcError('NATIVE_UNAVAILABLE',{outcome:'may_have_applied'});
+   }
   }
   const task=this.store.getTask(p.task_id);
   if(name==='ui_get_artifact_manifest'){const result=this.store.getResult(task.taskId);return this.envelope(manifestView(task.taskId,this.store.getWorkspace(task.workspaceId).baseCommit,result,await loadManifest(this.root,task.taskId,result)));}

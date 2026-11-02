@@ -1,0 +1,177 @@
+/**
+ * Quota Progress Bar Component (.qbar)
+ *
+ * Implements the precision 3-color tier progress bar from zcode-switch:
+ * - 18~20px height with inset track shadow
+ * - Embedded centered monospace percentage (.qbar-pct)
+ * - 3-color safety tiers:
+ *     < 70% usage: Mint Green (var(--mint))
+ *    >= 70% usage: Amber Warning (var(--amber), .warn)
+ *    >= 90% usage: Alert Red Danger (var(--red), .danger)
+ * - Contrast text inversion (.in-fill):
+ *     When fill width >= 58%, font flips to high-contrast dark (#0e1116, 700 weight).
+ *     Otherwise, font renders as soft light grey (#97a1b4) over the dark track.
+ * - Tabular figures (tabular-nums) for zero-jitter rendering
+ */
+
+.qbar {
+  height: var(--qbar-height, 19px);
+  border-radius: var(--qbar-radius, 4px);
+  background: var(--qbar-track, #2b2e36);
+  border: 1px solid var(--qbar-track-border, rgba(255, 255, 255, 0.04));
+  overflow: hidden;
+  margin-top: 4px;
+  position: relative;
+  box-sizing: border-box;
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.28);
+}
+
+/* Fill Indicator */
+.qbar-fill {
+  height: 100%;
+  background: var(--qbar-fill-normal, var(--mint, #62c370));
+  border-radius: 3px;
+  transition: width 0.35s cubic-bezier(0.16, 1, 0.3, 1), background-color 0.25s ease;
+  min-width: 0;
+  will-change: width;
+}
+
+/* 3-Color Safety Gradient Tiers */
+.qbar.warn .qbar-fill,
+.qbar-fill.warn {
+  background: var(--qbar-fill-warn, var(--amber, #e8a33d));
+}
+
+.qbar.danger .qbar-fill,
+.qbar-fill.danger {
+  background: var(--qbar-fill-danger, var(--red, #e05252));
+}
+
+/* Centered Monospace Percentage Label */
+.qbar-pct {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  color: var(--qbar-text-outside, #97a1b4);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+  pointer-events: none;
+  user-select: none;
+  z-index: 1;
+  transition: color 0.2s ease;
+}
+
+/* In-Fill High Contrast Text Inversion (Remaining >= 58%) */
+.qbar-pct.in-fill {
+  color: var(--qbar-text-inside, #0e1116);
+  font-weight: 700;
+  text-shadow: 0 0 1px rgba(255, 255, 255, 0.15);
+}
+
+/* Compact / Mini Variant */
+.qbar.mini {
+  height: var(--qbar-height-mini, 17px);
+}
+
+.qbar.mini .qbar-pct {
+  font-size: 11px;
+}
+
+/* Striped Diagnostic Mode */
+.qbar.striped .qbar-fill {
+  background-image: repeating-linear-gradient(
+    -45deg,
+    transparent,
+    transparent 6px,
+    rgba(255, 255, 255, 0.15) 6px,
+    rgba(255, 255, 255, 0.15) 12px
+  );
+  background-size: 24px 24px;
+}
+
+/* Pulsing Urgency Animation on Danger Tiers */
+.qbar.danger.pulsing .qbar-fill {
+  animation: qbar-danger-pulse 1.8s ease-in-out infinite;
+}
+
+@keyframes qbar-danger-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.74; }
+}
+
+/* Light Theme Contrast Refinements */
+body.vscode-light .qbar {
+  background: #e4e7ea;
+  border-color: rgba(31, 35, 40, 0.12);
+  box-shadow: inset 0 1px 2px rgba(31, 35, 40, 0.12);
+}
+
+body.vscode-light .qbar-pct {
+  color: #4f5864;
+}
+
+body.vscode-light .qbar-pct.in-fill {
+  color: #0b0f14;
+  text-shadow: none;
+}
+
+body.vscode-light .qbar-fill {
+  background: #2da44e;
+}
+
+body.vscode-light .qbar.warn .qbar-fill,
+body.vscode-light .qbar-fill.warn {
+  background: #bf8700;
+}
+
+body.vscode-light .qbar.danger .qbar-fill,
+body.vscode-light .qbar-fill.danger {
+  background: #cf222e;
+}
+
+/* High Contrast Mode Refinements */
+body.vscode-high-contrast .qbar {
+  border: 1px solid CanvasText;
+}
+body.vscode-high-contrast .qbar-fill {
+  forced-color-adjust: none;
+  background: Highlight;
+}
+body.vscode-high-contrast .qbar-pct {
+  color: CanvasText;
+}
+body.vscode-high-contrast .qbar-pct.in-fill {
+  color: HighlightText;
+}
+
+@media (forced-colors: active) {
+  .qbar {
+    border: 1px solid CanvasText;
+  }
+  .qbar-fill {
+    forced-color-adjust: none;
+    background: Highlight;
+  }
+  .qbar-pct {
+    color: CanvasText;
+  }
+  .qbar-pct.in-fill {
+    color: HighlightText;
+  }
+}
+
+/* Reduced Motion Override */
+@media (prefers-reduced-motion: reduce) {
+  .qbar-fill {
+    transition: none !important;
+  }
+  .qbar.danger.pulsing .qbar-fill {
+    animation: none !important;
+  }
+}

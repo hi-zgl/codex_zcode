@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { TextDecoder } from 'node:util';
-import { uiPermissionReviewSchema, type UiApprovalReview, type UiTaskDetail, type UiArtifactFile, type UiArtifactManifest, type UiRpcResult } from '../../../../src/shared/ui-contract.js';
+import { uiPermissionReviewSchema, type UiApprovalReview, type UiTaskDetail, type UiArtifactFile, type UiArtifactManifest, type UiRpcResult, type UiMethodName, type UiRpcParams } from '../../../../src/shared/ui-contract.js';
 import { HostError, safeError, type Transport } from './client.js';
 import type { ProjectContext } from './project-context.js';
 import type { RequestPayload } from './protocol.js';
@@ -255,3 +255,37 @@ export function assertRealHostAction(options: ServiceOptions, state: UiSnapshot,
   if (kind === 'codex' && !options.native.codexSetup) throw new HostError('ACTION_UNAVAILABLE', 'Codex setup is unavailable in this Host.');
   if (kind === 'daemon' && !options.native.startDaemon) throw new HostError('ACTION_UNAVAILABLE', 'Daemon startup is unavailable in this Host.');
 }
+
+export function reviewStorageKey(poolKey: string, taskId: string, hash: string): string {
+  return `review:${sha256(`${poolKey}|${taskId}|${hash}`)}`;
+}
+export async function openArtifactDiff(options: ServiceOptions, taskId: string, manifestSha256: string, file: UiArtifactFile, fullArtifact: (side: 'base' | 'final') => Promise<string>): Promise<void> {
+  if (!file.nativeDiff.available) throw new HostError('ARTIFACT_UNAVAILABLE', file.nativeDiff.reason ?? 'This file has no complete immutable Diff.');
+  await options.native.openDiff(taskId, manifestSha256, file, fullArtifact);
+}
+export async function openCurrentDiskFile(options: ServiceOptions, file: UiArtifactFile, detail: UiTaskDetail): Promise<void> {
+  const path = assertSafeWorktreePath(file);
+  if (options.mode === 'mock') throw new HostError('MOCK_READ_ONLY', 'Mock mode does not read the fixture workspace or current disk files.');
+  if (!options.native.openCurrentFile) throw new HostError('CAPABILITY_UNAVAILABLE', 'This Host cannot open current disk files.');
+  await options.native.openCurrentFile(detail.workspace.worktreePath, path);
+}
+export async function readArtifactChunk(
+  ui: <K extends UiMethodName>(method: K, params: UiRpcParams<K>, signal?: AbortSignal) => Promise<UiRpcResult<K>>,
+  state: UiSnapshot, taskId: string, manifestSha256: string, fileId: string, side: 'base' | 'final', offsetBytes = 0, signal?: AbortSignal
+): Promise<UiRpcResult<'ui_read_artifact_file'>['data']> {
+  const file = requireSelectedArtifactFile(state, taskId, manifestSha256, fileId); const expected = file[side];
+  if (expected.state !== 'available' || expected.sizeBytes === null || !expected.sha256) throw new HostError('ARTIFACT_UNAVAILABLE', expected.reason ?? 'This immutable file side is absent or unavailable.');
+  const page = (await ui('ui_read_artifact_file', { apiVersion: 1, task_id: taskId, manifest_sha256: manifestSha256, file_id: fileId, side, offset_bytes: offsetBytes, limit_bytes: 65536 }, signal)).data;
+  return verifyArtifactChunkPage(page, manifestSha256, fileId, side, offsetBytes, expected);
+}
+export async function fetchFullArtifact(
+  ui: <K extends UiMethodName>(method: K, params: UiRpcParams<K>, signal?: AbortSignal) => Promise<UiRpcResult<K>>,
+  state: UiSnapshot, taskId: string, hash: string, file: UiArtifactFile, side: 'base' | 'final', signal?: AbortSignal
+): Promise<string> {
+  const expected = file[side]; if (expected.state === 'absent') return '';
+  if (expected.state !== 'available' || expected.encoding !== 'utf8' || expected.sizeBytes === null || expected.sizeBytes > 2097152 || expected.kind === 'gitlink' || expected.kind === 'unknown') throw new HostError('ARTIFACT_UNAVAILABLE', 'Native Diff requires a complete UTF-8 snapshot of at most 2 MiB per side.');
+  const chunks: Buffer[] = []; let offset = 0;
+  do { const page = await readArtifactChunk(ui, state, taskId, hash, file.fileId, side, offset, signal); chunks.push(Buffer.from(page.dataBase64, 'base64')); if (page.nextOffsetBytes === null) break; offset = page.nextOffsetBytes; } while (true);
+  return decodeUtf8Artifact(chunks, expected.sizeBytes, expected.sha256!);
+}
+

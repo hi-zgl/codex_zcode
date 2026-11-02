@@ -1,5 +1,6 @@
 import type { UiSnapshot, UiTask, TaskDraft } from '../host/types.js';
 import type { UiApprovalReview, UiTaskDetail, UiArtifactFile, UiRpcResult } from '../../../../src/shared/ui-contract.js';
+import type { AccountSortMode } from '../../../../src/shared/account-sort.js';
 
 export type Page = 'tasks' | 'resources' | 'compose' | 'settings';
 export type DetailTab = 'overview' | 'approvals' | 'delivery' | 'events';
@@ -21,6 +22,7 @@ export interface LocalState {
   submittedDraftToken: string | null; importSummary: string | null;
   projectDefaultApplied: boolean;
   dismissedActions: Set<string>;
+  accountSortMode: AccountSortMode;
 }
 export interface PersistedUi { version: 1; identity: string; page: 'tasks' | 'resources' | 'settings'; tab: DetailTab; filters: Filters; selectedTaskId: string | null }
 const tabs: DetailTab[] = ['overview', 'approvals', 'delivery', 'events'];
@@ -35,7 +37,7 @@ export function readPersisted(value: unknown): PersistedUi | null {
   return { version: 1, identity: p.identity, page: p.page as PersistedUi['page'], tab: p.tab!, filters: { project: filters.project, status: filters.status, worker: filters.worker, workspace: filters.workspace, query: filters.query }, selectedTaskId: p.selectedTaskId ?? null };
 }
 export function createState(persisted: unknown = null): LocalState {
-  return { snapshot: null, page: 'tasks', tab: 'overview', filters: defaultFilters(), detailOpen: false, expandedAccounts: new Set(), reviews: new Map(), events: [], eventsCursor: null, eventsLoaded: false, patch: '', patchLoaded: false, patchNextOffset: null, artifact: null, pending: new Set(), errors: new Map(), message: '', draft: null, draftDirty: false, workerId: '', workerAccount: '', baseRef: 'HEAD', settingsInterval: '30', settingsConcurrency: '', policyDirty: false, validation: {}, taskLookup: '', loadedIdentity: null, restore: readPersisted(persisted), deliveryVisited: false, inspectedFiles: new Set(), rawFields: new Map(), submittedDraftToken: null, importSummary: null, projectDefaultApplied: false, dismissedActions: new Set() };
+  return { snapshot: null, page: 'tasks', tab: 'overview', filters: defaultFilters(), detailOpen: false, expandedAccounts: new Set(), reviews: new Map(), events: [], eventsCursor: null, eventsLoaded: false, patch: '', patchLoaded: false, patchNextOffset: null, artifact: null, pending: new Set(), errors: new Map(), message: '', draft: null, draftDirty: false, workerId: '', workerAccount: '', baseRef: 'HEAD', settingsInterval: '30', settingsConcurrency: '', policyDirty: false, validation: {}, taskLookup: '', loadedIdentity: null, restore: readPersisted(persisted), deliveryVisited: false, inspectedFiles: new Set(), rawFields: new Map(), submittedDraftToken: null, importSummary: null, projectDefaultApplied: false, dismissedActions: new Set(), accountSortMode: 'quota_first' };
 }
 export function connectionIdentity(snapshot: UiSnapshot): string { return `${snapshot.connection.host}\u0000${snapshot.connection.poolHome}\u0000${snapshot.connection.storeId ?? ''}`; }
 export function clearTaskContent(state: LocalState): void {

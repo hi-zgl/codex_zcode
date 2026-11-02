@@ -197,3 +197,43 @@ test('finish-work is unavailable against older daemons without lifecycle capabil
   await assert.rejects(h.execute('pool.shutdown'));assert.equal(h.transport.calls.some(c=>c.method==='shutdown_pool'),false);
  }finally{h.service.dispose();}
 });
+
+test('account.probe direct pass requests quota and updates live quota cache with tier and windows',async()=>{
+ const h=await harness();try{
+  await h.execute('connect');
+  const result:any=await h.execute('account.probe',{accountAlias:'account-demo'});
+  assert.equal(result.accountAlias,'account-demo');
+  assert.equal(result.live?.tier,'pro');
+  assert.equal(result.live?.windows.length,2);
+  assert.ok(h.service.state.resources.quotas['account-demo']?.live);
+  assert.equal(h.service.state.resources.quotas['account-demo']?.live?.tier,'pro');
+  assert.equal(h.transport.calls.some(c=>c.method==='ui_probe_quota'&&(c.params as any).account_id==='account-demo'),true);
+ }finally{h.service.dispose();}
+});
+
+test('accounts.probeAll batches all available accounts with dynamic quota updates and retains email/name metadata',async()=>{
+ const h=await harness();try{
+  await h.execute('connect');
+  const demo=h.service.state.resources.accounts.find(a=>a.alias==='account-demo');
+  const review=h.service.state.resources.accounts.find(a=>a.alias==='account-review');
+  assert.equal(demo?.email,'pjsc45sv1w@xenveroes.pro');
+  assert.equal(demo?.name,'pjsc45sv1w@xenveroes.pro');
+  assert.equal(review?.email,'iloveyou@globalsmv.com');
+
+  const firstProbe:any=await h.execute('account.probe',{accountAlias:'account-demo'});
+  const firstRemaining=firstProbe.live?.remaining;
+
+  const probeAllResult:any=await h.execute('accounts.probeAll',{});
+  assert.equal(probeAllResult.probed,true);
+  assert.ok(h.service.state.resources.quotas['account-demo']?.live);
+  assert.ok(h.service.state.resources.quotas['account-review']?.live);
+
+  const secondRemaining=h.service.state.resources.quotas['account-demo']?.live?.remaining;
+  assert.notEqual(firstRemaining,secondRemaining);
+
+  await h.execute('resources.refresh',{});
+  const thirdRemaining=h.service.state.resources.quotas['account-demo']?.live?.remaining;
+  assert.notEqual(secondRemaining,thirdRemaining);
+ }finally{h.service.dispose();}
+});
+

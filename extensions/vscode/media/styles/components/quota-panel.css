@@ -1,0 +1,295 @@
+/**
+ * Quota Panel & Slot Layout Component
+ * Implements the translucent dark panel, slot layouts, and 3-column quota window grid:
+ * - .quota-panel (Root container with glassmorphism, 10px radius, fine border)
+ * - .row-quota-slot (Embedded account slot with dashed boundary)
+ * - .q-win (3-column grid: minmax(95px, 115px) label, 1fr progress bar, 136px countdown/status)
+ * - .q-win.mini (Compact variant: minmax(85px, 105px) / 1fr / 128px)
+ */
+
+.quota-panel {
+  border: 1px solid var(--quota-panel-border, var(--line));
+  border-radius: var(--quota-panel-radius, 10px);
+  background: var(--quota-panel-bg, var(--surface-card));
+  padding: 12px 15px 13px;
+  box-sizing: border-box;
+  backdrop-filter: var(--glass-blur, blur(12px));
+  box-shadow: var(--shadow-sm);
+  transition: border-color var(--transition-normal), box-shadow var(--transition-normal);
+}
+
+.quota-panel:hover {
+  border-color: var(--line-bright, var(--line));
+  box-shadow: var(--shadow-md);
+}
+
+/* Header & Eyebrow Meta */
+.q-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.q-eyebrow {
+  font-family: var(--mono);
+  font-size: 12px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--muted);
+  user-select: none;
+}
+
+.q-who {
+  color: var(--text);
+  letter-spacing: 0.04em;
+  margin-left: 8px;
+  font-weight: 500;
+  font-family: var(--mono);
+}
+
+.q-tier-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  min-height: 22px;
+}
+
+/* Unified Dashboard Source Badge & Status Meta */
+.q-source-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 10px;
+  padding-bottom: 8px;
+  border-bottom: 1px dashed var(--quota-panel-border-soft, var(--line-subtle));
+}
+
+.q-source-badge {
+  font-size: 11.5px;
+  font-family: var(--mono);
+  padding: 2px 7px;
+  border-radius: var(--radius-sm, 4px);
+  background: var(--surface-hover);
+  color: var(--text);
+  border: 1px solid var(--line);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.q-source-badge.live {
+  border-color: rgba(63, 185, 80, 0.4);
+  background: rgba(63, 185, 80, 0.12);
+  color: var(--success, #3fb950);
+}
+.q-source-badge.imported {
+  border-color: rgba(56, 139, 253, 0.4);
+  background: rgba(56, 139, 253, 0.12);
+  color: var(--accent, #58a6ff);
+}
+
+.q-source-time {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+
+.q-meta-kv {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--quota-panel-border-soft, var(--line-subtle));
+}
+
+/* Row Quota Slot: Inline container embedded inside resource cards */
+.row-quota-slot {
+  width: 100%;
+  min-height: 46px;
+  margin-top: 7px;
+  padding-top: 7px;
+  border-top: 1px dashed var(--quota-panel-border-soft, var(--line-subtle));
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
+  box-sizing: border-box;
+}
+
+/* 3-Column Quota Window Grid (Label minmax(95px, 115px) | Bar 1fr | Status/Countdown 136px) */
+.q-win {
+  display: grid;
+  grid-template-columns: minmax(95px, 115px) 1fr 136px;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 7px;
+}
+.q-win:last-of-type { margin-bottom: 0; }
+.q-win .qbar { margin-top: 0; }
+
+.q-win-label {
+  font-size: 14.5px;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.q-win-pct {
+  font-family: var(--mono);
+  font-size: 14px;
+  color: var(--muted);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+.q-win-reset {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+
+/* Compact Mini Window Grid (Label minmax(85px, 105px) | Bar 1fr | Status 128px) */
+.q-win.mini {
+  grid-template-columns: minmax(85px, 105px) 1fr 128px;
+  gap: 6px;
+  margin-bottom: 0;
+}
+.q-win.mini .q-win-label { font-size: 13px; }
+.q-win.mini .q-win-pct { font-size: 12.5px; }
+.q-win.mini .q-win-reset { font-size: 11.5px; }
+.q-win.mini .qbar { height: var(--qbar-height-mini, 17px); }
+.q-win.mini .qbar-pct { font-size: 11px; }
+
+/* Plan Groupings & Subscriptions */
+.plan-grp + .plan-grp {
+  margin-top: 7px;
+  padding-top: 6px;
+  border-top: 1px dashed var(--quota-panel-border-soft, var(--line-subtle));
+}
+
+.pg-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 3px;
+  min-width: 0;
+}
+
+.pg-name {
+  font-size: 12.5px;
+  color: var(--text);
+  font-family: var(--mono);
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.pg-exp {
+  margin-left: auto;
+  flex: none;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--muted);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Extended Detail Sections */
+.q-month-detail {
+  margin-top: 7px;
+  border-top: 1px dashed var(--quota-panel-border-soft, var(--line-subtle));
+  padding-top: 9px;
+}
+.q-month-detail .q-win { margin-bottom: 5px; }
+
+.q-items {
+  margin-top: 7px;
+  border-top: 1px dashed var(--quota-panel-border-soft, var(--line-subtle));
+  padding-top: 9px;
+}
+.q-item { margin-bottom: 10px; }
+.q-item:last-child { margin-bottom: 0; }
+.q-item-name {
+  font-size: 14.5px;
+  color: var(--text);
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+}
+.q-item-nums {
+  font-family: var(--mono);
+  font-size: 12.5px;
+  color: var(--muted);
+  margin-top: 2px;
+  font-variant-numeric: tabular-nums;
+}
+.q-item-name .q-item-nums { margin-top: 0; font-size: 14px; color: var(--text); }
+
+/* Status Messages & Interactive Controls */
+.q-line { font-size: 13.5px; color: var(--muted); margin-top: 5px; }
+.q-fetch { width: 100%; }
+
+.q-loading, .aq-loading {
+  color: var(--muted);
+  font-size: 13.5px;
+  font-family: var(--mono);
+  padding: 4px 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.q-err, .aq-err {
+  color: var(--danger, #f48771);
+  font-size: 13px;
+  line-height: 1.45;
+  padding: 2px 0;
+}
+.aq-err { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.q-expand {
+  margin-top: 8px;
+  font-size: 13.5px;
+  color: var(--muted);
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  padding: 2px 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  transition: color var(--transition-fast);
+}
+.q-expand:hover { color: var(--text); }
+
+.btn-mini {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm, 4px);
+  background: var(--surface-hover);
+  color: var(--text);
+  font-size: 12px;
+  padding: 2px 9px;
+  cursor: pointer;
+  transition: border-color var(--transition-fast), background var(--transition-fast);
+}
+.btn-mini:hover { color: var(--text); border-color: var(--line-bright); }
+
+/* Narrow Sidebar Responsive Refinements (< 360px) */
+@media (max-width: 360px) {
+  .q-win { grid-template-columns: minmax(75px, 90px) 1fr 100px; gap: 4px; }
+  .q-win-label { font-size: 13px; }
+  .q-win-reset { font-size: 11px; }
+}

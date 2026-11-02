@@ -54,6 +54,58 @@
   --info-border: rgba(128, 179, 214, 0.3);
   --info-glow: rgba(128, 179, 214, 0.25);
 
+  /* Accent & Status Hues (ZCode Design System) */
+  --amber: var(--vscode-editorWarning-foreground, #e8a33d);
+  --amber-deep: #c9862a;
+  --amber-ink: #241a09;
+  --mint: var(--vscode-testing-iconPassed, #62c370);
+  --mint-dim: #3d8a4a;
+  --red: var(--vscode-errorForeground, #e05252);
+  --red-dim: #8f3434;
+
+  /* Quota Bar Tokens */
+  --qbar-track: var(--surface-hover, #2b2e36);
+  --qbar-track-border: var(--line-subtle, rgba(255, 255, 255, 0.06));
+  --qbar-fill-normal: var(--mint);
+  --qbar-fill-warn: var(--amber);
+  --qbar-fill-danger: var(--red);
+  --qbar-text-outside: var(--muted, #97a1b4);
+  --qbar-text-inside: #0e1116;
+  --qbar-height: 19px;
+  --qbar-height-mini: 17px;
+  --qbar-radius: 4px;
+
+  /* Quota Panel Tokens */
+  --quota-panel-bg: var(--glass-bg, rgba(31, 33, 39, 0.85));
+  --quota-panel-border: var(--line, #2c2f37);
+  --quota-panel-border-soft: var(--line-subtle, rgba(255, 255, 255, 0.08));
+  --quota-panel-radius: 10px;
+
+  /* Tier Badge Design Tokens */
+  --tier-max-fg: #f0b055;
+  --tier-max-border: #a06a22;
+  --tier-max-bg: rgba(232, 163, 61, 0.12);
+
+  --tier-pro-fg: #7fb3e8;
+  --tier-pro-border: #33567c;
+  --tier-pro-bg: rgba(109, 168, 232, 0.12);
+
+  --tier-lite-fg: #9fd4a8;
+  --tier-lite-border: #3d6c46;
+  --tier-lite-bg: rgba(98, 195, 112, 0.12);
+
+  --tier-start-fg: #e8a33d;
+  --tier-start-border: #c9862a;
+  --tier-start-bg: rgba(232, 163, 61, 0.10);
+
+  --tier-trial-fg: #c9a6e8;
+  --tier-trial-border: #5c4179;
+  --tier-trial-bg: rgba(183, 138, 224, 0.12);
+
+  --tier-free-fg: var(--muted, #838794);
+  --tier-free-border: var(--line, #2c2f37);
+  --tier-free-bg: var(--surface-hover, rgba(255, 255, 255, 0.04));
+
   /* Spacing Scale */
   --space-2xs: 2px;
   --space-xs: 4px;
@@ -149,6 +201,14 @@ progress + span,
 .review-decision-meta,
 .quota-value,
 .quota-value span,
+.tier-b,
+.qbar-pct,
+.q-win-pct,
+.q-win-reset,
+.q-item-nums,
+.pg-exp,
+.pg-name,
+.quota-cache-warning-time,
 .badge,
 .change-badge,
 .change-symbol,

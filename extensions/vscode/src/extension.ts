@@ -49,7 +49,7 @@ export async function activate(context:vscode.ExtensionContext):Promise<unknown>
     getState:<T>(key:string,fallback:T)=>context.workspaceState.get(key,fallback),
     setState:async(key,value)=>{await context.workspaceState.update(key,value);},
     pickAccountFiles:async(targetHost)=>{
-      const choice=await vscode.window.showOpenDialog({title:`Import OAuth JSON on ${targetHost}. Same aliases may replace stored credentials.`,openLabel:'Import selected OAuth JSON',canSelectFiles:true,canSelectFolders:false,canSelectMany:true,filters:{'OAuth JSON':['json']}});
+      const choice=await vscode.window.showOpenDialog({defaultUri:vscode.Uri.file('/home/zgl/.local/share/zcode-pool/imports'),title:`Import OAuth JSON on ${targetHost}. Same aliases may replace stored credentials.`,openLabel:'Import selected OAuth JSON',canSelectFiles:true,canSelectFolders:false,canSelectMany:true,filters:{'OAuth JSON':['json']}});
       if(!choice)return undefined;
       const files:string[]=[];for(const uri of choice){if(!['file','vscode-remote'].includes(uri.scheme))throw new HostError('PATH_REJECTED','Select files on the current extension host.');const path=await realpath(uri.fsPath);if(!(await lstat(path)).isFile())throw new HostError('PATH_REJECTED','Select regular OAuth JSON files.');files.push(path);}return files;
     },

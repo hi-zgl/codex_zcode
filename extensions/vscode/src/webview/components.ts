@@ -4,7 +4,7 @@ import { empty, renderActionFeedback } from './components/feedback.js';
 import { renderHeader, renderConnection, renderNavigation, renderWelcome } from './components/header.js';
 import { notice } from './components/primitives.js';
 import { renderSettings } from './components/views/settings.js';
-import { renderResources } from './components/views/resources.js';
+import { renderResources } from './components/views/resources/index.js';
 import { renderComposer } from './components/views/composer.js';
 import { renderTasks } from './components/views/tasks.js';
 
@@ -16,7 +16,7 @@ export * from './components/feedback.js';
 export * from './components/header.js';
 export * from './components/views/tasks.js';
 export * from './components/views/task-detail.js';
-export * from './components/views/resources.js';
+export * from './components/views/resources/index.js';
 export * from './components/views/composer.js';
 export * from './components/views/settings.js';
 

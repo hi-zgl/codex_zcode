@@ -11,6 +11,11 @@ export interface AccountSummary {
   health: AccountHealth;
   plan?: string;
   quota?: { total?: number; used?: number; remaining?: number; updatedAt?: number };
+  quotaRaw?: unknown;
+  subscriptionRaw?: unknown;
+  quotaResetAt?: number;
+  email?: string;
+  name?: string;
 }
 
 /** Sensitive internal value: never return this object through a public API or a log. */
@@ -87,10 +92,20 @@ export function accountSummary(account: AccountCredentials): AccountSummary {
     total: number(account.raw.quota_total), used: number(account.raw.quota_used),
     remaining: number(account.raw.quota_remaining), updatedAt: number(account.raw.usage_updated_at),
   };
+  const quotaRaw = account.raw.quota_raw ?? account.raw.balances;
+  const subscriptionRaw = account.raw.subscription_raw ?? account.raw.plans;
+  const quotaResetAt = number(account.raw.quota_reset_at);
+  const email = string(account.userInfo?.email) ?? string(account.raw?.email);
+  const name = string(account.userInfo?.name) ?? string(account.raw?.display_name);
   return {
     alias: account.alias, provider: account.provider, authMode: 'oauth', health: account.health,
     ...(string(account.raw.plan_type) ? { plan: string(account.raw.plan_type) } : {}),
     ...(Object.values(quota).some(value => value !== undefined) ? { quota } : {}),
+    ...(quotaRaw !== undefined ? { quotaRaw } : {}),
+    ...(subscriptionRaw !== undefined ? { subscriptionRaw } : {}),
+    ...(quotaResetAt !== undefined ? { quotaResetAt } : {}),
+    ...(email ? { email } : {}),
+    ...(name ? { name } : {}),
   };
 }
 
@@ -152,7 +167,7 @@ export async function writePrivateJson(path: string, value: unknown): Promise<vo
   await chmod(path, 0o600);
 }
 
-/** Encrypted at rest. Public list() never returns identities, emails, source paths or credentials. */
+/** Encrypted at rest. Public list() returns account health and metadata, never credentials. */
 export class AccountVault {
   readonly root: string;
   constructor(root: string) { this.root = resolve(root); }

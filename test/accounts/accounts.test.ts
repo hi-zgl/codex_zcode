@@ -32,8 +32,10 @@ test('exports deduplicate provider plus stable identity and retain actual refres
     assert.equal(result.accounts[0]!.accessToken, 'updated-token');
     assert.equal(result.accounts[0]!.refreshToken, 'private-refresh-token');
     assert.equal(result.accounts[0]!.raw.expires_at, 1890000000);
+    assert.equal(result.summaries[0]!.email, 'private@example.test');
+    assert.equal(result.summaries[0]!.name, 'private name');
     const publicJson = JSON.stringify(result.summaries);
-    for (const secret of ['private@example.test', 'private-access-token', 'updated-token', 'private-jwt-token', 'user-123']) assert.equal(publicJson.includes(secret), false);
+    for (const secret of ['private-access-token', 'updated-token', 'private-jwt-token', 'user-123']) assert.equal(publicJson.includes(secret), false);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
@@ -65,7 +67,10 @@ test('vault persists only ciphertext and returns credential-free public account 
     assert.equal((await vault.load(alias)).accessToken, 'private-access-token');
     await vault.setHealth(alias, 'cooling');
     assert.equal((await vault.list())[0]!.health, 'cooling');
-    assert.equal(JSON.stringify(await vault.list()).includes('private'), false);
+    assert.equal((await vault.list())[0]!.email, 'private@example.test');
+    assert.equal((await vault.list())[0]!.name, 'private name');
+    const vaultListJson = JSON.stringify(await vault.list());
+    for (const secret of ['private-access-token', 'private-jwt-token', 'user-123']) assert.equal(vaultListJson.includes(secret), false);
     await assert.rejects(vault.load('../escape'), /Invalid account alias/);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
@@ -85,3 +90,27 @@ test('invalid exports never echo paths, emails, tokens or JSON parser payloads',
     await assert.rejects(loadAccountExports([path]), /stable identity/);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
+
+test('accountSummary retains quota_raw, subscription_raw and quota_reset_at', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'zp-summary-'));
+  try {
+    const rawAccount = fixture({
+      quota_total: 500000000,
+      quota_remaining: 500000000,
+      quota_reset_at: 1793581200,
+      plan_type: 'ZCODE WEEKEND BUILD',
+      subscription_raw: [{ name: 'ZCODE WEEKEND BUILD', plan_id: 'zcode-v3-start-plan-1030-wk' }],
+      quota_raw: [{ show_name: 'GLM-5.3-Flash', total_units: 500000000, unit_type: 'token' }],
+    });
+    const path = join(root, 'accounts.json');
+    await writeFile(path, JSON.stringify([rawAccount]));
+    const result = await loadAccountExports([path]);
+    assert.equal(result.summaries.length, 1);
+    const summary = result.summaries[0]!;
+    assert.equal(summary.plan, 'ZCODE WEEKEND BUILD');
+    assert.equal(summary.quotaResetAt, 1793581200);
+    assert.deepEqual(summary.subscriptionRaw, [{ name: 'ZCODE WEEKEND BUILD', plan_id: 'zcode-v3-start-plan-1030-wk' }]);
+    assert.deepEqual(summary.quotaRaw, [{ show_name: 'GLM-5.3-Flash', total_units: 500000000, unit_type: 'token' }]);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+

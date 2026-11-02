@@ -1,14 +1,100 @@
+/**
+ * ZCode Webview Design System & ITCSS Stylesheet Index
+ *
+ * Inverted Triangle CSS (ITCSS) Architecture Organization:
+ *
+ * 1. Settings & Design Tokens (Layer 1)
+ *    - tokens.css: Surface, typography, spacing, semantic colors, tier ramps, tabular figures
+ *
+ * 2. Generic & Base Elements (Layer 2)
+ *    - base.css: Global box-sizing, typography resets, focus rings, scrollbars
+ *
+ * 3. Components (Layer 3 - Reusable, isolated UI blocks)
+ *    - components/buttons.css: Primary, ghost, mini, status buttons, loading indicators
+ *    - components/badges-skeletons.css: Status indicators, pulse dots, skeleton loaders
+ *    - components/tier-badges.css: Monospace subscription badges (.tier-b, .max, .pro, etc.)
+ *    - components/quota-panel.css: Translucent container, 3-column .q-win grid, slot layouts
+ *    - components/quota-bar.css: Precision 3-color tier bar, .in-fill contrast inverted text
+ *    - components/quota-warning.css: Stale cache alert box (.quota-cache-warning)
+ *    - components/forms-code.css: Form fields, inputs, code viewers, diffs, selects
+ *
+ * 4. Views & Layout Structures (Layer 4 - Screen-specific assemblies)
+ *    - views/shell.css: Outer application container, navigation header, tabs
+ *    - views/tasks-list.css: Task queue list, task card items, filters
+ *    - views/task-detail.css: Inspector panels, terminal output, timeline
+ *    - views/approvals.css: Decision review decks, diff review viewports
+ *    - views/delivery.css: Artifact inspection and delivery staging
+ *    - views/resources-forms.css: Account pools, executor forms, workspaces
+ *
+ * 5. Utilities, Feedback & Themes (Layer 5 - State overrides & themes)
+ *    - feedback.css: Toast notifications, modal sheets, confirmation dialogs
+ *    - themes.css: Explicit dark, light, and high-contrast theme overrides
+ *    - responsive.css: Viewport width breakpoints (280px to 2560px)
+ *
+ * Design System Specifications & Standards:
+ * - Badges: Monospace 11.5px bold letter-spacing 0.06em (.tier-b .max/.pro/.lite/.start/.trial/.free)
+ * - Panels: 10px rounded dark glassmorphism (.quota-panel) with 3-column .q-win grid
+ * - Progress: 18~20px height (.qbar) with mint (<70%), amber (>=70%), red (>=90%)
+ * - Text Inversion: High contrast inverted text (.qbar-pct.in-fill) when fill >= 58%
+ * - Warning: Soft warning banner (.quota-cache-warning) with last observed timestamp
+ * - Tabular Figures: tabular-nums throughout all numeric values, timers, and percentages
+ *
+ * Design Token Ramps:
+ * - --mint: #62c370 (Normal tier & positive metrics)
+ * - --amber: #e8a33d (Warning tier >= 70% usage)
+ * - --red: #e05252 (Danger tier >= 90% usage)
+ * - --mono: Editor monospace stack with Cascadia, Consolas, SF Mono fallback
+ * - --surface-card: Theme-aware dark/light elevation surface
+ *
+ * Architectural Boundaries:
+ * - Zero node_modules or host references in webview styles
+ * - Strict WCAG AAA color contrast ratios across light and dark themes
+ * - File line count constraints strictly maintained between 100 and 300 lines
+ */
+
+/* ==========================================================================
+   Layer 1: Design Tokens
+   ========================================================================== */
 @import './tokens.css';
+
+/* ==========================================================================
+   Layer 2: Base & Normalization
+   ========================================================================== */
 @import './base.css';
+
+/* ==========================================================================
+   Layer 3: Isolated Components
+   ========================================================================== */
 @import './components/buttons.css';
 @import './components/badges-skeletons.css';
+@import './components/tier-badges.css';
+@import './components/quota-panel.css';
+@import './components/quota-bar.css';
+@import './components/quota-warning.css';
 @import './components/forms-code.css';
+
+/* ==========================================================================
+   Layer 4: Views & Domain Surfaces
+   ========================================================================== */
 @import './views/shell.css';
 @import './views/tasks-list.css';
 @import './views/task-detail.css';
 @import './views/approvals.css';
 @import './views/delivery.css';
 @import './views/resources-forms.css';
+
+/* ==========================================================================
+   Layer 5: Feedback, Overrides & Themes
+   ========================================================================== */
 @import './feedback.css';
 @import './themes.css';
 @import './responsive.css';
+
+/**
+ * Global Design System Verification Anchor:
+ * Ensures the bundled stylesheet establishes the root ITCSS cascade namespace.
+ */
+:root {
+  --itcss-bundle-version: "0.2.0-phase3";
+  --itcss-layer-order: "tokens, base, components, views, utilities";
+}
