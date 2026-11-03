@@ -104,7 +104,7 @@ export function renderWorkspaceSection(ctx: RenderContext, snapshot: UiSnapshot)
 
   const sec = section(
     '任务目录',
-    el('p', 'field-hint', '从干净的 Git 仓库创建独立任务目录与新分支，供任务在其中修改和核验代码。'),
+    el('p', 'field-hint', '任务目录是任务修改和核验代码的位置，可共享项目目录或使用独立 worktree，与保存账号的池目录不同。日常交办由指挥自动准备；下方手动创建独立 worktree 与专属分支，供高级检查和调试。'),
     form,
     messageFor(ctx, 'workspace.create')
   );

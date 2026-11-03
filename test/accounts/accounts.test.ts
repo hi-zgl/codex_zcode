@@ -4,7 +4,7 @@ import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createDecipheriv, createHash } from 'node:crypto';
-import { AccountVault, checkCredentialIdentity, decryptCredential, encryptCredential, loadAccountExports } from '../../src/accounts/index.js';
+import { AccountVault, accountSummary, checkCredentialIdentity, decryptCredential, encryptCredential, loadAccountExports } from '../../src/accounts/index.js';
 
 const fixture = (overrides: Record<string, unknown> = {}) => ({
   provider: 'zai', auth_mode: 'oauth', user_id: 'user-123', email: 'private@example.test',
@@ -72,6 +72,144 @@ test('vault persists only ciphertext and returns credential-free public account 
     const vaultListJson = JSON.stringify(await vault.list());
     for (const secret of ['private-access-token', 'private-jwt-token', 'user-123']) assert.equal(vaultListJson.includes(secret), false);
     await assert.rejects(vault.load('../escape'), /Invalid account alias/);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test('vault keeps newer stored exports, health and snapshots across old and repeated imports', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'zp-reimport-'));
+  try {
+    const exportFile = join(root, 'source.json');
+    const latest = fixture({
+      usage_updated_at: 200, access_token: 'new-access', zcode_jwt_token: 'new-jwt', refresh_token: 'new-refresh',
+      quota_remaining: 7, quota_raw: [{ remaining_units: 7 }], subscription_raw: [{ name: 'current-plan' }],
+    });
+    await writeFile(exportFile, JSON.stringify([latest, fixture({ user_id: 'other-user', user_info_raw: { id: 'other-user' } })]));
+    const vault = new AccountVault(join(root, 'vault'));
+    const imported = await vault.import([exportFile]);
+    const alias = imported.accounts[0]!.alias;
+    const otherAlias = imported.accounts[1]!.alias;
+    await vault.setHealth(alias, 'cooling');
+    const stored = await vault.load(alias);
+    const ciphertext = await readFile(join(root, 'vault', `${alias}.json`), 'utf8');
+    const other = await vault.load(otherAlias);
+
+    await writeFile(exportFile, JSON.stringify([fixture(), fixture()]));
+    const old = await vault.import([exportFile]);
+    assert.deepEqual(old, { accounts: [accountSummary(stored)], recordCount: 2, duplicateCount: 1, fileCount: 1 });
+    assert.deepEqual(await vault.load(alias), stored);
+    assert.equal(await readFile(join(root, 'vault', `${alias}.json`), 'utf8'), ciphertext);
+    assert.deepEqual(await vault.load(otherAlias), other);
+    assert.equal((await vault.list()).length, 2);
+
+    await writeFile(exportFile, JSON.stringify([latest]));
+    const repeated = await vault.import([exportFile]);
+    assert.deepEqual(repeated.accounts, [accountSummary(stored)]);
+    assert.equal(repeated.duplicateCount, 0);
+    assert.deepEqual(await vault.load(alias), stored);
+    assert.equal(await readFile(join(root, 'vault', `${alias}.json`), 'utf8'), ciphertext);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test('newer metadata preserves health while a new credential generation needs another probe', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'zp-update-'));
+  try {
+    const exportFile = join(root, 'source.json');
+    await writeFile(exportFile, JSON.stringify([fixture()]));
+    const vault = new AccountVault(join(root, 'vault'));
+    const alias = (await vault.import([exportFile])).accounts[0]!.alias;
+    await vault.setHealth(alias, 'available');
+
+    const metadata = fixture({ usage_updated_at: 200, quota_remaining: 12, user_info_raw: { id: 'user-123', name: 'updated name' } });
+    await writeFile(exportFile, JSON.stringify([metadata]));
+    const updated = await vault.import([exportFile]);
+    const sameCredentials = await vault.load(alias);
+    assert.equal(sameCredentials.health, 'available');
+    assert.deepEqual(sameCredentials.raw, metadata);
+    assert.deepEqual(updated.accounts, [accountSummary(sameCredentials)]);
+    assert.equal(updated.accounts[0]!.quota!.remaining, 12);
+
+    const credentials = fixture({
+      usage_updated_at: 300, access_token: 'next-access', zcode_jwt_token: 'next-jwt',
+      refresh_token: undefined, expires_at: undefined, quota_remaining: 3,
+    });
+    await writeFile(exportFile, JSON.stringify([credentials]));
+    const replaced = await vault.import([exportFile]);
+    const saved = await vault.load(alias);
+    assert.equal(replaced.accounts[0]!.alias, alias);
+    assert.equal(saved.health, 'unknown');
+    assert.equal(saved.accessToken, 'next-access');
+    assert.equal(saved.zcodeJwtToken, 'next-jwt');
+    assert.equal(saved.refreshToken, undefined);
+    assert.deepEqual(saved.raw, JSON.parse(JSON.stringify(credentials)));
+    assert.deepEqual(replaced.accounts, [accountSummary(saved)]);
+
+    await vault.setHealth(alias, 'invalid');
+    await writeFile(exportFile, JSON.stringify([fixture({ ...credentials, usage_updated_at: 400, refresh_token: 'next-refresh' })]));
+    await vault.import([exportFile]);
+    assert.equal((await vault.load(alias)).health, 'unknown');
+    assert.equal((await vault.load(alias)).refreshToken, 'next-refresh');
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test('equal or missing export times cannot replace a stored credential generation', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'zp-ambiguous-import-'));
+  try {
+    const cases = [
+      { existing: { usage_updated_at: 100 }, incoming: { usage_updated_at: 100 } },
+      { existing: { usage_updated_at: 100 }, incoming: { usage_updated_at: undefined } },
+      { existing: { usage_updated_at: undefined }, incoming: { usage_updated_at: undefined } },
+    ];
+    for (const [index, times] of cases.entries()) {
+      const exportFile = join(root, `source-${index}.json`);
+      const vault = new AccountVault(join(root, `vault-${index}`));
+      await writeFile(exportFile, JSON.stringify([fixture(times.existing)]));
+      const alias = (await vault.import([exportFile])).accounts[0]!.alias;
+      await vault.setHealth(alias, 'blocked');
+      const stored = await vault.load(alias);
+      await writeFile(exportFile, JSON.stringify([fixture({ ...times.incoming, access_token: 'unproven-access', quota_remaining: 1 })]));
+      const result = await vault.import([exportFile]);
+      assert.deepEqual(await vault.load(alias), stored);
+      assert.deepEqual(result.accounts, [accountSummary(stored)]);
+    }
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test('export recency compares quota milliseconds with account use and creation seconds', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'zp-import-times-'));
+  try {
+    const quotaFile = join(root, 'quota.json');
+    const useFile = join(root, 'use.json');
+    const creationFile = join(root, 'creation.json');
+    await writeFile(quotaFile, JSON.stringify([fixture({ usage_updated_at: 1_700_000_000_000, last_used: 1_700_000_300 })]));
+    await writeFile(useFile, JSON.stringify([fixture({ access_token: 'later-use', usage_updated_at: undefined, last_used: 1_700_000_100 })]));
+    await writeFile(creationFile, JSON.stringify([fixture({ access_token: 'later-creation', usage_updated_at: undefined, created_at: 1_700_000_200 })]));
+    const batch = await loadAccountExports([creationFile, useFile, quotaFile]);
+    assert.equal(batch.accounts[0]!.accessToken, 'later-creation');
+
+    const vault = new AccountVault(join(root, 'vault'));
+    const alias = (await vault.import([quotaFile])).accounts[0]!.alias;
+    await vault.import([useFile]);
+    assert.equal((await vault.load(alias)).accessToken, 'later-use');
+    await vault.import([creationFile]);
+    assert.equal((await vault.load(alias)).accessToken, 'later-creation');
+    const beforeOldImport = await vault.load(alias);
+    await vault.import([quotaFile]);
+    assert.deepEqual(await vault.load(alias), beforeOldImport);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test('an unreadable stored account is not treated as absent during import', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'zp-corrupt-import-'));
+  try {
+    const exportFile = join(root, 'source.json');
+    await writeFile(exportFile, JSON.stringify([fixture()]));
+    const vault = new AccountVault(join(root, 'vault'));
+    const alias = (await vault.import([exportFile])).accounts[0]!.alias;
+    const accountFile = join(root, 'vault', `${alias}.json`);
+    await writeFile(accountFile, '{invalid ciphertext');
+    await writeFile(exportFile, JSON.stringify([fixture({ usage_updated_at: 200 })]));
+    await assert.rejects(vault.import([exportFile]), /Unable to load encrypted account/);
+    assert.equal(await readFile(accountFile, 'utf8'), '{invalid ciphertext');
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 

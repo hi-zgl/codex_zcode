@@ -133,43 +133,42 @@ export function renderAccountCard(
     el('h4', '', accountDisplayName),
     tierBadge,
     account.email ? badge(alias, 'idle') : null,
-    el('span', 'muted', ` · ${account.provider}${account.plan ? ` · ${account.plan}` : ''}`)
+    el('span', 'muted', ` · ${account.provider}${account.plan ? ` · ${account.plan}` : ''}`),
+    account.enabled === false ? badge('已暂停新派发', 'attention') : null
   );
 
+  const toggle = button(ctx, expanded ? '收起详情' : '展开详情', 'account.toggle', { alias }, { className: 'btn-mini' });
+  toggle.setAttribute('aria-label', `${expanded ? '收起' : '展开'}${accountDisplayName}的详情`);
+  toggle.setAttribute('aria-expanded', String(expanded));
+  toggle.setAttribute('aria-controls', `account-details-${alias}`);
   const toolbar = el('div', 'section-toolbar',
     titleBox,
-    el('div', 'toolbar-actions', probeBtn, healthBadge)
+    el('div', 'toolbar-actions', healthBadge, probeBtn, toggle)
   );
 
   // Slot embedded directly inside the card
   const slot = renderQuotaSlot(quota, nowMs);
 
-  // Toggle button for expanding quota details
-  const toggle = button(
-    ctx,
-    expanded ? '收起额度明细' : '展开额度明细',
-    'account.toggle',
-    { alias }
-  );
-  toggle.setAttribute('aria-expanded', String(expanded));
-  toggle.setAttribute('aria-controls', `quota-${alias}`);
-
-  const card = el('article', 'resource-card account-card', toolbar, slot, toggle);
+  const card = el('article', `resource-card account-card${expanded ? ' expanded' : ''}`, toolbar, slot);
   const observed=activeSnapshot?.observedAtMs;
   const stale=activeSnapshot?.freshness==='stale'||typeof observed==='number'&&nowMs-observed>(quota?.displayFreshnessWindowMs??120000);
   card.append(el('p',`field-hint ${stale||quota?.lastProbe.state==='failed'?'quota-stale':''}`,`${activeSnapshot?activeSnapshot.source==='live_probe'?'官方查询':'导入快照':'尚无额度快照'} · ${observed?new Date(observed).toLocaleString('zh-CN',{hour12:false}):'观测时间未知'}${quota?.lastProbe.state==='failed'?' · 最近查询失败，保留旧值':stale?' · 数据已过旧':''}`));
+  const details = el('div', 'account-details');
+  details.id = `account-details-${alias}`;
+  details.hidden = !expanded;
   const tasks = snapshot.workOverview?.works.flatMap(work => work.items.filter(item => item.accountAlias === alias && item.taskId).map(item => ({work,item}))) ?? [];
   const active = tasks.filter(({item})=>snapshot.resources.workers.some(worker=>worker.accountAlias===alias&&item.taskId&&worker.leaseTaskIds.includes(item.taskId)));
-  card.append(el('p','field-hint',active.length?active.map(({work,item})=>`指挥 ${work.commanderId} · ${item.title}`).join('；'):'当前无已知指挥任务占用'));
+  card.append(el('p','field-hint account-occupancy',active.length?active.map(({work,item})=>`指挥 ${work.commanderId} · ${item.title}`).join('；'):'当前无已知指挥任务占用'));
   const errors=snapshot.workOverview?.accountErrors?.[alias];
-  if(errors)card.append(el('p','field-hint',`已观测错误 ${errors.total} 次 · ${errorObservationLabel(errors.complete)}${errors.complete!==true?`（${errors.incompleteTaskCount} 项任务）`:''}${Object.entries(errors.categories).map(([category,count])=>` · ${errorCategoryLabel(category)} ${count}`).join('')}`));
-  if(snapshot.connection.capabilities.errorStats?.version)card.append(button(ctx,'查看账号错误','account.errors',{accountAlias:alias}));
-  if(snapshot.connection.capabilities.accountEnabled?.version)card.append(button(ctx,account.enabled===false?'启用新派发':'暂停此账号新派发','account.enabled.set',{accountAlias:alias,enabled:String(account.enabled===false)},{reason:mutationReason(snapshot,'accountEnabled')}));
+  if(errors)card.append(el('p','field-hint account-errors',`已观测错误 ${errors.total} 次 · ${errorObservationLabel(errors.complete)}${errors.complete!==true?`（${errors.incompleteTaskCount} 项任务）`:''}${Object.entries(errors.categories).map(([category,count])=>` · ${errorCategoryLabel(category)} ${count}`).join('')}`));
+  if(snapshot.connection.capabilities.errorStats?.version)details.append(button(ctx,'查看账号错误','account.errors',{accountAlias:alias}));
+  if(snapshot.connection.capabilities.accountEnabled?.version)details.append(button(ctx,account.enabled===false?'启用新派发':'暂停此账号新派发','account.enabled.set',{accountAlias:alias,enabled:String(account.enabled===false)},{reason:mutationReason(snapshot,'accountEnabled')}));
 
   if (expanded) {
     const panel = renderQuotaPanel(ctx, alias, quota, nowMs);
-    card.append(panel);
+    details.append(panel);
   }
+  card.append(details);
 
   return card;
 }

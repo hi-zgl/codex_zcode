@@ -12,7 +12,7 @@ import {
   classifyTurnFailure,
   classifyError,
 } from "../runtime/zcode-server/events.js";
-import { DurableTaskStore } from "../core/index.js";
+import { CoreError, DurableTaskStore } from "../core/index.js";
 import type { JsonValue, TaskResult, StopProof } from "../core/types.js";
 import { validateMethod, type MethodName } from "../shared/methods.js";
 import { createWorkspace } from "./workspace.js";
@@ -65,6 +65,10 @@ export class Coordinator {
   closing = false;
   private finishing = false;
   private workerChanges: Promise<unknown> = Promise.resolve();
+  private readonly workChanges = new Set<Promise<unknown>>();
+  get stopping(): boolean {
+    return this.closing || this.finishing;
+  }
   readonly ui: UiService;
   readonly workService: WorkService;
   readonly executionRecovery: ExecutionRecovery;
@@ -232,7 +236,7 @@ export class Coordinator {
   async dispatchWorkItem(workId: string, itemId: string, p: any) {
     const operation = this.workerChanges.then(() => {
       if (this.closing || this.finishing)
-        throw new Error("Pool shutdown in progress");
+        throw new CoreError("POOL_SHUTTING_DOWN", "Pool shutdown in progress");
       const result = this.store.dispatch({
         workspaceId: p.workspace_id,
         workerId: p.worker_id,
@@ -308,18 +312,31 @@ export class Coordinator {
     return operation;
   }
   async call(method: string, input: Record<string, unknown>): Promise<unknown> {
-    if (this.finishing) throw new Error("Pool shutdown in progress");
+    if (this.finishing)
+      throw new CoreError("POOL_SHUTTING_DOWN", "Pool shutdown in progress");
     if (method.startsWith("ui_")) {
       if (this.closing) throw new UiRpcError("NATIVE_UNAVAILABLE");
       return this.ui.call(method, input);
     }
     const { name, params: p } = validateMethod(method, input);
-    if (this.closing) throw new Error("Daemon is shutting down");
+    if (this.closing)
+      throw new CoreError("POOL_SHUTTING_DOWN", "Daemon is shutting down");
     if (
       name === "shutdown_pool" ||
       (name === "pool_control" && p.action === "shutdown")
     )
-      return this.finishWork();
+      return this.finishWork(name === "pool_control" && p.only_if_idle === true);
+    if (name === "submit_work" || name === "advance_work") {
+      // Registration and reopening may await Git or a preceding decision. Admit
+      // their entire operation before shutdown can take its final idle snapshot.
+      const operation = this.handle(name, p);
+      this.workChanges.add(operation);
+      try {
+        return await operation;
+      } finally {
+        this.workChanges.delete(operation);
+      }
+    }
     if (name === "respond_approval") {
       return this.serialApproval(p.task_id, () => this.handle(name, p));
     }
@@ -330,7 +347,7 @@ export class Coordinator {
     ) {
       const operation = this.workerChanges.then(() => {
         if (this.finishing || this.closing)
-          throw new Error("Pool shutdown in progress");
+          throw new CoreError("POOL_SHUTTING_DOWN", "Pool shutdown in progress");
         return this.handle(name, p);
       });
       this.workerChanges = operation.catch(() => {});
@@ -338,17 +355,23 @@ export class Coordinator {
     }
     return this.handle(name, p);
   }
-  private async finishWork(): Promise<{
+  private async finishWork(onlyIfIdle = false): Promise<{
     stopping: true;
     workersStopped: true;
     stoppedWorkers: number;
   }> {
     this.finishing = true;
     try {
+      await Promise.allSettled([...this.workChanges]);
       await this.workerChanges;
-      if (this.store.listTasks().some((task) => task.leaseHeld))
+      if (this.store.getPoolPolicy().occupiedSlots > 0)
         throw new Error(
           "Pool has active or uncertain tasks; finish or reconcile before shutdown",
+        );
+      if (onlyIfIdle && this.store.work.hasActive())
+        throw new CoreError(
+          "POOL_NOT_IDLE",
+          "Pool has unfinished work; automatic shutdown requires an idle pool",
         );
       // No new dispatch/start is admitted while the Worker list is being stopped.
       let stoppedWorkers = 0;
@@ -1491,6 +1514,7 @@ export class Coordinator {
   async close(): Promise<void> {
     this.closing = true;
     this.executionRecovery.close();
+    await Promise.allSettled([...this.workChanges]);
     await this.workService.close();
     await this.workerChanges.catch(() => {});
     await Promise.allSettled(

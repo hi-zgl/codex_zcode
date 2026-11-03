@@ -116,6 +116,9 @@ test('real MCP stdio validates listed schemas and rejects unknown or huge invali
  assert.ok(!listed.tools.some(tool=>tool.name==='zcode_daemon_stop'||tool.name==='zcode_import_accounts'));
  const pool=listed.tools.find(tool=>tool.name==='zcode_pool_control')!;
  assert.ok(pool.inputSchema.properties?.policy);
+ assert.equal((pool.inputSchema.properties?.only_if_idle as any).type,'boolean');
+ assert.equal((pool.inputSchema.properties?.only_if_idle as any).default,undefined);
+ assert.ok(!pool.inputSchema.required?.includes('only_if_idle'));
  for(const max_concurrent_tasks of [-1,65,0.5,'2']){
   const invalidPolicy=await client.callTool({name:'zcode_pool_control',arguments:{action:'configure',policy:{max_concurrent_tasks}}});
   assert.equal(invalidPolicy.isError,true);assert.equal(readText(invalidPolicy).error,'INVALID_ARGUMENT');
@@ -129,4 +132,37 @@ test('real MCP stdio validates listed schemas and rejects unknown or huge invali
  assert.equal(readText(unknown).error,'UNSUPPORTED_METHOD');
  assert.doesNotMatch(JSON.stringify(unknown),/PRIVATE-NAME|PRIVATE-PROMPT/);
  assert.equal(requests.length,0);
+});
+
+test('MCP instructions arrange explicit starts and automatic guarded finish without changing manual defaults',{timeout:20000},async t=>{
+ const {client,requests}=await fakeMcp(t,(_method,args)=>{
+  if(args.action==='shutdown'){
+   if(args.only_if_idle)throw new Error('Pool has unfinished work; automatic shutdown requires an idle pool PRIVATE-CONTEXT');
+   return {stopping:true,workersStopped:true,stoppedWorkers:0};
+  }
+  return {tasks:[]};
+ });
+ const instructions=client.getInstructions()!;
+ assert.match(instructions,/Explicitly call pool_control with action start/);
+ assert.match(instructions,/passed final acceptance and is completed, automatically attempt pool_control with action shutdown and only_if_idle true/);
+ assert.match(instructions,/without asking for extra confirmation/);
+ assert.match(instructions,/another commander's Work remains/);
+ assert.match(instructions,/never fall back to only_if_idle false for automatic shutdown/);
+ assert.match(instructions,/user explicitly stops work, save its current state and attempt shutdown with only_if_idle false/);
+ assert.match(instructions,/Closing VS Code or losing the commander connection does not mean work is complete/);
+ const busy=await client.callTool({name:'zcode_pool_control',arguments:{action:'shutdown',only_if_idle:true}});
+ assert.equal(busy.isError,true);assert.equal(readText(busy).error,'POOL_NOT_IDLE');
+ assert.equal(readText(busy).stopping,undefined);
+ assert.match(readText(busy).message,/No Workers were stopped/);
+ assert.doesNotMatch(JSON.stringify(busy),/PRIVATE-CONTEXT/);
+ const stopped=await client.callTool({name:'zcode_pool_control',arguments:{action:'shutdown'}});
+ assert.equal(stopped.isError,undefined);assert.equal(readText(stopped).stopping,true);
+ for(const action of ['read','start','configure']){
+  const result=await client.callTool({name:'zcode_pool_control',arguments:{action}});
+  assert.equal(result.isError,undefined);
+ }
+ assert.equal(requests[0]!.params.only_if_idle,true);
+ assert.ok(requests.slice(1).every(request=>!Object.hasOwn(request.params,'only_if_idle')),'omitting the guard preserves older daemon request shapes');
+ const invalid=await client.callTool({name:'zcode_pool_control',arguments:{action:'shutdown',only_if_idle:'true'}});
+ assert.equal(readText(invalid).error,'INVALID_ARGUMENT');assert.equal(requests.length,5);
 });

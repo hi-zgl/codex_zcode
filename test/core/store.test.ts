@@ -420,6 +420,58 @@ test('wait polls external commits, supports per-task cursors, and ignores unrela
   assert.equal((await unrelated).timedOut, true);
 });
 
+test('unchanged waits read full task snapshots and the global cursor only when returning', async (t) => {
+  const { store, databasePath } = await fixture(t);
+  workspace(store);
+  workspace(store, 'second');
+  const watched = dispatch(store);
+  const unrelated = dispatch(store, { requestId: 'two', workspaceId: 'second', workerId: 'worker-two' });
+  const other = new DurableTaskStore(databasePath);
+  t.after(() => other.close());
+  const fullReads = t.mock.method(store, 'getTask');
+  const globalReads = t.mock.method(store, 'getRevision');
+  const pending = store.wait({ taskIds: [watched.taskId], afterRevision: watched.revision, timeoutMs: 1_000 });
+  await delay(25);
+  other.appendEvent(unrelated.taskId, 'progress', null);
+  await delay(25);
+  assert.equal(fullReads.mock.callCount(), 0);
+  assert.equal(globalReads.mock.callCount(), 0);
+  const event = other.appendEvent(watched.taskId, 'progress', null);
+  const changed = await pending;
+  assert.equal(changed.tasks[0]!.revision, event.revision);
+  assert.equal(fullReads.mock.callCount(), 1);
+  assert.equal(globalReads.mock.callCount(), 1);
+  const timeout = store.wait({ taskIds: [watched.taskId], afterRevision: event.revision, timeoutMs: 25 });
+  const later = other.appendEvent(unrelated.taskId, 'progress', null);
+  const timedOut = await timeout;
+  assert.equal(timedOut.timedOut, true);
+  assert.equal(timedOut.tasks[0]!.revision, event.revision);
+  assert.equal(timedOut.revision, later.revision);
+  assert.equal(fullReads.mock.callCount(), 2);
+  assert.equal(globalReads.mock.callCount(), 2);
+});
+
+test('wait keeps lightweight cursors, full tasks, and the global revision in one read snapshot', async (t) => {
+  const { store, databasePath } = await fixture(t);
+  workspace(store);
+  const task = dispatch(store);
+  const other = new DurableTaskStore(databasePath);
+  t.after(() => other.close());
+  const getTask = store.getTask.bind(store);
+  let lateRevision = 0;
+  t.mock.method(store, 'getTask', (taskId: string) => {
+    if (!lateRevision) lateRevision = other.appendEvent(taskId, 'progress', null).revision;
+    return getTask(taskId);
+  });
+  const first = await store.wait({ taskIds: [task.taskId], afterRevision: 0, timeoutMs: 0 });
+  assert.equal(first.tasks[0]!.revision, task.revision);
+  assert.equal(first.revision, task.revision);
+  assert.ok(lateRevision > first.revision);
+  const next = await store.wait({ taskIds: [task.taskId], afterRevision: first.revision, timeoutMs: 0 });
+  assert.equal(next.tasks[0]!.revision, lateRevision);
+  assert.equal(next.revision, lateRevision);
+});
+
 test('wait returns bounded snapshots, validates cursors, and closes pending waits', async (t) => {
   const { store } = await fixture(t);
   workspace(store);

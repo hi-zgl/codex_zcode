@@ -20,11 +20,14 @@ npm run cli -- help
 ```bash
 npm run cli -- daemon-start
 npm run cli -- overview
+npm run cli -- storage-status
 npm run cli -- import-accounts /绝对路径/账号导出.json
 npm run cli -- get_pool_policy '{}'
 ```
 
 默认池为 `~/.zcode_pool`。手动 CLI 和源码 daemon 可用 `ZCODE_POOL_HOME` 指定池。安装版 MCP 使用 `ZCODE_POOL_CONNECTION_FILE` 共享连接资料；显式资料文件优先，缺失或损坏直接报错，不回退默认池。
+
+`storage-status` 是无需 daemon 的只读本地统计，输出逻辑字节数和保留策略；统计边界与日志轮转见[存储布局](storage-layout.md#日志保留与只读统计)。
 
 CLI 接受方法名和 JSON 参数，参数合同在 `src/shared/methods.ts`。日常高层方法为 `submit_work`、`wait_work`、`advance_work`，按需查看用 `inspect`，池控制用 `pool_control`。账号、Worker、目录、逐次派发、审批、取消与恢复等高级方法保留给本地操作，不要求指挥每次逐项调用。
 

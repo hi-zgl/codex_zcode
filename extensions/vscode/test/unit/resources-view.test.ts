@@ -214,6 +214,101 @@ test('direct account probe triggers account.probe action and suppresses rapid do
   assert.equal(h.sent.filter(r => r.type === 'account.probe').length, 1);
 });
 
+test('resource sections and account details fold independently and retain their state across refreshes', async () => {
+  const initial = snapshot();
+  initial.workOverview = structuredClone(fixture.workOverview);
+  initial.workOverview!.accountErrors = {
+    'account-demo': { total: 5, categories: { model_busy: 5 }, complete: null, incompleteTaskCount: 1 },
+    'account-unknown': { total: 0, categories: {}, complete: null, incompleteTaskCount: 1 }
+  };
+  initial.resources.workers.find(worker => worker.accountAlias === 'account-demo')!.leaseTaskIds = ['task-complete'];
+  const h = harness(initial);
+  h.push();
+  await h.app.action('page', { page: 'resources' });
+  const root = h.root as unknown as HTMLElement;
+  const accountToggle = () => root.querySelector<HTMLButtonElement>('[data-action="account.toggle"][data-alias="account-demo"]')!;
+  const sectionToggle = (section: string) => root.querySelector<HTMLButtonElement>(`[data-action="resources.toggleSection"][data-section="${section}"]`)!;
+  const controlled = (toggle: HTMLButtonElement) => root.querySelector<HTMLElement>(`#${toggle.getAttribute('aria-controls')}`)!;
+
+  assert.equal(accountToggle().getAttribute('aria-expanded'), 'false');
+  assert.equal(controlled(accountToggle()).hidden, true);
+  const card = accountToggle().closest('article')!;
+  assert.match(card.querySelector('.account-occupancy')!.textContent!, /指挥 commander-demo · 实现任务与阶段展示/);
+  assert.equal(card.querySelector('.account-occupancy')!.closest('[hidden]'), null, 'current occupancy remains visible in the summary');
+  assert.match(card.querySelector('.account-errors')!.textContent!, /已观测错误 5 次 · 观测完整性待核实.*模型繁忙 5/);
+  assert.equal(card.querySelector('.account-errors')!.closest('[hidden]'), null, 'observed error totals and categories remain visible');
+  assert.ok(card.querySelector('[data-action="account.errors"]')!.closest('[hidden]'), 'error inspection stays inside the folded details');
+  const unknown = root.querySelector('[data-action="account.toggle"][data-alias="account-unknown"]')!.closest('article')!;
+  assert.match(unknown.querySelector('.account-errors')!.textContent!, /已观测错误 0 次 · 观测完整性待核实/);
+  assert.equal(unknown.querySelector('.account-errors')!.closest('[hidden]'), null, 'unknown zero errors never become a complete observation');
+  assert.ok(h.root.querySelector('.account-card [data-action="account.probe"]'), 'direct probe remains available in the summary');
+  accountToggle().focus(); accountToggle().click();
+  assert.equal(accountToggle().getAttribute('aria-expanded'), 'true');
+  assert.equal(controlled(accountToggle()).hidden, false);
+  assert.ok(controlled(accountToggle()).querySelector('.quota-panel'));
+  assert.equal(browser.document.activeElement, accountToggle() as unknown, 'account toggle keeps keyboard focus');
+
+  for (const section of ['accounts', 'workers', 'workspaces']) {
+    sectionToggle(section).click();
+    assert.equal(sectionToggle(section).getAttribute('aria-expanded'), 'false');
+    assert.equal(controlled(sectionToggle(section)).hidden, true);
+  }
+  h.push();
+  for (const section of ['accounts', 'workers', 'workspaces']) assert.equal(controlled(sectionToggle(section)).hidden, true);
+  sectionToggle('accounts').click();
+  assert.equal(controlled(accountToggle()).hidden, false, 'folding the account list preserves individual detail choices');
+  accountToggle().click();
+  assert.equal(controlled(accountToggle()).hidden, true);
+  assert.equal(controlled(sectionToggle('workers')).hidden, true, 'other resource sections stay folded');
+  assert.equal(h.sent.length, 0, 'folding is local and never calls the daemon');
+
+  const other = snapshot(); other.connection.poolHome = '/mock/another-pool'; other.connection.storeId = 'another-store';
+  h.push(other); await h.app.action('page', { page: 'resources' });
+  for (const section of ['accounts', 'workers', 'workspaces']) assert.equal(controlled(sectionToggle(section)).hidden, false, 'a different pool starts with default section state');
+});
+
+test('probe-all reports partial, complete and empty probe counts accurately', async () => {
+  const h = harness(); h.push();
+  let result = { total: 3, succeeded: 2, failed: 1 };
+  h.reply(() => result);
+  await h.app.action('accounts.probeAll');
+  assert.match(h.app.state.message, /共 3 个账号，成功 2，失败 1/);
+  assert.match(h.app.state.message, /失败账号保留旧值/);
+  assert.equal(h.app.state.messageTone, 'error');
+  result = { total: 3, succeeded: 0, failed: 3 };
+  await h.app.action('accounts.probeAll');
+  assert.match(h.app.state.message, /成功 0，失败 3/);
+  assert.equal(h.app.state.messageTone, 'error');
+  result = { total: 3, succeeded: 3, failed: 0 };
+  await h.app.action('accounts.probeAll');
+  assert.match(h.app.state.message, /成功 3，失败 0/);
+  assert.equal(h.app.state.messageTone, 'info');
+  result = { total: 0, succeeded: 0, failed: 0 };
+  await h.app.action('accounts.probeAll');
+  assert.equal(h.app.state.message, '尚无已导入账号可供探查。');
+  assert.ok(h.sent.every(request => request.type === 'accounts.probeAll' && Object.keys(request.payload).length === 0));
+});
+
+test('probe-all keeps its pending state beyond the normal bridge timeout for queued account waves', async context => {
+  context.mock.timers.enable({ apis: ['setTimeout'] });
+  const initial = snapshot();
+  initial.resources.accounts = Array.from({ length: 9 }, (_, index) => ({ alias: `account-${index}`, provider: 'zai', health: 'unknown' }));
+  const h = harness(initial); h.push();
+  let finish!: (summary: { total: number; succeeded: number; failed: number }) => void;
+  h.reply(() => new Promise(resolve => { finish = resolve; }));
+  const action = h.app.action('accounts.probeAll');
+  await Promise.resolve(); await Promise.resolve();
+  context.mock.timers.tick(75_000);
+  await Promise.resolve();
+  assert.equal(h.app.state.pending.has('accounts.probeAll'), true);
+  assert.equal(h.app.state.errors.has('accounts.probeAll'), false);
+  finish({ total: 9, succeeded: 9, failed: 0 });
+  await action;
+  assert.equal(h.app.state.pending.has('accounts.probeAll'), false);
+  assert.match(h.app.state.message, /共 9 个账号，成功 9/);
+  assert.deepEqual(h.sent[0]!.payload, {}, 'the local timeout never changes the wire payload');
+});
+
 test('quota-panel renders multi-window grid and stale cache degradation alert on failure', () => {
   const s = snapshot();
   const alias = 'account-demo';

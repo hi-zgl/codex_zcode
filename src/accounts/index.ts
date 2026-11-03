@@ -111,6 +111,16 @@ export function accountSummary(account: AccountCredentials): AccountSummary {
   };
 }
 
+// Cockpit exports quota refresh time in milliseconds and account use/creation in seconds.
+// These are snapshot recency hints, not credential issuance times.
+function exportUpdatedAt(account: AccountCredentials): number {
+  return number(account.raw.usage_updated_at) ?? (number(account.raw.last_used) ?? number(account.raw.created_at) ?? 0) * 1000;
+}
+
+function sameCredentials(left: AccountCredentials, right: AccountCredentials): boolean {
+  return left.accessToken === right.accessToken && left.zcodeJwtToken === right.zcodeJwtToken && left.refreshToken === right.refreshToken;
+}
+
 /** Input paths and parse errors are deliberately absent from errors: filenames may contain emails. */
 export async function loadAccountExports(paths: readonly string[]): Promise<AccountImportResult> {
   const unique = new Map<string, AccountCredentials>();
@@ -124,9 +134,7 @@ export async function loadAccountExports(paths: readonly string[]): Promise<Acco
       const account = normalizeAccount(raw, ++recordCount);
       const previous = unique.get(account.alias);
       // A newer export wins. Do not combine credentials from different export generations.
-      const updated = number(account.raw.usage_updated_at) ?? number(account.raw.last_used) ?? number(account.raw.created_at) ?? 0;
-      const previousUpdated = previous ? number(previous.raw.usage_updated_at) ?? number(previous.raw.last_used) ?? number(previous.raw.created_at) ?? 0 : -1;
-      if (!previous || updated >= previousUpdated) unique.set(account.alias, account);
+      if (!previous || exportUpdatedAt(account) >= exportUpdatedAt(previous)) unique.set(account.alias, account);
     }
   }
   const accounts = [...unique.values()];
@@ -188,8 +196,21 @@ export class AccountVault {
   async import(paths: readonly string[]): Promise<{ accounts: AccountSummary[]; recordCount: number; duplicateCount: number; fileCount: number }> {
     const result = await loadAccountExports(paths);
     const secret = await this.#secret();
-    for (const account of result.accounts) await writePrivateJson(join(this.root, `${account.alias}.json`), { version: 1, encrypted: encryptCredential(JSON.stringify(account), secret) });
-    return { accounts: result.summaries, recordCount: result.recordCount, duplicateCount: result.duplicateCount, fileCount: result.fileCount };
+    const files = new Set(await readdir(this.root));
+    const accounts: AccountSummary[] = [];
+    for (const account of result.accounts) {
+      const filename = `${account.alias}.json`;
+      const previous = files.has(filename) ? await this.load(account.alias) : undefined;
+      // Equal or unknown export times cannot establish that existing credentials should be replaced.
+      if (previous && exportUpdatedAt(account) <= exportUpdatedAt(previous)) {
+        accounts.push(accountSummary(previous));
+        continue;
+      }
+      if (previous && sameCredentials(account, previous)) account.health = previous.health;
+      await writePrivateJson(join(this.root, filename), { version: 1, encrypted: encryptCredential(JSON.stringify(account), secret) });
+      accounts.push(accountSummary(account));
+    }
+    return { accounts, recordCount: result.recordCount, duplicateCount: result.duplicateCount, fileCount: result.fileCount };
   }
   async load(alias: string): Promise<AccountCredentials> {
     if (!/^account-[a-f0-9]{12}$/.test(alias)) throw new Error('Invalid account alias');

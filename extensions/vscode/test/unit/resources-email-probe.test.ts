@@ -177,7 +177,7 @@ test('header probe-all button triggers accounts.probeAll action', async () => {
 
   h.reply(request => {
     if (request.type === 'accounts.probeAll') {
-      return { probed: true };
+      return { total: 2, succeeded: 2, failed: 0 };
     }
     return {};
   });

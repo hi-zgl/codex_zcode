@@ -29,14 +29,14 @@ export class WebviewBridge {
   }
   getState(): unknown { return this.api.getState(); }
   setState(value: unknown): void { this.api.setState(value); }
-  request<K extends RequestType, T = unknown>(type: K, payload: RequestPayload<K>): Promise<T> {
+  request<K extends RequestType, T = unknown>(type: K, payload: RequestPayload<K>, timeoutMs?: number): Promise<T> {
     const id = `web-${++this.sequence}-${Date.now().toString(36)}`;
     const generation = this.generation;
     return new Promise<T>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
         reject(new BridgeError({ code: writes.has(type) ? 'OUTCOME_UNKNOWN' : 'TIMEOUT', message: writes.has(type) ? '结果待确认。请检查目标状态；此操作不会自动重发。' : '读取超时，请重试读取。', unknownOutcome: writes.has(type) }));
-      }, type === 'daemon.start' ? 90_000 : writes.has(type) ? 60_000 : 35_000);
+      }, timeoutMs ?? (type === 'daemon.start' ? 90_000 : writes.has(type) ? 60_000 : 35_000));
       this.pending.set(id, { generation, type, resolve: value => resolve(value as T), reject, timer });
       this.api.postMessage({ v: 1, id, generation, type, payload } as WebviewRequest);
     });

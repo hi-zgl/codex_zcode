@@ -29,6 +29,7 @@ interface WorkContext {
   root: string;
   store: DurableTaskStore;
   closing: boolean;
+  readonly stopping?: boolean;
   vault: { list(): Promise<AccountSummary[]> };
   supervisor: { list(): Promise<any[]> };
   call(method: string, input: Record<string, unknown>): Promise<unknown>;
@@ -57,6 +58,7 @@ export class WorkService {
     }
   >();
   private readonly cleanupAttempts = new Map<string, number>();
+  private readonly waiters = new Set<() => void>();
   private closed = false;
   markQuotaUnavailable(accountAlias: string): void {
     this.quota.set(accountAlias, {
@@ -676,41 +678,87 @@ export class WorkService {
     after_revision?: number;
     timeout_sec: number;
   }) {
-    const end = Date.now() + input.timeout_sec * 1000;
     const store = this.ctx.store.work;
-    let work = store.get(input.work_id);
-    if (work.commanderId !== input.commander_id)
-      return {
-        controlTransferred: true,
-        work: store.briefView(work.workId),
-        events: [],
-        timedOut: false,
-      };
     const after = input.after_revision ?? 0;
-    while (
-      work.revision <= after &&
-      work.status === "active" &&
-      !this.closed &&
-      Date.now() < end
-    ) {
-      await new Promise((r) => setTimeout(r, Math.min(250, end - Date.now())));
-      work = store.get(work.workId);
-      if (work.commanderId !== input.commander_id) break;
-    }
-    const events = store.events(work.workId, after);
-    if (!events.length && work.commanderId === input.commander_id)
-      return {
-        workId: work.workId,
-        revision: work.revision,
-        status: work.status,
-        timedOut: true,
+    const timeoutMs = input.timeout_sec * 1000;
+    type Response =
+      | {
+          workId: string;
+          revision: number;
+          status: Work["status"];
+          timedOut: true;
+        }
+      | {
+          work: ReturnType<typeof store.briefView>;
+          events: ReturnType<typeof store.events>;
+          timedOut: boolean;
+          controlTransferred: boolean;
+        };
+    return new Promise<Response>((resolve, reject) => {
+      let settled = false;
+      let initial = true;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      let poll: ReturnType<typeof setInterval> | undefined;
+      let unsubscribe = () => {};
+      const cleanup = () => {
+        settled = true;
+        if (timer !== undefined) clearTimeout(timer);
+        if (poll !== undefined) clearInterval(poll);
+        unsubscribe();
+        this.waiters.delete(check);
       };
-    return {
-      work: store.briefView(work.workId),
-      events,
-      timedOut: events.length === 0,
-      controlTransferred: work.commanderId !== input.commander_id,
-    };
+      const check = (timedOut = false) => {
+        if (settled) return;
+        try {
+          const result = this.ctx.store.readSnapshot((): Response | undefined => {
+            const head = store.head(input.work_id);
+            const transferred = head.commanderId !== input.commander_id;
+            if (
+              !transferred && head.revision <= after && head.status === "active" &&
+              !timedOut && timeoutMs > 0 && !this.closed && !this.ctx.closing
+            )
+              return;
+            if (initial && transferred)
+              return {
+                controlTransferred: true,
+                work: store.briefView(head.workId),
+                events: [],
+                timedOut: false,
+              };
+            const events = store.events(head.workId, after);
+            if (!events.length && !transferred)
+              return {
+                workId: head.workId,
+                revision: head.revision,
+                status: head.status,
+                timedOut: true,
+              };
+            return {
+              work: store.briefView(head.workId),
+              events,
+              timedOut: events.length === 0,
+              controlTransferred: transferred,
+            };
+          });
+          initial = false;
+          if (result) {
+            cleanup();
+            resolve(result);
+          }
+        } catch (error) {
+          cleanup();
+          reject(error);
+        }
+      };
+      // Register before checking to cover local commits; polling covers other processes.
+      unsubscribe = this.ctx.store.subscribe(check);
+      this.waiters.add(check);
+      check();
+      if (!settled) {
+        timer = setTimeout(() => check(true), timeoutMs);
+        poll = setInterval(check, 250);
+      }
+    });
   }
   async resolveTodo(input: {
     work_id: string;
@@ -748,18 +796,17 @@ export class WorkService {
   pump(): Promise<void> {
     if (this.pumping) return this.pumping;
     const operation = (async () => {
-      if (this.closed || this.ctx.closing) return;
-      await this.collect();
-      await this.schedule();
+      if (this.closed || this.ctx.closing || this.ctx.stopping) return;
+      const works = this.ctx.store.work.forCollection();
+      await this.collect(works);
+      await this.schedule(works.filter((w) => w.status === "active"));
     })()
       .catch(() => {
         if (this.closed || this.ctx.closing) return;
         console.error(
           "ZCode scheduling failed; pending work requires inspection",
         );
-        for (const work of this.ctx.store.work
-          .list()
-          .filter((w) => w.status === "active"))
+        for (const work of this.ctx.store.work.active())
           this.ctx.store.work.todo(
             work.workId,
             "blocked",
@@ -772,9 +819,9 @@ export class WorkService {
     this.pumping = operation;
     return operation;
   }
-  private async collect(): Promise<void> {
+  private async collect(works: Work[]): Promise<void> {
     const store = this.ctx.store;
-    for (const work of store.work.list())
+    for (const work of works)
       for (const item of work.items) {
         const dependencyWait =
           "Shared execution waits for saved dependency deliveries to be integrated into the project";
@@ -783,16 +830,17 @@ export class WorkService {
           item.queueAt !== null &&
           this.missingSharedDependencies(work, item).length > 0;
         if (missing)
-          store.work.todo(work.workId, "decision", dependencyWait, [
-            item.itemId,
-          ]);
+          Object.assign(
+            work,
+            store.work.todo(work.workId, "decision", dependencyWait, [item.itemId]),
+          );
         else if (
           work.todos.some(
             (t) =>
               t.summary === dependencyWait && t.itemIds.includes(item.itemId),
           )
         )
-          store.work.update(
+          Object.assign(work, store.work.update(
             work.workId,
             (w) => {
               w.todos = w.todos.filter(
@@ -804,29 +852,30 @@ export class WorkService {
               );
             },
             "dependency_materials_ready",
-          );
+          ));
         if (!item.taskId || item.queueAt !== null) continue;
-        const task = store.getTask(item.taskId);
-        if (task.leaseHeld) {
+        const state = store.getTaskState(item.taskId);
+        if (state.leaseHeld) {
+          const task = store.getTask(item.taskId);
           if (
             ["waiting_approval", "blocked"].includes(task.status) ||
             (task.status === "interrupted" &&
               store.hasEnteredVerification(task.taskId))
           )
-            store.work.todo(
+            Object.assign(work, store.work.todo(
               work.workId,
               "decision",
               task.status === "waiting_approval"
                 ? "A native approval needs the commander decision"
                 : "Execution needs inspection; the original account remains occupied",
               [item.itemId],
-            );
+            ));
           const needsAttention =
             task.status === "interrupted" &&
             (record(task.detail).requiresInspection === true ||
               record(task.detail).silent === true);
           if (needsAttention && !item.attentionKey)
-            store.work.update(
+            Object.assign(work, store.work.update(
               work.workId,
               (w) => {
                 w.items.find((i) => i.itemId === item.itemId)!.attentionKey =
@@ -839,9 +888,9 @@ export class WorkService {
                 summary:
                   "Execution is unverified; read-only recovery continues and the account remains occupied",
               },
-            );
+            ));
           if (!needsAttention && item.attentionKey)
-            store.work.update(
+            Object.assign(work, store.work.update(
               work.workId,
               (w) => {
                 w.items.find((i) => i.itemId === item.itemId)!.attentionKey =
@@ -849,20 +898,25 @@ export class WorkService {
               },
               "execution_observation_restored",
               { itemId: item.itemId, taskId: task.taskId },
-            );
+            ));
           continue;
         }
-        const result = store.getResult(task.taskId),
+        const delivered = work.deliveries.some((d) => d.taskId === state.taskId);
+        const needsFailureDecision =
+          state.status === "failed" &&
+          !work.todos.some((t) => t.itemIds.includes(item.itemId));
+        if (delivered && !needsFailureDecision) continue;
+        const result = store.getResult(state.taskId),
           manifest = result?.artifacts.find((a) => a.kind === "file_manifest");
-        if (manifest && !work.deliveries.some((d) => d.taskId === task.taskId))
-          store.work.update(
+        if (manifest && !delivered)
+          Object.assign(work, store.work.update(
             work.workId,
             (w) =>
               w.deliveries.push({
-                deliveryId: `delivery_${task.taskId}`,
+                deliveryId: `delivery_${state.taskId}`,
                 itemId: item.itemId,
-                taskId: task.taskId,
-                workspaceId: task.workspaceId,
+                taskId: state.taskId,
+                workspaceId: state.workspaceId,
                 manifestSha256: manifest.sha256,
                 summary: result!.summary,
                 changedFiles: result!.changedFiles,
@@ -871,62 +925,45 @@ export class WorkService {
             "delivery_saved",
             {
               itemId: item.itemId,
-              taskId: task.taskId,
+              taskId: state.taskId,
               summary: result!.summary,
             },
-          );
-        if (
-          task.status === "failed" &&
-          !work.todos.some((t) => t.itemIds.includes(item.itemId))
-        )
-          store.work.todo(
+          ));
+        if (needsFailureDecision)
+          Object.assign(work, store.work.todo(
             work.workId,
             "blocked",
             result?.blockers.join("; ") ||
               "Execution failed; the commander must decide rework",
             [item.itemId],
-          );
+          ));
       }
-    for (const work of store.work.list().filter((w) => w.status !== "active"))
-      for (const workspaceId of new Set(
-        [
-          ...work.items.map((i) => i.workspaceId),
-          ...work.acceptances.map((a) => a.workspaceId),
-        ].filter((id): id is string => !!id),
-      )) {
-        const ws = store.getWorkspace(workspaceId);
-        if (
-          ws.state !== "active" ||
-          ws.activeTaskId ||
-          Date.now() - (this.cleanupAttempts.get(workspaceId) ?? 0) < 60_000
-        )
-          continue;
-        if (
-          store.work
-            .list()
-            .some(
-              (w) =>
-                w.workId !== work.workId &&
-                w.status === "active" &&
-                w.items.some((i) => i.workspaceId === workspaceId),
-            )
-        )
-          continue;
-        this.cleanupAttempts.set(workspaceId, Date.now());
-        try {
-          if (await cleanupWorkspace(this.ctx.root, ws))
-            store.setWorkspaceState(
-              workspaceId,
-              work.status === "completed" ? "merged" : "abandoned",
-            );
-        } catch {
-          store.work.todo(
-            work.workId,
-            "blocked",
-            "Saved results are safe; temporary workspace cleanup needs inspection",
+    for (const candidate of store.work.cleanupCandidates()) {
+      const { workspaceId } = candidate;
+      const ws = store.getWorkspace(workspaceId);
+      if (
+        ws.state !== "active" ||
+        ws.activeTaskId ||
+        Date.now() - (this.cleanupAttempts.get(workspaceId) ?? 0) < 60_000
+      )
+        continue;
+      this.cleanupAttempts.set(workspaceId, Date.now());
+      try {
+        if (await cleanupWorkspace(this.ctx.root, ws)) {
+          store.setWorkspaceState(
+            workspaceId,
+            candidate.status === "completed" ? "merged" : "abandoned",
           );
+          this.cleanupAttempts.delete(workspaceId);
         }
+      } catch {
+        store.work.todo(
+          candidate.workId,
+          "blocked",
+          "Saved results are safe; temporary workspace cleanup needs inspection",
+        );
       }
+    }
   }
   private async accountCapacity(): Promise<{
     accounts: AccountSummary[];
@@ -991,8 +1028,7 @@ export class WorkService {
     });
     const held = new Set(
       this.ctx.store
-        .listTasks()
-        .filter((t) => t.leaseHeld)
+        .listLeasedTasks()
         .map(
           (t) =>
             record(t.runtimeBinding).accountAlias ??
@@ -1049,20 +1085,17 @@ export class WorkService {
       return (
         other.taskId !== null &&
         other.queueAt === null &&
-        this.ctx.store.getTask(other.taskId).status === "succeeded"
+        this.ctx.store.getTaskState(other.taskId).status === "succeeded"
       );
     });
   }
-  private async schedule(): Promise<void> {
+  private async schedule(activeWorks: Work[]): Promise<void> {
+    if (this.closed || this.ctx.closing || this.ctx.stopping) return;
     const store = this.ctx.store;
-    let works = store.work
-      .list()
-      .filter(
-        (w) =>
-          w.status === "active" && w.items.some((i) => this.runnable(w, i)),
-      );
+    let works = activeWorks.filter((w) => w.items.some((i) => this.runnable(w, i)));
     if (!works.length || store.getPoolPolicy().availableSlots === 0) return;
     const capacity = await this.accountCapacity();
+    if (this.closed || this.ctx.closing || this.ctx.stopping) return;
     if (capacity.allLow) {
       for (const work of works)
         store.work.todo(
@@ -1073,22 +1106,16 @@ export class WorkService {
       return;
     }
     for (const work of works)
-      store.work.clearTodos(work.workId, "all_accounts_low");
+      if (work.todos.some((t) => t.kind === "all_accounts_low"))
+        Object.assign(work, store.work.clearTodos(work.workId, "all_accounts_low"));
     if (!capacity.available.length) {
-      const held = store.listTasks().filter((t) => t.leaseHeld);
+      const held = store.work.heldItems();
       for (const work of works) {
         const quota = store.work.effectiveAccounts(work);
-        const owned = store.work
-          .list()
-          .filter((w) => w.commanderId === work.commanderId)
-          .flatMap((w) => w.items)
-          .filter(
-            (i) => i.taskId && held.some((t) => t.taskId === i.taskId),
-          ).length;
+        const owned = held.filter((w) => w.commanderId === work.commanderId)
+          .reduce((total, w) => total + w.count, 0);
         if (quota === 0 || owned >= quota) continue;
-        const usable = work.items.filter(
-          (i) => i.taskId && held.some((t) => t.taskId === i.taskId),
-        ).length;
+        const usable = held.find((w) => w.workId === work.workId)?.count ?? 0;
         store.work.todo(
           work.workId,
           "resource_shortage",
@@ -1119,24 +1146,18 @@ export class WorkService {
     while (
       capacity.available.length &&
       store.getPoolPolicy().availableSlots !== 0 &&
-      !this.ctx.closing
+      !this.ctx.closing && !this.ctx.stopping
     ) {
       let dispatched = false;
       for (const stale of works) {
         const work = store.work.get(stale.workId);
+        if (work.status !== "active") continue;
         const quota = store.work.effectiveAccounts(work);
-        const held = store.listTasks().filter((t) => t.leaseHeld);
-        const owned = store.work
-          .list()
-          .filter((w) => w.commanderId === work.commanderId)
-          .flatMap((w) => w.items)
-          .filter(
-            (i) => i.taskId && held.some((t) => t.taskId === i.taskId),
-          ).length;
+        const held = store.work.heldItems();
+        const owned = held.filter((w) => w.commanderId === work.commanderId)
+          .reduce((total, w) => total + w.count, 0);
         if (quota === 0 || owned >= quota) continue;
-        const activeForWork = work.items.filter(
-          (i) => i.taskId && held.some((t) => t.taskId === i.taskId),
-        ).length;
+        const activeForWork = held.find((w) => w.workId === work.workId)?.count ?? 0;
         const usable =
           Math.min(
             capacity.available.length,
@@ -1155,7 +1176,8 @@ export class WorkService {
             return;
           continue;
         }
-        store.work.clearTodos(work.workId, "resource_shortage");
+        if (work.todos.some((t) => t.kind === "resource_shortage"))
+          Object.assign(work, store.work.clearTodos(work.workId, "resource_shortage"));
         const item = work.items.find((i) => this.runnable(work, i));
         if (!item) continue;
         if (
@@ -1207,6 +1229,9 @@ export class WorkService {
           dispatched = true;
           break;
         } catch (error) {
+          // A normal shutdown preserves queued work for the next explicit start.
+          if (this.closed || this.ctx.closing || this.ctx.stopping ||
+            (error as { code?: string })?.code === "POOL_SHUTTING_DOWN") return;
           store.work.update(
             work.workId,
             (w) => {
@@ -1487,6 +1512,7 @@ export class WorkService {
   async close(): Promise<void> {
     this.closed = true;
     clearInterval(this.timer);
+    for (const waiter of [...this.waiters]) waiter();
     await this.pumping;
     await Promise.allSettled([...this.operations.values()]);
   }

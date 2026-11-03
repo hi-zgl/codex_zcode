@@ -8,6 +8,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { promisify } from 'node:util';
 import test, { type TestContext } from 'node:test';
 import { CoreError, DurableTaskStore, type Task } from '../../src/core/index.js';
+import { submitWorkSchema } from '../../src/core/work-types.js';
 import { Coordinator } from '../../src/daemon/coordinator.js';
 import { presentMcpResult } from '../../src/shared/presentation.js';
 import type {
@@ -134,6 +135,15 @@ async function dispatch(coordinator: Coordinator, extra: Record<string, unknown>
     ...extra,
   }) as { task: { taskId: string; revision: number }; created: boolean };
   return result;
+}
+
+function pendingWork(store: DurableTaskStore, repository: string, requestId: string, withItem = false) {
+  return store.work.create(submitWorkSchema.parse({
+    request_id: requestId, commander_id: `commander-${requestId}`, repository,
+    goal: 'Fixture goal', criteria: ['Observable fixture criterion'], accounts: 1,
+    stages: [{ stageId: 'build', title: 'Build' }],
+    items: withItem ? [{ itemId: 'item', stageId: 'build', title: 'Item', prompt: 'Fixture task', workspace: 'shared' }] : [],
+  })).work;
 }
 
 async function completed(store: DurableTaskStore, coordinator: Coordinator, taskId: string): Promise<Task> {
@@ -628,9 +638,111 @@ test('multiple approvals preserve the next pending item, wait for native removal
 test('finish work rejects every held task before stopping any Worker',async t=>{
  const {store,coordinator}=await fixture(t);let stops=0;
  Object.defineProperty(coordinator.supervisor,'stop',{value:async()=>{stops++;return {stopped:true};}});
- store.dispatch({requestId:'held',workspaceId:'workspace',workerId:'worker',prompt:'fixture'});
- await assert.rejects(coordinator.call('shutdown_pool',{}),/active or uncertain/);assert.equal(stops,0);
+ const {task}=store.dispatch({requestId:'held',workspaceId:'workspace',workerId:'worker',prompt:'fixture'});
+ for(const uncertain of [false,true]){
+  if(uncertain){store.beginDispatch(task.taskId);store.bindSession(task.taskId,'unknown-native-session');store.markInterrupted(task.taskId);}
+  for (const [method, params] of [
+   ['shutdown_pool', {}],
+   ['pool_control', { action: 'shutdown', only_if_idle: false }],
+   ['pool_control', { action: 'shutdown', only_if_idle: true }],
+  ] as const) await assert.rejects(coordinator.call(method, params),/active or uncertain/);
+  assert.equal(stops,0);
+  assert.equal(store.listLeasedTasks().length,1,'neither shutdown mode releases a queued or uncertain task lease');
+ }
  assert.ok(await coordinator.call('get_pool_policy',{}),'failed shutdown keeps daemon available');
+});
+
+test('automatic finish checks all commanders and history without loading full Work records',async t=>{
+ const {store,coordinator,repo}=await fixture(t);
+ const pending=pendingWork(store,repo,'old-pending');
+ store.work.todo(pending.workId,'resource_shortage','Await resources',[],0);
+ store.work.todo(pending.workId,'decision','Await commander acceptance');
+ for(let i=0;i<24;i++){
+  const work=pendingWork(store,repo,`history-${i}`);
+  store.work.update(work.workId,w=>{w.status=i%2?'completed':'cancelled';});
+ }
+ assert.ok(!store.work.list().slice(-20).some(w=>w.workId===pending.workId));
+ for(const name of ['list','active'] as const)
+  Object.defineProperty(store.work,name,{value:()=>{throw new Error('Shutdown must not reconstruct Work history');}});
+ let workerReads=0,stops=0;
+ Object.defineProperty(coordinator.supervisor,'list',{value:async()=>{workerReads++;return [{workerId:'worker',state:'ready'}];}});
+ Object.defineProperty(coordinator.supervisor,'stop',{value:async()=>{stops++;return {stopped:true};}});
+ await assert.rejects(coordinator.call('pool_control',{action:'shutdown',only_if_idle:true}),error=>
+  error instanceof CoreError&&error.code==='POOL_NOT_IDLE');
+ assert.equal(workerReads,0);assert.equal(stops,0);
+ assert.equal(store.work.get(pending.workId).status,'active');
+ assert.equal(store.work.get(pending.workId).todos.length,2);
+ assert.ok(await coordinator.call('get_pool_policy',{}),'idle refusal leaves the daemon available');
+});
+
+test('automatic finish allows completed and cancelled Work and preserves history',async t=>{
+ const {store,coordinator,repo}=await fixture(t);
+ const completed=pendingWork(store,repo,'completed'),cancelled=pendingWork(store,repo,'cancelled');
+ store.work.update(completed.workId,w=>{w.status='completed';});
+ store.work.update(cancelled.workId,w=>{w.status='cancelled';});
+ const before=store.work.list();const stopped:string[]=[];
+ Object.defineProperty(coordinator.supervisor,'list',{value:async()=>[{workerId:'ready',state:'ready'},{workerId:'old',state:'stopped'}]});
+ Object.defineProperty(coordinator.supervisor,'stop',{value:async(id:string)=>{stopped.push(id);return {stopped:true};}});
+ assert.deepEqual(await coordinator.call('pool_control',{action:'shutdown',only_if_idle:true}),{stopping:true,workersStopped:true,stoppedWorkers:1});
+ assert.deepEqual(stopped,['ready']);assert.deepEqual(store.work.list(),before);
+});
+
+test('explicit finish preserves pending Work without leases for the next start',async t=>{
+ for(const [label,method,params] of [
+  ['legacy','shutdown_pool',{}],
+  ['default','pool_control',{action:'shutdown'}],
+  ['explicit','pool_control',{action:'shutdown',only_if_idle:false}],
+ ] as const) await t.test(label,async t=>{
+  const {store,coordinator,repo}=await fixture(t);const work=pendingWork(store,repo,'pending');
+  store.work.todo(work.workId,'decision','Await saved user decision');
+  const before=store.work.get(work.workId);
+  Object.defineProperty(coordinator.supervisor,'list',{value:async()=>[]});
+  assert.deepEqual(await coordinator.call(method,params),{stopping:true,workersStopped:true,stoppedWorkers:0});
+  assert.deepEqual(store.work.get(work.workId),before);
+ });
+});
+
+test('automatic finish waits for admitted Work registration and reopening before its idle check',async t=>{
+ for(const method of ['submit_work','advance_work'] as const)await t.test(method,async t=>{
+  const {store,coordinator,repo}=await fixture(t);let release!:()=>void,entered!:()=>void;
+  const gate=new Promise<void>(r=>release=r),started=new Promise<void>(r=>entered=r);t.after(()=>release());
+  const existing=method==='advance_work'?pendingWork(store,repo,'reopen'):undefined;
+  if(existing)store.work.update(existing.workId,w=>{w.status='completed';});
+  Object.defineProperty(coordinator.workService,method==='submit_work'?'submit':'advance',{value:async()=>{
+   entered();await gate;
+   const work=existing?store.work.update(existing.workId,w=>{w.status='active';}):pendingWork(store,repo,'new');
+   return {work};
+  }});
+  let workerReads=0;
+  Object.defineProperty(coordinator.supervisor,'list',{value:async()=>{workerReads++;return [];}});
+  const input=method==='submit_work'?{
+   request_id:'new',commander_id:'commander',repository:repo,goal:'Fixture goal',criteria:['Observable'],stages:[{stageId:'build',title:'Build'}],
+  }:{request_id:'reopen',work_id:existing!.workId,commander_id:existing!.commanderId,control_version:1,rework_stages:[{stage_id:'build',reason:'Reopen'}]};
+  const admitted=coordinator.call(method,input);await started;
+  const finishing=assert.rejects(coordinator.call('pool_control',{action:'shutdown',only_if_idle:true}),error=>
+   error instanceof CoreError&&error.code==='POOL_NOT_IDLE');
+  await delay(5);assert.equal(workerReads,0,'shutdown waits before consulting Workers');
+  await assert.rejects(coordinator.call(method,input),/shutdown in progress/);
+  release();await admitted;await finishing;
+  assert.equal(workerReads,0);assert.equal(store.work.hasActive(),true);
+  assert.ok(await coordinator.call('get_pool_policy',{}));
+ });
+});
+
+test('manual finish during preparation preserves a queued item without a spurious blocked decision',async t=>{
+ const {store,coordinator,repo,fake}=await fixture(t);const work=pendingWork(store,repo,'prepare',true);
+ let release!:()=>void,entered!:()=>void;
+ const gate=new Promise<void>(r=>release=r),started=new Promise<void>(r=>entered=r);t.after(()=>release());
+ Object.defineProperty(coordinator.workService,'accountCapacity',{value:async()=>({accounts:[{alias:'fixture'}],workers:[{workerId:'worker',accountAlias:'fixture',state:'ready'}],available:[{alias:'fixture'}],usableAccounts:1,allLow:false})});
+ Object.defineProperty(coordinator.workService,'prepare',{value:async()=>{entered();await gate;return 'workspace';}});
+ Object.defineProperty(coordinator.supervisor,'list',{value:async()=>[]});
+ const pumping=coordinator.workService.pump();await started;
+ assert.deepEqual(await coordinator.call('shutdown_pool',{}),{stopping:true,workersStopped:true,stoppedWorkers:0});
+ release();await pumping;
+ const saved=store.work.get(work.workId);
+ assert.equal(saved.status,'active');assert.notEqual(saved.items[0]!.queueAt,null);
+ assert.equal(saved.items[0]!.blockedReason,null);assert.deepEqual(saved.todos,[]);
+ assert.equal(store.listTasks().length,0);assert.equal(fake.sendCalls,0);
 });
 
 test('finish work gates concurrent dispatch and Worker starts, preserves data, then remains draining',async t=>{
@@ -642,6 +754,8 @@ test('finish work gates concurrent dispatch and Worker starts, preserves data, t
  const finishing=coordinator.call('shutdown_pool',{});await started;
  await assert.rejects(coordinator.call('start_worker',{worker_id:'new',account_id:'account'}),/shutdown in progress/);
  await assert.rejects(coordinator.call('dispatch_task',{request_id:'late',workspace_id:'workspace',prompt:'late'}),/shutdown in progress/);
+ await assert.rejects(coordinator.call('submit_work',{}),/shutdown in progress/);
+ await assert.rejects(coordinator.call('advance_work',{}),/shutdown in progress/);
  release();assert.deepEqual(await finishing,{stopping:true,workersStopped:true,stoppedWorkers:1});
  assert.deepEqual(stopped,['worker']);assert.equal(store.listWorkspaces().length,1);assert.equal(store.listTasks().length,0);
  await assert.rejects(coordinator.call('shutdown_pool',{}),/shutdown in progress/);

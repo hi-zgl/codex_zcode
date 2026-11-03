@@ -1225,6 +1225,7 @@ export type McpErrorKind =
   | "REQUEST_FAILED"
   | "PRESENTATION_FAILED"
   | "SHUTDOWN_INCOMPLETE"
+  | "POOL_NOT_IDLE"
   | "WORKSPACE_BUSY"
   | "WORKER_BUSY"
   | "POOL_CAPACITY_REACHED"
@@ -1249,6 +1250,8 @@ const ERROR_MESSAGES: Record<McpErrorKind, string> = {
     "This tool has no supported safe MCP view; no daemon request was made.",
   SHUTDOWN_INCOMPLETE:
     "Some Workers may have stopped. The daemon remains available; inspect remaining Workers. No force-stop was requested.",
+  POOL_NOT_IDLE:
+    "Automatic shutdown was refused because unfinished Work remains. No Workers were stopped. Continue work, recovery, acceptance or decisions; do not retry with only_if_idle false.",
   DAEMON_UNAVAILABLE:
     "The local daemon is unavailable. Use pool_control with action start to connect. Reads never restart a stopped pool.",
   REQUEST_FAILED:
@@ -1298,6 +1301,8 @@ export function classifyMcpError(value: unknown): McpErrorKind {
         : typeof source.error === "string"
           ? source.error.slice(0, 1024)
           : "";
+  if (code === "POOL_NOT_IDLE" || /^Pool has unfinished work;/.test(message))
+    return "POOL_NOT_IDLE";
   if (/^Pool has active or uncertain tasks/.test(message)) return "WORKER_BUSY";
   if (/^Pool shutdown incomplete;/.test(message)) return "SHUTDOWN_INCOMPLETE";
   if (/^Pool shutdown in progress/.test(message)) return "RECOVERY_REQUIRED";

@@ -1,11 +1,14 @@
 import { spawn } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
+import { constants } from 'node:fs';
 import { open, mkdir } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { rpcCall, poolRoot } from '../shared/rpc.js';
 import { connectionPoolRoot } from '../shared/connection.js';
 import { methods, validateMethod } from '../shared/methods.js';
 import { defaultUserServiceOptions, installUserService, renderUserService, userUnitDirectory } from '../service/systemd.js';
+import { RotatingLog } from '../shared/rotating-log.js';
+import { storageStatus } from '../maintenance/storage.js';
 
 const serviceHelp = `User service commands:
   service-generate [OPTIONS]         print a systemd --user unit to stdout
@@ -52,21 +55,30 @@ async function serviceCommand(command: string, args: string[]): Promise<void> {
 async function main() {
   const [command,...args] = process.argv.slice(2);
   if (!command || command === 'help' || command === '--help') {
-    console.log('zcode-pool: local isolated ZCode orchestration prototype\n\nCommands:\n  daemon-start\n  daemon (foreground)\n  mcp (stdio)\n  service-generate [OPTIONS]\n  service-install [OPTIONS]\n  import-accounts FILE...\n  METHOD \'{"parameter":"value"}\'\n\nMethods:\n'+Object.entries(methods).map(([n,d])=>`  ${n}: ${d.description}`).join('\n'));
+    console.log('zcode-pool: local isolated ZCode orchestration prototype\n\nCommands:\n  daemon-start\n  daemon (foreground)\n  mcp (stdio)\n  storage-status (read-only logical bytes and retention policy)\n  service-generate [OPTIONS]\n  service-install [OPTIONS]\n  import-accounts FILE...\n  METHOD \'{"parameter":"value"}\'\n\nMethods:\n'+Object.entries(methods).map(([n,d])=>`  ${n}: ${d.description}`).join('\n'));
     return;
   }
   if (command === 'mcp') {await import('../mcp/main.js');return;}
   // The extension and Codex use one host-side profile; a running daemon keeps
   // the concrete pool selected when it started, even if that profile changes.
   process.env.ZCODE_POOL_HOME = await connectionPoolRoot();
+  if (command === 'storage-status') {
+    if (args.length) throw new Error('storage-status takes no arguments');
+    console.log(JSON.stringify(storageStatus(poolRoot()), null, 2));
+    return;
+  }
   if (command === 'daemon') {await import('../daemon/main.js');return;}
   if (command === 'service-generate' || command === 'service-install') { await serviceCommand(command,args); return; }
   if (command === 'daemon-start') {
     try {await rpcCall('overview',{}, {timeoutMs:1000});console.log('Daemon already ready');return;} catch {}
     const root=poolRoot(); await mkdir(join(root,'scheduler'),{recursive:true,mode:0o700});
-    const log=await open(join(root,'scheduler','daemon.log'),'a',0o600);
+    const logPath=join(root,'scheduler','daemon.log');
+    // Validate/create the managed regular file before passing its append FD on.
+    // Rotation in the child preserves this inode instead of renaming active output.
+    new RotatingLog(logPath).close();
+    const log=await open(logPath,constants.O_WRONLY|constants.O_APPEND|constants.O_NOFOLLOW|constants.O_NONBLOCK);
     const runtime=defaultUserServiceOptions();
-    const child=spawn(runtime.nodePath,[...(runtime.loaderPath?['--import',pathToFileURL(runtime.loaderPath).href]:[]),runtime.entryPath],{cwd:runtime.workingDirectory,detached:true,stdio:['ignore',log.fd,log.fd],env:process.env});
+    const child=spawn(runtime.nodePath,[...(runtime.loaderPath?['--import',pathToFileURL(runtime.loaderPath).href]:[]),runtime.entryPath],{cwd:runtime.workingDirectory,detached:true,stdio:['ignore',log.fd,log.fd],env:{...process.env,ZCODE_POOL_MANAGED_DAEMON_LOG:'1'}});
     child.on('error',()=>{}); child.unref(); await log.close();
     for(let i=0;i<100;i++) {
       await new Promise(r=>setTimeout(r,100));

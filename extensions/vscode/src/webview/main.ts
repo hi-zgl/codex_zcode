@@ -6,6 +6,7 @@ import { renderApp } from './components.js';
 import { applySnapshot, approvalDisabled, clearTaskContent, connectionIdentity, createState, defaultFilters, persistedUi, validateDraft, type ArtifactChunk, type DetailTab, type EventPage, type LocalState, type PatchPage, type ReviewContent } from './state.js';
 import { ToastManager } from './toast-manager.js';
 import { drawStageEdges } from './components/views/work-flow.js';
+import { quotaBatchTimeoutMs, type QuotaProbeSummary } from '../quota-probe.js';
 import { captureFrame, restoreFrame, updateInput, canFlushDraft, buildListPayload, applyVerifiedApprovalRead, applyApprovalRespondSuccess, applyApprovalRespondError, appendArtifactChunk } from './form-controller.js';
 
 declare function acquireVsCodeApi(): VsCodeApi;
@@ -160,6 +161,12 @@ export class WorkbenchApp {
       return;
     }
     if (name === 'account.toggle') { if (this.state.expandedAccounts.has(data.alias)) this.state.expandedAccounts.delete(data.alias); else this.state.expandedAccounts.add(data.alias); this.render(); return; }
+    if (name === 'resources.toggleSection') {
+      if (!['accounts', 'workers', 'workspaces'].includes(data.section)) return;
+      if (this.state.collapsedResourceSections.has(data.section)) this.state.collapsedResourceSections.delete(data.section);
+      else this.state.collapsedResourceSections.add(data.section);
+      this.render(); return;
+    }
     if (name === 'account.sort') {
       this.state.accountSortMode = data.mode === 'default' ? 'default' : 'quota_first';
       this.render();
@@ -190,10 +197,15 @@ export class WorkbenchApp {
     if (name === 'connection.codexSetup') { await this.run(name, async () => { const response = await this.bridge.request<'connection.codexSetup', { cancelled?: boolean }>(name, {}); if (!response?.cancelled) this.state.message = '已生成 MCP 配置，请在 Codex 中启用后开始调度任务。'; }); return; }
     if (name === 'tasks.more' || name === 'tasks.reload') { await this.run('tasks.list', () => this.bridge.request('tasks.list', name === 'tasks.more' && snapshot?.listNextCursor ? { cursor: snapshot.listNextCursor } : buildListPayload(this.state))); return; }
     if (name === 'refresh' || name === 'resources.refresh' || name === 'settings.open' || name === 'diagnostics.copy') {
-      await this.run(name, async () => { await this.bridge.request(name, {}); this.state.message = name === 'diagnostics.copy' ? '已复制脱敏诊断。' : name === 'settings.open' ? '已打开当前计算环境的 VS Code 设置。' : '已更新任务和资源。'; }); return;
+      await this.run(name, async () => { await this.bridge.request(name, {}, name === 'resources.refresh' ? quotaBatchTimeoutMs(snapshot?.resources.accounts.length ?? 0) : undefined); this.state.message = name === 'diagnostics.copy' ? '已复制脱敏诊断。' : name === 'settings.open' ? '已打开当前计算环境的 VS Code 设置。' : '已更新任务和资源。'; }); return;
     }
     if (name === 'accounts.probeAll') {
-      await this.run(name, async () => { await this.bridge.request(name, {}); this.state.message = '已探查所有可用账号的配额。'; }); return;
+      const summary = await this.run(name, () => this.bridge.request<'accounts.probeAll', QuotaProbeSummary>(name, {}, quotaBatchTimeoutMs(snapshot?.resources.accounts.length ?? 0)));
+      if (summary) {
+        this.state.message = summary.total === 0 ? '尚无已导入账号可供探查。' : `额度探查完成：共 ${summary.total} 个账号，成功 ${summary.succeeded}，失败 ${summary.failed}。${summary.failed ? '失败账号保留旧值，可展开详情查看。' : ''}`;
+        this.state.messageTone = summary.failed > 0 ? 'error' : 'info'; this.render();
+      }
+      return;
     }
     if (name === 'guidance.open') { await this.run(name, () => this.bridge.request('guidance.open', { topic: data.topic as 'connection' | 'approval' | 'workspace' | 'recovery' })); return; }
     if (name === 'settings.save') {

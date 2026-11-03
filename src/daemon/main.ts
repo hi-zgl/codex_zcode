@@ -4,6 +4,7 @@ import { poolRoot } from '../shared/rpc.js';
 import { serveRpc } from './server.js';
 import { Coordinator } from './coordinator.js';
 import { DurableTaskStore } from '../core/index.js';
+import { maintainDaemonLog } from '../shared/rotating-log.js';
 
 const root=poolRoot();
 await mkdir(join(root,'scheduler'),{recursive:true,mode:0o700});
@@ -15,6 +16,9 @@ const rpc=await serveRpc(root,async(method,params)=>{
  if(method==='shutdown_pool'||method==='pool_control'&&params.action==='shutdown')setTimeout(()=>{void shutdown();},100);
  return result;
 });
+const closeLog=process.env.ZCODE_POOL_MANAGED_DAEMON_LOG==='1'
+ ? maintainDaemonLog(join(root,'scheduler','daemon.log'),process.stderr.fd,()=>console.error('Daemon diagnostic log rotation unavailable; inspect scheduler/daemon.log'))
+ : ()=>{};
 const store=new DurableTaskStore(join(root,'scheduler','state.db'));
 store.recoverInterruptedTasks();
 coordinator=new Coordinator(root,store);
@@ -29,7 +33,7 @@ async function shutdown(){
  if(stopping)return;stopping=true;
  // Keep the daemon ownership lock until all attached tasks and local verification
  // jobs have drained; a successor must not race their database/worktree writes.
- await coordinator!.close(); await rpc.close(); store.close();
+ await coordinator!.close(); await rpc.close(); store.close(); closeLog();
  process.exit(0);
 }
 process.on('SIGTERM',()=>{void shutdown();});

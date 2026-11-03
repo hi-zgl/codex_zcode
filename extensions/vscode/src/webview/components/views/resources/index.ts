@@ -119,7 +119,7 @@ export function renderResources(ctx: RenderContext, snapshot: UiSnapshot): HTMLE
   const headerNode = heading(
     'ZCODE / 额度',
     '额度与资源',
-    '查看账号额度与可用资源，支持直达探测与定时自动刷新；Codex 使用同一连接目录。',
+    '查看账号额度与可用资源；可收起各资源区或展开账号详情。Codex 使用同一连接目录。',
     headerActions
   );
 
@@ -129,7 +129,7 @@ export function renderResources(ctx: RenderContext, snapshot: UiSnapshot): HTMLE
   const accountHint = el(
     'p',
     'field-hint',
-    `支持直接探测各账号实时额度与订阅等级，每 60 秒自动鲜活刷新。从 ${snapshot.connection.host} 导入 1–100 个 OAuth JSON 文件，同名账号可能覆盖已有记录。`
+    `全量探查覆盖所有已导入账号，无需先启动执行器；可直接探测单个账号，可见时每 60 秒自动查询。从 ${snapshot.connection.host} 导入 1–100 个 OAuth JSON 文件，按账号身份去重并保留较新快照；导入额度不代表实时余额。`
   );
 
   const importBtn = actionWithReason(
@@ -183,11 +183,26 @@ export function renderResources(ctx: RenderContext, snapshot: UiSnapshot): HTMLE
     }
   }
 
-  root.append(
-    accountsSection,
-    renderWorkerSection(ctx, snapshot),
-    renderWorkspaceSection(ctx, snapshot)
-  );
+  const resourceSections = [
+    ['accounts', accountsSection, snapshot.resources.accounts.length],
+    ['workers', renderWorkerSection(ctx, snapshot), snapshot.resources.workers.length],
+    ['workspaces', renderWorkspaceSection(ctx, snapshot), snapshot.resources.workspaces.length]
+  ] as const;
+  for (const [id, resourceSection, count] of resourceSections) {
+    const title = resourceSection.firstElementChild!;
+    title.append(`（${count}）`);
+    const collapsed = ctx.state.collapsedResourceSections.has(id);
+    const content = el('div', 'resource-section-content');
+    content.id = `resources-${id}`;
+    content.hidden = collapsed;
+    content.append(...Array.from(resourceSection.children).slice(1));
+    const toggle = button(ctx, collapsed ? '展开' : '收起', 'resources.toggleSection', { section: id });
+    toggle.setAttribute('aria-label', `${collapsed ? '展开' : '收起'}${title.textContent}`);
+    toggle.setAttribute('aria-expanded', String(!collapsed));
+    toggle.setAttribute('aria-controls', content.id);
+    resourceSection.replaceChildren(el('div', 'section-toolbar resource-section-heading', title, toggle), content);
+    root.append(resourceSection);
+  }
 
   // Start lightweight local countdown ticker & 60s auto-probe scheduler
   scheduleAutoRefreshTicker(root, ctx);

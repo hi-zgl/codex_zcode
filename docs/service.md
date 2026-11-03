@@ -6,11 +6,15 @@
 
 ## 普通使用的启动与收工
 
-使用 VS Code 扩展时，点击“启动后台并连接”启动管理后台；在资源页单独启动 Worker。Codex 通过 `zcode_pool_control` 的 `start` 明确启动后台，高层交办自动准备 Worker。状态查询不会启动后台。
+使用 VS Code 扩展时，点击“启动后台并连接”启动管理后台；在资源页单独启动 Worker。日常由指挥按[使用约定](codex-workflow.md)通过 `zcode_pool_control` 的 `start` 明确开工，高层交办自动准备 Worker。状态查询不会启动后台。
 
-结束工作时用“收工：停止实例与后台”或 `zcode_pool_control` 的 `shutdown`：有任务占用会拒绝，不自动取消；无占用才依次停止 Worker，全部成功后关闭后台。账号、任务及工作区保留。部分实例无法停止时后台继续运行，应刷新检查。旧 daemon 未提供 `poolLifecycle` 能力时，需先在空闲时升级后台。
+本轮 Work 验收并确认完成后，指挥自动尝试 `shutdown`，传 `only_if_idle: true`。程序关闭新工作准入，等待已接纳的交办或推进操作完成，再检查全部 Task 占用与全库活动 Work，覆盖其他指挥及待资源、验收、待决定的工作。存在占用或活动 Work 时拒绝，恢复正常服务，不停止 Worker；自动收工不得改传 `false` 绕过拒绝。
 
-CLI 的 `shutdown-pool` 对应同一收工操作；`daemon-stop` 是高级的“仅停止调度后台”，仍保留 Worker，二者不可混淆。以下 systemd 方式仍是可选高级部署，不需要为了普通启动/收工额外安装服务。
+用户明确停工、面板“收工：停止实例与后台”和 CLI `shutdown-pool` 保持原手工语义，`only_if_idle` 省略或为 `false` 时不要求所有 Work 已完成，但仍拒绝任何实际或未知 Task 占用，不自动取消。无占用才依次停止 Worker，全部成功后关闭后台。账号、任务及工作区保留，未完成 Work 在下次明确启动后续接。部分实例无法停止时后台继续运行，应刷新检查。
+
+关闭 VS Code、断开面板或指挥异常退出都不表示完工，后台不会据此自动收工，也没有新增空闲超时退出机制。升级扩展不会让旧 daemon 自动加载新规则；旧后台不支持新参数时会拒绝请求，应先安全收工，再明确启动新版。未提供 `poolLifecycle` 能力的旧后台仍需先在空闲时升级。
+
+`daemon-stop` 是高级的“仅停止调度后台”，仍保留 Worker，与收工不同。以下 systemd 方式仍是可选高级部署，不需要为了普通启动/收工额外安装服务。
 
 ## 生成并检查
 
@@ -39,6 +43,8 @@ node --import tsx src/cli/main.ts service-generate \
 相对参数在生成时转换为绝对路径。路径中的空格、引号、百分号、美元符号和 Unicode 按 systemd 各指令的解析规则处理；loader 使用编码后的 `file:` URL。`ExecStart` 的 `:` 前缀关闭环境变量展开，`%` 以 `%%` 保存。`WorkingDirectory` 不使用 shell 引号，末尾 `/.` 保留路径末尾的空格或反斜杠。systemd 不接受可执行文件路径中的引号或反斜杠，Node ES module 路径也不接受反斜杠，因此对应参数会明确拒绝；控制字符及超长 Unix socket 路径同样拒绝。pool 路径应尽量简短，最终 socket 路径最多 107 字节。
 
 unit 直接以前台方式运行 `src/daemon/main.ts`，由 systemd 跟踪主进程。`Type=exec` 表示 Node 已成功执行；RPC 完成初始化以 `overview` 成功为准。`Restart=on-failure` 在异常退出后等待 3 秒重启，60 秒内最多启动 5 次；正常停止不自动重启。日志进入用户 journal，文件权限掩码为 `0077`。
+
+systemd 的 journal 保留由系统配置决定；`daemon-start` 文件日志、Worker 受管日志及只读 `storage-status` 的范围见[存储布局](storage-layout.md#日志保留与只读统计)。
 
 ## 安装与启用
 

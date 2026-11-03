@@ -2,7 +2,6 @@
   "version": "0.2.0",
   "configurations": [
     { "name": "ZCode Pool: Mock UI (no daemon)", "type": "extensionHost", "request": "launch", "runtimeExecutable": "${execPath}", "args": ["${workspaceFolder}/extensions/vscode/test/fixtures/workspace", "--disable-extensions", "--extensionDevelopmentPath=${workspaceFolder}/extensions/vscode"], "env": { "ZCODE_POOL_EXTENSION_MODE": "mock", "ZCODE_POOL_UI_FIXTURE": "${workspaceFolder}/extensions/vscode/test/fixtures/pool-demo.json" }, "outFiles": ["${workspaceFolder}/extensions/vscode/dist/host/**/*.cjs"], "preLaunchTask": "zcodePool:build" },
-    { "name": "ZCode Pool: Real daemon (explicit connect)", "type": "extensionHost", "request": "launch", "runtimeExecutable": "${execPath}", "args": ["${workspaceFolder}", "--disable-extensions", "--extensionDevelopmentPath=${workspaceFolder}/extensions/vscode"], "env": { "ZCODE_POOL_EXTENSION_MODE": "real", "ZCODE_POOL_DEBUG_POOL_HOME": "${input:zcodePoolDebugPool}" }, "outFiles": ["${workspaceFolder}/extensions/vscode/dist/host/**/*.cjs"], "preLaunchTask": "zcodePool:build" }
-  ],
-  "inputs": [{ "id": "zcodePoolDebugPool", "type": "promptString", "description": "Absolute pool path on the Linux extension host; daemon must already be running", "default": "/tmp/zcode-pool-ui-real" }]
+    { "name": "ZCode Pool: Real daemon (explicit connect)", "type": "extensionHost", "request": "launch", "runtimeExecutable": "${execPath}", "args": ["${workspaceFolder}/extensions/vscode/test/fixtures/workspace", "--disable-extensions", "--extensionDevelopmentPath=${workspaceFolder}/extensions/vscode"], "env": { "ZCODE_POOL_EXTENSION_MODE": "real" }, "outFiles": ["${workspaceFolder}/extensions/vscode/dist/host/**/*.cjs"], "preLaunchTask": "zcodePool:build" }
+  ]
 }

@@ -32,6 +32,40 @@
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
+.resource-section-heading {
+  margin-bottom: 12px;
+}
+
+.account-card:not(.expanded) {
+  padding: 12px 16px;
+  margin: 10px 0;
+}
+
+.account-card > .section-toolbar > :first-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.account-card > .field-hint:last-of-type {
+  margin-bottom: 0;
+}
+
+@media (max-width: 500px) {
+  .account-card .row-quota-slot .q-win.mini {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .account-card .row-quota-slot .q-win.mini .qbar {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+
+  .account-card .row-quota-slot .q-win-reset {
+    grid-column: 2;
+    grid-row: 1;
+  }
+}
+
 .resource-actions {
   display: flex;
   flex-wrap: wrap;

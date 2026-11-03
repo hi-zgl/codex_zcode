@@ -55,6 +55,7 @@ export class WorkStore {
   ) {
     db.exec(`
    CREATE TABLE IF NOT EXISTS work_records(work_id TEXT PRIMARY KEY,request_id TEXT NOT NULL UNIQUE,input TEXT NOT NULL,payload TEXT NOT NULL) STRICT;
+   CREATE INDEX IF NOT EXISTS work_records_status ON work_records(json_extract(payload,'$.status'));
    CREATE TABLE IF NOT EXISTS work_events(revision INTEGER PRIMARY KEY AUTOINCREMENT,work_id TEXT NOT NULL,type TEXT NOT NULL,payload TEXT NOT NULL,created_at INTEGER NOT NULL) STRICT;
    CREATE INDEX IF NOT EXISTS work_events_work ON work_events(work_id,revision);
    CREATE TABLE IF NOT EXISTS commanders(commander_id TEXT PRIMARY KEY,payload TEXT NOT NULL) STRICT;
@@ -172,6 +173,78 @@ export class WorkStore {
         .prepare("SELECT payload FROM work_records ORDER BY rowid")
         .all() as { payload: string }[]
     ).map((row) => workSchema.parse(JSON.parse(row.payload)));
+  }
+  /** Historical records stay in SQLite unless execution still needs collecting. */
+  forCollection(): Work[] {
+    return (
+      this.db.prepare(`
+        SELECT payload FROM (
+        SELECT rowid,payload FROM work_records WHERE json_extract(payload,'$.status')='active'
+        UNION ALL
+        SELECT w.rowid,w.payload FROM work_records w
+        WHERE json_extract(w.payload,'$.status') IN ('completed','cancelled') AND EXISTS (
+          SELECT 1 FROM json_each(w.payload,'$.items') item
+          JOIN tasks task ON task.task_id=json_extract(item.value,'$.taskId')
+          WHERE json_extract(item.value,'$.queueAt') IS NULL AND (
+            task.lease_held=1 OR (
+              NOT EXISTS (SELECT 1 FROM json_each(w.payload,'$.deliveries') delivery
+                WHERE json_extract(delivery.value,'$.taskId')=task.task_id)
+              AND EXISTS (SELECT 1 FROM task_results result,json_each(result.payload,'$.artifacts') artifact
+                WHERE result.task_id=task.task_id AND json_extract(artifact.value,'$.kind')='file_manifest')
+            ) OR (
+              task.status='failed' AND NOT EXISTS (
+                SELECT 1 FROM json_each(w.payload,'$.todos') todo,json_each(todo.value,'$.itemIds') related
+                WHERE related.value=json_extract(item.value,'$.itemId')
+              )
+            )
+          )
+        )) ORDER BY rowid
+      `).all() as { payload: string }[]
+    ).map((row) => workSchema.parse(JSON.parse(row.payload)));
+  }
+  active(): Work[] {
+    return (
+      this.db.prepare("SELECT payload FROM work_records WHERE json_extract(payload,'$.status')='active' ORDER BY rowid")
+        .all() as { payload: string }[]
+    ).map((row) => workSchema.parse(JSON.parse(row.payload)));
+  }
+  /** Covers every commander without loading or truncating persisted Work history. */
+  hasActive(): boolean {
+    return (this.db.prepare("SELECT EXISTS(SELECT 1 FROM work_records WHERE json_extract(payload,'$.status')='active') AS present")
+      .get() as { present: number }).present === 1;
+  }
+  head(workId: string): Pick<Work, "workId" | "commanderId" | "controlVersion" | "status" | "revision"> {
+    const row = this.db.prepare(`SELECT work_id AS workId,
+      json_extract(payload,'$.commanderId') AS commanderId,
+      json_extract(payload,'$.controlVersion') AS controlVersion,
+      json_extract(payload,'$.status') AS status,
+      json_extract(payload,'$.revision') AS revision FROM work_records WHERE work_id=?`)
+      .get(workId) as ReturnType<WorkStore["head"]> | undefined;
+    return row ?? fail("WORK_NOT_FOUND", "Work was not found");
+  }
+  /** Include cancelled work whose native commands still occupy an account. */
+  heldItems(): { workId: string; commanderId: string; count: number }[] {
+    return this.db.prepare(`SELECT w.work_id AS workId,
+      json_extract(w.payload,'$.commanderId') AS commanderId,count(*) AS count
+      FROM work_records w,json_each(w.payload,'$.items') item
+      JOIN tasks task ON task.task_id=json_extract(item.value,'$.taskId') AND task.lease_held=1
+      GROUP BY w.work_id`).all() as ReturnType<WorkStore["heldItems"]>;
+  }
+  cleanupCandidates(): { workId: string; status: Work["status"]; workspaceId: string }[] {
+    return this.db.prepare(`WITH refs AS (
+      SELECT w.work_id AS workId,json_extract(w.payload,'$.status') AS status,
+        json_extract(item.value,'$.workspaceId') AS workspaceId
+      FROM work_records w,json_each(w.payload,'$.items') item
+      UNION
+      SELECT w.work_id,json_extract(w.payload,'$.status'),json_extract(acceptance.value,'$.workspaceId')
+      FROM work_records w,json_each(w.payload,'$.acceptances') acceptance
+    )
+    SELECT DISTINCT refs.workId,refs.status,refs.workspaceId FROM refs
+    JOIN workspaces ws ON ws.workspace_id=refs.workspaceId AND ws.state='active'
+    WHERE refs.status!='active'
+      AND NOT EXISTS (SELECT 1 FROM tasks WHERE workspace_id=ws.workspace_id AND lease_held=1)
+      AND NOT EXISTS (SELECT 1 FROM refs active WHERE active.workspaceId=refs.workspaceId AND active.status='active')
+    `).all() as ReturnType<WorkStore["cleanupCandidates"]>;
   }
   get(workId: string): Work {
     const row = this.db
@@ -644,13 +717,13 @@ export class WorkStore {
     summary: string,
     itemIds: string[] = [],
     availableAccounts: number | null = null,
-  ): void {
+  ): Work {
     const work = this.get(workId);
     const old = work.todos.find(
       (t) => t.kind === kind && canonical(t.itemIds) === canonical(itemIds),
     );
-    if (old?.summary === summary) return;
-    this.update(
+    if (old?.summary === summary) return work;
+    return this.update(
       workId,
       (w) => {
         if (old) {
@@ -672,16 +745,18 @@ export class WorkStore {
       { kind, summary },
     );
   }
-  clearTodos(workId: string, kind: Work["todos"][number]["kind"]): void {
-    if (this.get(workId).todos.some((t) => t.kind === kind))
-      this.update(
+  clearTodos(workId: string, kind: Work["todos"][number]["kind"]): Work {
+    const work = this.get(workId);
+    return work.todos.some((t) => t.kind === kind)
+      ? this.update(
         workId,
         (w) => {
           w.todos = w.todos.filter((t) => t.kind !== kind);
         },
         "decision_resolved",
         { kind },
-      );
+      )
+      : work;
   }
   execution(taskId: string): ExecutionFacts {
     const row = this.db
@@ -854,28 +929,23 @@ export class WorkStore {
         `SELECT * FROM execution_errors WHERE ${where} ORDER BY error_id DESC LIMIT 100`,
       )
       .all(...params) as any[];
-    const work = filter.workId
-      ? this.list().find((w) => w.workId === filter.workId)
-      : null;
     const relevant = (
       this.db
-        .prepare("SELECT task_id FROM tasks WHERE (? IS NULL OR task_id=?)")
-        .all(filter.taskId ?? null, filter.taskId ?? null) as {
+        .prepare(`SELECT task_id FROM tasks WHERE (? IS NULL OR task_id=?)
+          AND (? IS NULL OR substr(request_id,1,length(?)+1)=?||':')
+          AND (? IS NULL OR json_extract(runtime_binding,'$.accountAlias')=?)
+          AND created_at<=? AND updated_at>=?`)
+        .all(
+          filter.taskId ?? null, filter.taskId ?? null,
+          filter.workId ?? null, filter.workId ?? null, filter.workId ?? null,
+          filter.accountAlias ?? null, filter.accountAlias ?? null,
+          filter.toMs ?? Number.MAX_SAFE_INTEGER, filter.fromMs ?? 0,
+        ) as {
         task_id: string;
       }[]
-    )
-      .map((r) => this.reads.getTask(r.task_id))
-      .filter(
-        (task) =>
-          (!filter.accountAlias ||
-            (task.runtimeBinding as any)?.accountAlias ===
-              filter.accountAlias) &&
-          (!work || task.requestId.startsWith(work.workId + ":")) &&
-          task.createdAt <= (filter.toMs ?? Number.MAX_SAFE_INTEGER) &&
-          task.updatedAt >= (filter.fromMs ?? 0),
-      );
+    );
     const incompleteTaskCount = relevant.filter(
-      (task) => this.execution(task.taskId).nativeErrorsComplete !== true,
+      (task) => this.execution(task.task_id).nativeErrorsComplete !== true,
     ).length;
     return {
       total: groups.reduce((n, g) => n + g.count, 0),

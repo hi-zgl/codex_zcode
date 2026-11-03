@@ -6,6 +6,7 @@ import { projectChoices,resolvePreferredRepositoryId } from './project-context.j
 import type { RouterTarget } from './router.js';
 import type { WebviewRequest, RequestPayload } from './protocol.js';
 import type { UiSnapshot, UiActionState } from './types.js';
+import { QUOTA_PROBE_CONCURRENCY, type QuotaProbeSummary } from '../quota-probe.js';
 import {
   blankDraft, sha256, createInitialSnapshot, resetDisconnectedSnapshot, buildTaskListWireFilter, mergeTaskDetail, buildDispatchPayload, validateDispatchResources,
   decodeChunk, validatePermissionContent, assertReadApprovalReady, decodeAndVerifyApprovalBytes, assertApprovalRespondable, assertTaskCanAcceptApproval, handleApprovalRespondFailure,
@@ -277,12 +278,46 @@ export class ActionService implements RouterTarget {
     return fetchFullArtifact((m, p, s) => this.ui(m, p, s), this.state, taskId, hash, file, side, this.selectionAbort.signal);
   }
   private reviewStorageKey(taskId: string, hash: string): string { return reviewStorageKey(this.poolKey(), taskId, hash); }
-  private async probeAvailableAccounts(): Promise<void> {
-    const targets = this.state.resources.accounts.filter(a => a.health === 'available');
-    await Promise.all(targets.map(async a => {
-      try { const q = (await this.ui('ui_probe_quota', { apiVersion: 1, account_id: a.alias })).data; this.state.resources.quotas[q.accountAlias] = q; } catch {}
-    }));
-    this.emit();
+  private probeAccountQuota(accountAlias: string, generation = this.generation(), workerId?: string): Promise<UiRpcResult<'ui_probe_quota'>['data']> {
+    this.assertCurrent(generation);
+    return this.serialize(`${generation}:quota:${accountAlias}`, async () => {
+      this.assertCurrent(generation);
+      try {
+        const quota = (await this.ui('ui_probe_quota', { apiVersion: 1, ...(workerId ? { worker_id: workerId } : { account_id: accountAlias }) })).data;
+        this.assertCurrent(generation);
+        this.state.resources.quotas[quota.accountAlias] = quota; this.emit();
+        return quota;
+      } catch (error) {
+        this.assertCurrent(generation);
+        // The daemon records failed probes before rejecting. Read that state so
+        // the card retains its last value and can immediately show the failure.
+        if (this.state.connection.capabilities.quotaSnapshots?.version) {
+          try {
+            const quota = (await this.ui('ui_get_quota', { apiVersion: 1, account_id: accountAlias })).data;
+            this.assertCurrent(generation);
+            this.state.resources.quotas[quota.accountAlias] = quota; this.emit();
+          } catch { this.assertCurrent(generation); }
+        }
+        throw error;
+      }
+    });
+  }
+  private probeAccounts(): Promise<QuotaProbeSummary> {
+    const generation = this.generation();
+    return this.serialize(`${generation}:quota:batch`, async () => {
+      const targets = this.state.resources.accounts.map(account => account.alias);
+      const summary: QuotaProbeSummary = { total: targets.length, succeeded: 0, failed: 0 };
+      for (let offset = 0; offset < targets.length; offset += QUOTA_PROBE_CONCURRENCY) {
+        this.assertCurrent(generation);
+        await Promise.all(targets.slice(offset, offset + QUOTA_PROBE_CONCURRENCY).map(async alias => {
+          this.assertCurrent(generation);
+          try { await this.probeAccountQuota(alias, generation); summary.succeeded++; }
+          catch { this.assertCurrent(generation); summary.failed++; }
+        }));
+      }
+      this.assertCurrent(generation);
+      return summary;
+    });
   }
   async execute(request: WebviewRequest): Promise<unknown> {
     if (this.disposed) throw new HostError('DISPOSED', 'This workbench has closed.');
@@ -315,13 +350,17 @@ export class ActionService implements RouterTarget {
       case 'connect': return this.connect();
       case 'disconnect': this.disconnect(); return this.state;
       case 'refresh': await this.refresh(); return this.state;
-      case 'resources.refresh':
+      case 'resources.refresh': {
+        const generation = this.generation();
         await this.refresh();
-        if (this.state.connection.capabilities.quotaProbe?.version && this.options.native.trusted() && !this.state.connection.stale) await this.probeAvailableAccounts();
+        this.assertCurrent(generation);
+        if (this.state.connection.capabilities.quotaProbe?.version && this.options.native.trusted() && !this.state.connection.stale) await this.probeAccounts();
+        this.assertCurrent(generation);
         return this.state;
+      }
       case 'accounts.probeAll':
         this.requireCapability('quotaProbe', true);
-        return this.mutate('probe:accounts:all', async () => { await this.probeAvailableAccounts(); return { probed: true }; });
+        return this.mutate('probe:accounts:all', () => this.probeAccounts());
       case 'tasks.list': return this.listTasks(request.payload);
       case 'task.select': return this.selectTask(request.payload.taskId);
       case 'draft.change': this.state.draft = request.payload.draft; this.emit(); return { saved: true };
@@ -338,8 +377,8 @@ export class ActionService implements RouterTarget {
       case 'workspace.create': { this.requireCapability('createWorkspace', true); const generation = this.generation(); const client = this.requireConnection(); const signal = this.connectionAbort.signal; const repository = await this.options.native.pickRepository(this.options.host); if (!repository) return { cancelled: true }; this.assertCurrent(generation); this.requireCapability('createWorkspace', true); return this.mutate('workspace.create', () => client.legacy('create_workspace', { repository, base_ref: request.payload.baseRef }, signal)); }
       case 'worker.start': this.requireCapability('startWorker', true); assertWorkerStartable(this.state, request.payload.workerId, request.payload.accountAlias); return this.mutate(`worker:${request.payload.workerId}`, () => this.requireConnection().legacy('start_worker', { worker_id: request.payload.workerId, account_id: request.payload.accountAlias }, this.connectionAbort.signal));
       case 'worker.stop': { this.requireCapability('stopWorker', true); const workerId = assertWorkerStoppable(this.state, request.payload.workerId); return this.mutate(`worker:${workerId}`, () => this.requireConnection().legacy('stop_worker', { worker_id: workerId }, this.connectionAbort.signal)); }
-      case 'worker.probe': { this.requireCapability('quotaProbe', true); const worker = this.state.resources.workers.find(w => w.workerId === request.payload.workerId); if (!worker || worker.state !== 'ready') throw new HostError('WORKER_UNAVAILABLE', 'Choose a currently ready worker.'); return this.mutate(`probe:${worker.workerId}`, async () => { const quota = (await this.ui('ui_probe_quota', { apiVersion: 1, worker_id: worker.workerId })).data; this.state.resources.quotas[quota.accountAlias] = quota; return quota; }); }
-      case 'account.probe': { this.requireCapability('quotaProbe', true); if (!this.state.resources.accounts.some(a => a.alias === request.payload.accountAlias)) throw new HostError('NOT_FOUND', 'The account is not in the current pool.'); return this.mutate(`probe:account:${request.payload.accountAlias}`, async () => { const quota = (await this.ui('ui_probe_quota', { apiVersion: 1, account_id: request.payload.accountAlias })).data; this.state.resources.quotas[quota.accountAlias] = quota; this.emit(); return quota; }); }
+      case 'worker.probe': { this.requireCapability('quotaProbe', true); const worker = this.state.resources.workers.find(w => w.workerId === request.payload.workerId); if (!worker || worker.state !== 'ready') throw new HostError('WORKER_UNAVAILABLE', 'Choose a currently ready worker.'); return this.mutate(`probe:${worker.workerId}`, () => this.probeAccountQuota(worker.accountAlias, this.generation(), worker.workerId)); }
+      case 'account.probe': { this.requireCapability('quotaProbe', true); if (!this.state.resources.accounts.some(a => a.alias === request.payload.accountAlias)) throw new HostError('NOT_FOUND', 'The account is not in the current pool.'); return this.mutate(`probe:account:${request.payload.accountAlias}`, () => this.probeAccountQuota(request.payload.accountAlias)); }
       case 'quota.read': { this.requireCapability('quotaSnapshots'); if (!this.state.resources.accounts.some(a => a.alias === request.payload.accountAlias)) throw new HostError('NOT_FOUND', 'The account is not in the current pool.'); const quota = (await this.ui('ui_get_quota', { apiVersion: 1, account_id: request.payload.accountAlias })).data; this.state.resources.quotas[quota.accountAlias] = quota; this.emit(); return quota; }
       case 'artifacts.list': return this.artifacts(request.payload.taskId, request.payload.cursor);
       case 'artifact.read': return this.readArtifact(request.payload.taskId, request.payload.manifestSha256, request.payload.fileId, request.payload.side, request.payload.offsetBytes);

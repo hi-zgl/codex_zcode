@@ -1,13 +1,13 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { chmod, lstat, readFile, readdir, realpath, writeFile } from 'node:fs/promises';
-import { createWriteStream } from 'node:fs';
 import { connect } from 'node:net';
 import { homedir } from 'node:os';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { privateDirectory, writePrivateJson, type AccountCredentials } from '../accounts/index.js';
 import { injectAccount, initializeMachineIdentity, type InjectedIdentity } from './injection.js';
+import { workerLogWriter } from '../shared/rotating-log.js';
 export { injectAccount, initializeMachineIdentity, verifyInjectedIdentity, type InjectedIdentity } from './injection.js';
 
 export interface WorkerEndpoint { baseUrl: string; serverRoot: string; tokenFile: string }
@@ -90,6 +90,9 @@ export function processMatchesOwnership(processInfo: ProcIdentity | undefined, o
 function redactLog(line: string, account: AccountCredentials, secret: string): string {
   let clean = line;
   for (const value of [account.accessToken, account.zcodeJwtToken, account.refreshToken, secret]) if (value) clean = clean.split(value).join('[REDACTED]');
+  // Provider keys delimit this known identity with ':'. Short identities must
+  // not redact matching substrings of anonymous aliases or task/operation IDs.
+  if (account.userId) clean = clean.replace(new RegExp(`(?<![A-Za-z0-9_-])${account.userId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![A-Za-z0-9_-])`, 'g'), '[REDACTED]');
   return clean.replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, '[REDACTED_EMAIL]')
     .replace(/Bearer\s+\S+/gi, 'Bearer [REDACTED]')
     .replace(/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, '[REDACTED_JWT]');
@@ -227,8 +230,7 @@ export class WorkerSupervisor {
     const ownershipMarker = randomUUID();
     const startedAt = Date.now();
     const logPath = join(workerRoot, 'logs/server.log');
-    const log = createWriteStream(logPath, { flags: 'a', mode: 0o600 });
-    await chmod(logPath, 0o600).catch(() => undefined);
+    const log = workerLogWriter(logPath, () => console.error('Worker diagnostic log unavailable; execution continues'));
     const env: NodeJS.ProcessEnv = { ...process.env, ZCODE_DATA_BASE_DIR: join(workerRoot, 'data'), ZCODE_STORAGE_DIR: join(workerRoot, 'data/.zcode'), ZCODE_SESSION_DB_PATH: join(workerRoot, 'data/.zcode/cli/db/db.sqlite'), ZCODE_SERVER_ROOT: serverRoot, ZCODE_CREDENTIAL_SECRET: secret, ZCODE_POOL_OWNERSHIP: ownershipMarker, ZCODE_SERVER_SKIP_SERVICE_REGISTRATION: '1' };
     delete env.DISPLAY;
     delete env.WAYLAND_DISPLAY;
@@ -239,7 +241,7 @@ export class WorkerSupervisor {
     const child = spawn(runtime.node, [runtime.cli, 'serve', '--server-root', serverRoot, '--json'], { env, detached: true, stdio: ['ignore', 'pipe', 'pipe'], cwd: workerRoot });
     let spawnError = false;
     child.once('error', () => { spawnError = true; });
-    await new Promise<void>((resolveSpawn, reject) => { child.once('spawn', resolveSpawn); child.once('error', () => reject(new Error('Unable to launch official Server'))); }).catch(error => { log.end(); throw error; });
+    await new Promise<void>((resolveSpawn, reject) => { child.once('spawn', resolveSpawn); child.once('error', () => reject(new Error('Unable to launch official Server'))); }).catch(error => { log.close(); throw error; });
     for (const stream of [child.stdout!, child.stderr!]) {
       let pending = '';
       stream.setEncoding('utf8');
@@ -251,12 +253,12 @@ export class WorkerSupervisor {
       });
       stream.on('end', () => { if (pending) log.write(redactLog(pending, input.account, secret)); });
     }
-    child.once('close', () => { this.#children.delete(input.workerId); log.end(); });
+    child.once('close', () => { this.#children.delete(input.workerId); log.close(); });
     child.unref();
     (child.stdout as unknown as { unref?: () => void })?.unref?.();
     (child.stderr as unknown as { unref?: () => void })?.unref?.();
     const proc = await readProcessIdentity(child.pid!);
-    if (!proc) { log.end(); throw new Error('Official Server exited before ownership could be recorded'); }
+    if (!proc) { log.close(); throw new Error('Official Server exited before ownership could be recorded'); }
     const ownership: Ownership = { schemaVersion: 1, workerId: input.workerId, accountAlias: input.account.alias, provider: input.account.provider, serverRoot, pid: child.pid!, processStartTicks: proc.startTicks, ownershipMarker, startedAt, cliPath: runtime.cli };
     if (!processMatchesOwnership(proc, ownership)) { child.kill('SIGTERM'); throw new Error('Spawned Server ownership verification failed'); }
     await writePrivateJson(join(workerRoot, 'process.json'), ownership);

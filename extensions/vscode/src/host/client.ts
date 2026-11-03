@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { uiMethods, uiErrorDataSchema, type UiMethodName, type UiRpcParams, type UiRpcResult } from '../../../../src/shared/ui-contract.js';
 import { methods, poolPolicySchema } from '../../../../src/shared/methods.js';
 import { commanderSchema, workViewSchema } from '../../../../src/shared/work-contract.js';
+import { QUOTA_PROBE_TIMEOUT_MS } from '../quota-probe.js';
 
 /** JSON-RPC envelope; built once instead of per response frame. */
 const rpcResponseSchema = z.object({jsonrpc:z.literal('2.0'),id:z.string(),result:z.unknown().optional(),error:z.object({code:z.number(),message:z.string(),data:z.unknown().optional()}).optional()});
@@ -106,7 +107,7 @@ export class TypedClient {
   async call<K extends UiMethodName>(method: K, params: UiRpcParams<K>, signal?: AbortSignal): Promise<UiRpcResult<K>> {
     const parsed = uiMethods[method].params.parse(params);
     const mutation = method === 'ui_probe_quota' || method === 'ui_respond_approval';
-    const raw = await this.invoke(method,parsed,signal,10_000,mutation);
+    const raw = await this.invoke(method,parsed,signal,method === 'ui_probe_quota' ? QUOTA_PROBE_TIMEOUT_MS : 10_000,mutation);
     const value = uiMethods[method].result.safeParse(raw);
     if (!value.success) throw new HostError('INVALID_RESPONSE','The daemon response failed the UI schema.',mutation);
     return value.data as UiRpcResult<K>;

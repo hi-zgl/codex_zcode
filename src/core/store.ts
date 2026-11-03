@@ -844,6 +844,21 @@ export class DurableTaskStore {
     return (this.sql('SELECT * FROM tasks ORDER BY created_at,task_id').all() as unknown as TaskRow[]).map(taskFromRow);
   }
 
+  listLeasedTasks(): Task[] {
+    this.ensureOpen();
+    return (this.sql('SELECT * FROM tasks WHERE lease_held = 1 ORDER BY created_at,task_id')
+      .all() as unknown as TaskRow[]).map(taskFromRow);
+  }
+
+  getTaskState(taskId: string): Pick<Task, 'taskId' | 'workspaceId' | 'status' | 'revision' | 'leaseHeld'> {
+    this.ensureOpen();
+    requiredString(taskId, 'taskId');
+    const row = this.sql('SELECT task_id,workspace_id,status,revision,lease_held FROM tasks WHERE task_id = ?')
+      .get(taskId) as Pick<TaskRow, 'task_id' | 'workspace_id' | 'status' | 'revision' | 'lease_held'> | undefined;
+    if (!row) fail('TASK_NOT_FOUND', `Task ${taskId} was not found`);
+    return {taskId:row.task_id,workspaceId:row.workspace_id,status:row.status,revision:row.revision,leaseHeld:row.lease_held===1};
+  }
+
   get storeId(): string {
     this.ensureOpen();
     return (this.sql("SELECT value FROM ui_metadata WHERE key='store_id'").get() as {value:string}).value;
@@ -977,6 +992,17 @@ export class DurableTaskStore {
     return (this.sql('SELECT COALESCE(MAX(revision), 0) AS revision FROM task_events').get() as { revision: number }).revision;
   }
 
+  /** Commit notifications complement polling; another connection cannot emit them. */
+  subscribe(listener: () => void): () => void {
+    this.ensureOpen();
+    this.listeners.add(listener);
+    this.closeListeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+      this.closeListeners.delete(listener);
+    };
+  }
+
   wait(input: WaitInput): Promise<WaitResult> {
     this.ensureOpen();
     if (!Array.isArray(input?.taskIds) || input.taskIds.length < 1 || input.taskIds.length > 100) fail('INVALID_ARGUMENT', 'wait requires between 1 and 100 task IDs');
@@ -1016,20 +1042,25 @@ export class DurableTaskStore {
           // event that is absent from the returned task snapshots.
           this.ensureOpen();
           this.db.exec('BEGIN');
-          let tasks: Task[];
-          let revision: number;
+          let result: WaitResult | undefined;
           try {
-            tasks = taskIds.map((taskId) => this.getTask(taskId));
-            revision = this.getRevision();
+            const changedTaskIds = taskIds.filter((taskId) => {
+              const row = this.sql('SELECT revision FROM tasks WHERE task_id = ?').get(taskId) as {revision:number} | undefined;
+              if (!row) fail('TASK_NOT_FOUND', `Task ${taskId} was not found`);
+              return row.revision > cursors[taskId]!;
+            });
+            if (changedTaskIds.length > 0 || timedOut || timeoutMs === 0) {
+              result = {tasks:taskIds.map((taskId) => this.getTask(taskId)),changedTaskIds,
+                timedOut:changedTaskIds.length===0,revision:this.getRevision()};
+            }
             this.db.exec('COMMIT');
           } catch (error) {
             try { this.db.exec('ROLLBACK'); } catch { /* Preserve the read failure. */ }
             throw error;
           }
-          const changedTaskIds = tasks.filter((task) => task.revision > cursors[task.taskId]!).map((task) => task.taskId);
-          if (changedTaskIds.length > 0 || timedOut || timeoutMs === 0) {
+          if (result) {
             cleanup();
-            resolve({ tasks, changedTaskIds, timedOut: changedTaskIds.length === 0, revision });
+            resolve(result);
           }
         } catch (error) {
           cleanup();

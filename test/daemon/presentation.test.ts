@@ -96,6 +96,22 @@ test('pool control and overview views expose only numeric policy fields within t
   assert.match(JSON.parse(error.text).nextAction,/same request_id/);
 });
 
+test('automatic idle refusal is a fixed safe diagnostic and never claims shutdown',()=>{
+  for(const error of [
+    Object.assign(new Error(forbidden),{code:'POOL_NOT_IDLE'}),
+    new Error(`Pool has unfinished work; ${forbidden}`),
+  ]){
+    assert.equal(classifyMcpError(error),'POOL_NOT_IDLE');
+    const presented=presentMcpError(classifyMcpError(error),'pool_control',{action:'shutdown',only_if_idle:true,prompt:forbidden});
+    const value=JSON.parse(presented.text);
+    assert.equal(presented.isError,true);assert.equal(value.error,'POOL_NOT_IDLE');
+    assert.equal(value.stopping,undefined);assert.match(value.message,/No Workers were stopped/);
+    assert.match(value.message,/do not retry with only_if_idle false/);
+    assert.ok(Buffer.byteLength(presented.text)<=MCP_MAX_TEXT_BYTES);
+    assert.doesNotMatch(presented.text,/PRIVATE-NATIVE-CONTEXT|"prompt"/);
+  }
+});
+
 test('approval controls survive compact polling; truncated persistence never claims full review', () => {
   const approvalId = '审批-😀-保留原样';
   const detail = { approvalId, kind: 'permission', toolName: 'Edit', summary: '需要审阅'.repeat(400),

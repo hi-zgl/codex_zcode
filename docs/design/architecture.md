@@ -2,12 +2,12 @@
 
 [设计入口](README.md) · [需求说明](../requirements.md) · [验证范围](../validation/current.md)
 
-采用常驻 daemon、精简 MCP 入口、独立官方 Server 和 VS Code 工作台。daemon 拥有执行与资源事实，外部指挥拥有安排、验收和阶段确认。客户端退出不影响已经派发的工作；新的语义安排等待指挥恢复。
+采用按需启动、独立运行的 daemon、精简 MCP 入口、独立官方 Server 和 VS Code 工作台。daemon 拥有执行与资源事实，外部指挥拥有安排、验收和阶段确认。客户端退出不影响已经派发的工作；新的语义安排等待指挥恢复。
 
 ```mermaid
 flowchart LR
   Commander[外部指挥] --> MCP[MCP：交办 / 等待 / 推进]
-  MCP --> Daemon[常驻 daemon]
+  MCP --> Daemon[独立 daemon]
   UI[VS Code 工作台] --> Daemon
   CLI[本地 CLI] --> Daemon
   Daemon --> DB[(SQLite：总任务 / 执行 / 错误 / 决策)]
@@ -37,5 +37,9 @@ daemon 通过当前池的 Unix socket 提供 JSON-RPC，持有单实例锁。SQL
 进程 ready、请求收到、实际执行、原生终止、本地核验完成和指挥验收是不同事实。账号只在已证实停止、成果及必要上下文保存后释放。工作区与账号解耦，跨账号交接使用保存成果与精简上下文，不迁移原生会话。
 
 官方私有协议只位于运行时适配器。Host 不导入 daemon、SQLite 或运行时；Webview 不持有凭据、socket 或文件系统能力。面板与 MCP 各自按需读取，面板正文不会自动进入指挥上下文。
+
+daemon 每秒 pump 由 SQLite 筛选活动 Work，以及仍有占用、待收交付或仍需登记失败待办的终态 Work，收集与调度复用本轮快照；目录清理只读取必要候选的目录事实，并保护活动 Work 的执行与验收目录引用。状态表达式索引不改变 schema 版本，必要的历史 JSON 引用扫描仍在 SQLite 内执行，不能视为消除了所有历史规模成本。
+
+Work 与 Task 等待先查询轻量版本、归属或状态，同进程提交立即通知，跨进程分别保留 250 毫秒和默认 50 毫秒轮询兜底；需要响应时才在同一读事务中读取完整返回事实。受管日志保留与只读容量统计见[存储布局](../storage-layout.md#日志保留与只读统计)；交付、会话和任务历史仍无全局容量上限，不承诺无限规模读取或长期磁盘容量。
 
 具体任务与状态见[任务调度](task-orchestration.md)，账号与协议边界见[官方运行时](worker-runtime.md)，UI 合同见[工作台设计](../ui/design.md)。

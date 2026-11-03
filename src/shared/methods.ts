@@ -66,12 +66,13 @@ export const methods = {
   },
   pool_control: {
     description:
-      "Read or explicitly start the shared pool, batch user resource settings or finish the pool. Global concurrency changes require an explicit user instruction. Shutdown refuses active/uncertain tasks; reads never restart a stopped pool.",
+      "Read or explicitly start the shared pool, batch user resource settings or finish the pool. Automatic shutdown must set only_if_idle true: unfinished Work from any commander keeps it running. Explicit user shutdown may preserve pending Work. Shutdown always refuses held task leases; reads never restart a stopped pool. Global concurrency changes require an explicit user instruction.",
     schema: z
       .object({
         action: z
           .enum(["read", "start", "configure", "shutdown"])
           .default("read"),
+        only_if_idle: z.boolean().optional(),
         policy: poolUpdate.optional(),
         user_requested_pool_change: z.boolean().default(false),
         commanders: z

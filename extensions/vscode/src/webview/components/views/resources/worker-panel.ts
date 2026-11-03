@@ -165,7 +165,7 @@ export function renderWorkerSection(ctx: RenderContext, snapshot: UiSnapshot): H
 
   const sec = section(
     '执行器',
-    el('p', 'field-hint', '执行器使用绑定账号运行任务；每个账号同时使用一个执行器。'),
+    el('p', 'field-hint', '执行器是绑定一个账号的 ZCode 实例，每个账号同时使用一个。日常交办由指挥自动准备；以下手动管理用于检查和调试。'),
     form,
     messageFor(ctx, 'worker.start')
   );

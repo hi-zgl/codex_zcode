@@ -211,8 +211,10 @@ test('account.probe direct pass requests quota and updates live quota cache with
  }finally{h.service.dispose();}
 });
 
-test('accounts.probeAll batches all available accounts with dynamic quota updates and retains email/name metadata',async()=>{
+test('accounts.probeAll covers all imported accounts including unknown accounts without workers',async()=>{
  const h=await harness();try{
+  h.transport.fixture.overview.workers=h.transport.fixture.overview.workers.filter(worker=>worker.accountAlias!=='account-unknown');
+  h.transport.fixture.overview.accounts.push({alias:'account-invalid',provider:'zai',health:'invalid',enabled:false});
   await h.execute('connect');
   const demo=h.service.state.resources.accounts.find(a=>a.alias==='account-demo');
   const review=h.service.state.resources.accounts.find(a=>a.alias==='account-review');
@@ -223,10 +225,16 @@ test('accounts.probeAll batches all available accounts with dynamic quota update
   const firstProbe:any=await h.execute('account.probe',{accountAlias:'account-demo'});
   const firstRemaining=firstProbe.live?.remaining;
 
-  const probeAllResult:any=await h.execute('accounts.probeAll',{});
-  assert.equal(probeAllResult.probed,true);
+  const beforeBatch=h.transport.calls.length;
+  const probeAllResult=await h.execute('accounts.probeAll',{});
+  assert.deepEqual(probeAllResult,{total:4,succeeded:4,failed:0});
+  assert.deepEqual(h.transport.calls.slice(beforeBatch).filter(call=>call.method==='ui_probe_quota').map(call=>(call.params as any).account_id).sort(),h.service.state.resources.accounts.map(account=>account.alias).sort());
   assert.ok(h.service.state.resources.quotas['account-demo']?.live);
   assert.ok(h.service.state.resources.quotas['account-review']?.live);
+  assert.ok(h.service.state.resources.quotas['account-unknown']?.live);
+  assert.ok(h.service.state.resources.quotas['account-invalid']?.live);
+  assert.equal(h.service.state.resources.workers.some(worker=>worker.accountAlias==='account-unknown'),false);
+  assert.equal(h.transport.calls.some(call=>['start_worker','dispatch_task'].includes(call.method)),false);
 
   const secondRemaining=h.service.state.resources.quotas['account-demo']?.live?.remaining;
   assert.notEqual(firstRemaining,secondRemaining);
@@ -234,6 +242,84 @@ test('accounts.probeAll batches all available accounts with dynamic quota update
   await h.execute('resources.refresh',{});
   const thirdRemaining=h.service.state.resources.quotas['account-demo']?.live?.remaining;
   assert.notEqual(secondRemaining,thirdRemaining);
+ }finally{h.service.dispose();}
+});
+
+test('quota batch counts failed probes and reads back failure state while preserving the last quota',async()=>{
+ const h=await harness();try{
+  await h.execute('connect');
+  const previous:any=await h.execute('account.probe',{accountAlias:'account-demo'});
+  const failed=structuredClone(previous);
+  failed.lastProbe={state:'failed',attemptedAtMs:Date.now(),errorCode:'NATIVE_UNAVAILABLE'};
+  failed.live.freshness='stale';
+  const request=h.transport.request.bind(h.transport);let failedReads=0;
+  h.transport.request=async(method,params,signal)=>{
+   if(method==='ui_probe_quota'&&(params as any).account_id==='account-demo')throw new HostError('NATIVE_UNAVAILABLE','Fixture quota query failed.');
+   const response:any=await request(method,params,signal);
+   if(method==='ui_get_quota'&&(params as any).account_id==='account-demo'){failedReads++;return {...response,data:structuredClone(failed)};}
+   return response;
+  };
+  assert.deepEqual(await h.execute('accounts.probeAll'),{total:3,succeeded:2,failed:1});
+  assert.ok(failedReads>=1,'failed query state is read from the daemon');
+  const quota=h.service.state.resources.quotas['account-demo']!;
+  assert.equal(quota.live?.remaining,previous.live.remaining);
+  assert.equal(quota.live?.freshness,'stale');
+  assert.equal(quota.lastProbe.state,'failed');
+  assert.ok(h.service.state.resources.quotas['account-unknown']?.live,'another account still refreshes after a failure');
+ }finally{h.service.dispose();}
+});
+
+test('quota batch limits concurrency and coalesces account, worker and resource refresh probes',async()=>{
+ const h=await harness();let release=()=>{};
+ try{
+  for(let index=0;index<5;index++)h.transport.fixture.overview.accounts.push({alias:`extra-${index}`,provider:'zai',health:'unknown'});
+  await h.execute('connect');
+  const gate=new Promise<void>(resolve=>{release=resolve;});
+  const request=h.transport.request.bind(h.transport);let active=0,maxActive=0;const aliases:string[]=[];
+  h.transport.request=async(method,params,signal)=>{
+   if(method!=='ui_probe_quota')return request(method,params,signal);
+   const p=params as any;aliases.push(p.account_id??h.transport.fixture.overview.workers.find(worker=>worker.workerId===p.worker_id)!.accountAlias);
+   active++;maxActive=Math.max(maxActive,active);
+   try{await gate;return await request(method,params,signal);}finally{active--;}
+  };
+  const batch=h.execute('accounts.probeAll');
+  const single=h.execute('account.probe',{accountAlias:'account-demo'});
+  const worker=h.execute('worker.probe',{workerId:'worker-demo'});
+  const resources=h.execute('resources.refresh');
+  await new Promise<void>(resolve=>setImmediate(resolve));
+  assert.equal(active,4);assert.equal(aliases.filter(alias=>alias==='account-demo').length,1);
+  release();
+  const [summary]=await Promise.all([batch,single,worker,resources]);
+  assert.deepEqual(summary,{total:8,succeeded:8,failed:0});
+  assert.equal(maxActive,4);assert.equal(aliases.length,8);assert.equal(new Set(aliases).size,8);
+ }finally{release();h.service.dispose();}
+});
+
+test('changing connections stops queued quota probes from reaching the new pool',async()=>{
+ const h=await harness();let release=()=>{};
+ try{
+  for(let index=0;index<5;index++)h.transport.fixture.overview.accounts.push({alias:`extra-${index}`,provider:'zai',health:'unknown'});
+  await h.execute('connect');
+  const gate=new Promise<void>(resolve=>{release=resolve;});
+  const request=h.transport.request.bind(h.transport);let started=0;
+  h.transport.request=async(method,params,signal)=>{if(method==='ui_probe_quota'){started++;await gate;}return request(method,params,signal);};
+  const batch=h.execute('accounts.probeAll').then(()=>null,error=>error);
+  assert.equal(started,4);
+  await h.execute('connect');release();
+  const error=await batch;
+  assert.equal(error?.code,'STALE_CONNECTION');assert.equal(started,4,'old queued aliases are never started');
+  assert.equal(h.transports[1]!.calls.some(call=>call.method==='ui_probe_quota'),false,'old aliases never query the new connection');
+  assert.ok(Object.values(h.service.state.resources.quotas).every(quota=>quota.live===null));
+ }finally{release();h.service.dispose();}
+});
+
+test('quota queries have a 20 second RPC timeout while snapshot reads retain their existing timeout',async()=>{
+ const h=await harness();try{
+  const timeouts:{method:string;timeoutMs:number|undefined}[]=[];
+  const client=new TypedClient({request:async(method,params,signal,timeoutMs)=>{timeouts.push({method,timeoutMs});return h.transport.request(method,params,signal);},dispose(){}});
+  await client.call('ui_probe_quota',{apiVersion:1,account_id:'account-demo'});
+  await client.call('ui_get_quota',{apiVersion:1,account_id:'account-demo'});
+  assert.deepEqual(timeouts,[{method:'ui_probe_quota',timeoutMs:20_000},{method:'ui_get_quota',timeoutMs:10_000}]);
  }finally{h.service.dispose();}
 });
 
