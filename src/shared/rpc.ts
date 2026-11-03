@@ -36,7 +36,8 @@ export async function rpcCall<T = unknown>(method: string, params: Record<string
     socket.on('error',()=>{});
     const id = randomUUID();
     let done = false;
-    const timer = setTimeout(() => finish(new Error('Daemon RPC timed out; task execution state is unchanged')), options.timeoutMs ?? 40_000);
+    const waitTimeout=method==='wait_work'&&typeof params.timeout_sec==='number'?Math.min(300_000,Math.max(0,params.timeout_sec*1000))+10_000:40_000;
+    const timer = setTimeout(() => finish(new Error('Daemon RPC timed out; task execution state is unchanged')), options.timeoutMs ?? waitTimeout);
     function finish(error?: Error, result?: T) {
       if (done) return;
       done = true; clearTimeout(timer); options.signal?.removeEventListener('abort',abort);socket.destroy();

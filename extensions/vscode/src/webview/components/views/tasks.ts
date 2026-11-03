@@ -8,6 +8,10 @@ import { button, actionWithReason } from '../button.js';
 import { emptyCard, messageFor } from '../feedback.js';
 import { codexSetup } from '../header.js';
 import { renderTaskDetail } from './task-detail.js';
+import { renderPoolSummary, renderScope } from './pool-overview.js';
+import { renderWorkOverview } from './work-flow.js';
+import { renderPending } from './pending.js';
+import { renderErrorStats } from './error-stats.js';
 
 export function metric(ctx: RenderContext, label: string, count: number, filter: string, description: string): HTMLElement {
   const isSelected = ctx.state.filters.status === filter;
@@ -27,7 +31,7 @@ export function metric(ctx: RenderContext, label: string, count: number, filter:
 }
 
 export function renderFilters(ctx: RenderContext, snapshot: UiSnapshot): HTMLElement {
-  const projects = [...new Set(snapshot.resources.workspaces.map(workspace => workspace.repositoryPath))].filter(Boolean);
+  const projects = snapshot.projects.map(project=>project.repositoryPath);
   const filters = ctx.state.filters;
   const search = input(filters.query, 'query');
   delete search.dataset.field;
@@ -55,6 +59,10 @@ export function renderTasks(ctx: RenderContext, snapshot: UiSnapshot): HTMLEleme
   advanced.dataset.details = 'task-advanced';
   const page = el('div', 'task-page', heading('ZCODE / 任务', '任务监控', '由 Codex 拆分、派发和验收任务；在这里查看进度、处理必要审批、检查交付。', el('div', 'page-actions', codexSetup(ctx, snapshot, true), advanced)));
   page.append(messageFor(ctx, 'connection.codexSetup') ?? '');
+  page.append(renderScope(ctx, snapshot), renderPoolSummary(ctx, snapshot));
+  page.append(renderPending(ctx, snapshot));
+  page.append(renderWorkOverview(ctx, snapshot) ?? '');
+  page.append(renderErrorStats(ctx, snapshot));
   const totalMetric = el('div', 'metric metric-total',
     el('div', 'metric-icon-wrap total', icon('inbox', { size: 16 })),
     el('span', 'metric-number', String(snapshot.tasks.length).padStart(2, '0')),
@@ -98,7 +106,7 @@ export function renderTasks(ctx: RenderContext, snapshot: UiSnapshot): HTMLEleme
     row.setAttribute('aria-pressed', String(item.taskId === snapshot.selectedTaskId));
     row.setAttribute('aria-label', `${item.taskId}，${statusLabel(item)}，${item.workspaceId}，${item.workerId ?? '未绑定执行器'}`);
     const workerChip = el('span', `task-chip ${item.workerId ? 'has-worker' : 'no-worker'}`, icon('cpu', { size: 11 }), item.workerId ?? '未绑定执行器');
-    const retryChip = item.retry ? el('span', `task-chip task-retry ${item.retry.used > 0 ? 'used' : ''}`, icon('refresh', { size: 11 }), `原会话续跑 ${item.retry.used}/${item.retry.max}`) : el('span', 'task-chip muted', '续跑信息未提供');
+    const retryChip = item.retry ? el('span', `task-chip task-retry ${item.retry.used > 0 ? 'used' : ''}`, icon('refresh', { size: 11 }), `累计重试 ${item.retry.used} 次`) : el('span', 'task-chip muted', '续跑信息未提供');
     const branchTitle = workspace?.branch ? el('strong', 'task-row-title', icon('branch', { size: 12 }), workspace.branch) : el('strong', 'task-row-title', item.workspaceId);
     row.append(
       el('div', 'task-row-top', el('code', 'task-id', item.taskId), status(item, snapshot.connection.stale)),

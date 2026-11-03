@@ -11,6 +11,9 @@ import { renderApp } from '../../src/webview/components.js';
 import type { UiSnapshot } from '../../src/host/types.js';
 import type { WebviewRequest } from '../../src/host/protocol.js';
 import type { UiApprovalReview, UiTaskDetail, UiArtifactManifest, UiArtifactFile } from '../../../../src/shared/ui-contract.js';
+import {ActionService,type NativeAdapter} from '../../src/host/actions.js';
+import {MockTransport} from '../../src/host/mock.js';
+import {parseRequest} from '../../src/host/protocol.js';
 
 const fixture = JSON.parse(readFileSync(join(process.cwd(), process.cwd().endsWith('/extensions/vscode') ? 'test/fixtures/pool-demo.json' : 'extensions/vscode/test/fixtures/pool-demo.json'), 'utf8'));
 let browser: Window;
@@ -26,11 +29,12 @@ function snapshot(selected = 'task-approval'): UiSnapshot {
   const detail = details[selected] ?? null;
   const manifest = selected === 'task-complete' ? structuredClone(fixture.manifests[selected]) as UiArtifactManifest : null;
   return {
+    projects:fixture.overview.workspaces.map((workspace:{workspaceId:string;repositoryPath:string})=>({repositoryId:workspace.workspaceId,repositoryPath:workspace.repositoryPath})),
     connection: { state: 'connected', mode: 'mock', generation: 1, host: 'SSH: isolated-host', poolHome: '/mock/pool', trusted: true, lastReceivedAtMs: Date.now(), stale: false, storeId: 'mock-store', instanceId: 'mock-instance', daemonVersion: '0.1.0', capabilities: structuredClone(fixture.capabilities.capabilities), error: null },
     tasks: Object.values(details), scope: 'recent_50_loaded', total: null, listNextCursor: null, selectedTaskId: detail?.taskId ?? null, detail,
     resources: { accounts: structuredClone(fixture.overview.accounts), workers: fixture.overview.workers.map((worker: object) => ({ ...worker, leaseTaskIds: [] })), workspaces: structuredClone(fixture.overview.workspaces), quotas: {} },
     approvals: null, delivery: { manifest, files: manifest?.manifestSha256 ? structuredClone(fixture.files[manifest.manifestSha256]) as UiArtifactFile[] : [], nextCursor: null, reviewed: false },
-    draft: { workspaceId: 'workspace-demo', workerId: 'worker-demo', prompt: '', session: 'continue', mode: 'build', modelId: 'GLM-5.3-Flash', busyRetryLimit: 3, verifyCommands: [], submitToken: 'draft-token' }, actions: [], overviewIntervalSeconds: 30, poolPolicy: null, notice: null,
+    draft: { workspaceId: 'workspace-demo', workerId: 'worker-demo', prompt: '', session: 'continue', mode: 'build', modelId: 'GLM-5.3-Flash', verifyCommands: [], submitToken: 'draft-token' }, actions: [], overviewIntervalSeconds: 30, poolPolicy: null, notice: null,
   };
 }
 function review(): UiApprovalReview { const value = structuredClone(fixture.reviews['approval-demo']) as UiApprovalReview; value.expiresAtMs = Date.now() + 300_000; return value; }
@@ -336,8 +340,8 @@ test('verifying is active, recent-window filters are literal, and stale cache di
 
 test('draft validation names resource occupancy and field errors without persisting prompt', () => {
   const s = snapshot(); const state = createState(); applySnapshot(state, s);
-  const draft = state.draft!; draft.prompt = 'PRIVATE DRAFT'; draft.busyRetryLimit = 11; draft.verifyCommands = [{ command: '', args: [], timeoutMs: 99 }];
-  const errors = validateDraft(s, draft); assert.match(errors.busyRetryLimit!, /0–10/); assert.ok(errors['verify.0.command']); assert.ok(errors['verify.0.timeoutMs']);
+  const draft = state.draft!; draft.prompt = 'PRIVATE DRAFT'; draft.verifyCommands = [{ command: '', args: [], timeoutMs: 99 }];
+  const errors = validateDraft(s, draft); assert.ok(errors['verify.0.command']); assert.ok(errors['verify.0.timeoutMs']);
   const worker = s.resources.workers.find(item => item.workerId === draft.workerId)!; worker.leaseTaskIds = ['outside-recent-window'];
   assert.match(validateDraft(s, draft).workerId!, /outside-recent-window/);
   const persisted = JSON.stringify(persistedUi(state)); assert.equal(persisted.includes('PRIVATE DRAFT'), false); assert.equal(persisted.includes('verifyCommands'), false);
@@ -452,9 +456,65 @@ test('the initial Host-preferred repository selects the project once and filters
   const requests = h.sent.filter(request => request.type === 'tasks.list');
   assert.equal(requests.length, 1); assert.deepEqual(requests[0]!.payload, { filter: { repositoryId: 'workspace-unknown' } });
   assert.ok(!JSON.stringify(requests[0]).includes('/demo/other'), 'Webview sends the registered identity, never a filesystem path');
+  assert.deepEqual(h.sent.find(request=>request.type==='work.read')?.payload,{repositoryId:'workspace-unknown'});
   s.preferredRepositoryId = 'workspace-demo'; h.push(s);
   assert.equal(h.app.state.filters.project, '/demo/other', 'later active-editor changes cannot overwrite the initial selection');
   assert.equal(h.sent.filter(request => request.type === 'tasks.list').length, 1);
+});
+
+test('current project and known-work notification load beyond the shared twenty without background scope overwrite',async()=>{
+  const source=structuredClone(fixture),target=structuredClone(source.workOverview.works[0]);
+  target.workId='work-outside-window';target.goal='首二十条以外的当前项目目标';target.updatedAt=1;
+  const recent=Array.from({length:21},(_,index)=>({...structuredClone(target),workId:`recent-${index}`,goal:`其他项目 ${index}`,repositoryPath:'/demo/other',updatedAt:100+index}));
+  source.workOverview.works=[...recent,target];
+  const transport=new MockTransport(source),initial=snapshot();initial.connection.state='disconnected';initial.connection.storeId=null;initial.workOverview=null;
+  const h=harness(initial);
+  const native:NativeAdapter={trusted:()=>true,getState:<T>(_key:string,fallback:T)=>fallback,setState:async()=>{},pickAccountFiles:async()=>undefined,pickRepository:async()=>undefined,openDiff:async()=>{},openSettings:async()=>{},saveInterval:async()=>{},copyDiagnostics:async()=>{},guidance:async()=>{}};
+  let context={workspaceFolderPaths:[] as string[]};
+  const service=new ActionService({mode:'mock',host:initial.connection.host,authority:'local',poolHome:initial.connection.poolHome,initialGeneration:1,native,createTransport:async()=>transport,projectContext:()=>context,onSnapshot:value=>h.push(value)});
+  h.reply(request=>service.execute(parseRequest(request)));h.push(service.snapshot());
+  try{
+    await h.app.action('connect');
+    assert.equal(service.state.workOverview!.works.length,20);assert.equal(service.state.workOverview!.truncated,true);
+    assert.equal(service.state.workOverview!.works.some(work=>work.workId===target.workId),false);
+    h.push({...structuredClone(service.snapshot()),preferredRepositoryId:service.snapshot().projects.find(project=>project.repositoryPath==='/demo/project')!.repositoryId});
+    await h.app.action('scope.project');
+    assert.deepEqual(service.state.workOverview!.works.map(work=>work.workId),[target.workId]);
+    assert.ok(h.root.querySelector('.work-goal')!.textContent!.includes(target.goal));
+    assert.ok(transport.calls.some(call=>call.method==='ui_get_work_overview'&&(call.params as any).repository_path==='/demo/project'));
+    const original=transport.request.bind(transport);let release:(()=>void)|undefined;
+    transport.request=async(method,params,signal)=>{const p=params as any;if(method==='ui_get_work_overview'&&!p.repository_path&&!p.work_id)await new Promise<void>(resolve=>{release=resolve;});return original(method,params,signal);};
+    const discovery=service.refreshDecisions();await new Promise(resolve=>setImmediate(resolve));
+    assert.ok(release);release();await discovery;
+    assert.deepEqual(service.state.workOverview!.works.map(work=>work.workId),[target.workId]);assert.equal(h.app.state.filters.project,'/demo/project');
+    transport.request=original;
+    await service.refresh();assert.equal(service.state.workOverviewScope!.repositoryPath,'/demo/project');
+    await h.app.action('scope.pool');assert.equal(service.state.workOverview!.works.some(work=>work.workId===target.workId),false);
+    await service.focusWork(target.workId);await new Promise(resolve=>setImmediate(resolve));
+    assert.deepEqual(service.state.workOverview!.works.map(work=>work.workId),[target.workId]);
+    assert.equal(service.state.workOverviewScope!.workId,target.workId);assert.equal(h.app.state.selectedWorkId,target.workId);
+    assert.ok(h.root.querySelector('.work-goal')!.textContent!.includes(target.goal));
+    await service.refreshDecisions();await service.refresh();
+    assert.equal(service.state.workOverviewScope!.workId,target.workId);assert.equal(h.app.state.filters.project,'/demo/project');
+    assert.ok(transport.calls.some(call=>call.method==='ui_get_work_overview'&&(call.params as any).work_id===target.workId));
+    let begin!:()=>void,finish!:()=>void;const started=new Promise<void>(resolve=>{begin=resolve;});
+    transport.request=async(method,params,signal)=>{if(method==='ui_get_work_overview'&&(params as any).work_id===target.workId){begin();await new Promise<void>(resolve=>{finish=resolve;});}return original(method,params,signal);};
+    const lateRefresh=service.refresh();await started;await h.app.action('scope.pool');finish();await lateRefresh;
+    assert.equal(service.state.workOverviewScope!.repositoryPath,null);assert.equal(service.state.workOverviewScope!.workId,null);
+    assert.equal(service.state.workOverview!.works.some(work=>work.workId===target.workId),false);assert.equal(h.app.state.filters.project,'');
+    transport.request=original;context={workspaceFolderPaths:['/demo/project']};
+    transport.fixture.overview.workspaces=transport.fixture.overview.workspaces.filter(workspace=>workspace.repositoryPath!=='/demo/project');
+    const pending=transport.fixture.workOverview!.works.find(work=>work.workId===target.workId)!;pending.items=[];pending.deliveries=[];pending.acceptances=[];
+    pending.todos=[{todoId:'cold-resource-decision',kind:'resource_shortage',summary:'尚未取得账号，等待决定',itemIds:[],availableAccounts:0,createdAt:1}];
+    await service.refresh();assert.equal(h.app.state.filters.project,'','context discovery cannot override an explicit pool selection');
+    const projectId=service.snapshot().projects.find(project=>project.repositoryPath==='/demo/project')!.repositoryId;
+    assert.equal(service.state.resources.workspaces.some(workspace=>workspace.repositoryPath==='/demo/project'),false);
+    assert.equal(service.snapshot().preferredRepositoryId,projectId);await h.app.action('scope.project');
+    assert.deepEqual(service.state.workOverview!.works.map(work=>work.workId),[target.workId]);assert.equal(service.state.workOverviewScope!.repositoryPath,'/demo/project');
+    assert.match(h.root.querySelector('#pending-items')!.textContent!,/尚未取得账号，等待决定/);
+    await service.refresh();assert.equal(service.snapshot().projects.find(project=>project.repositoryPath==='/demo/project')!.repositoryId,projectId);
+    assert.equal(transport.calls.some(call=>call.method==='create_workspace'),false,'viewing cold pending work never prepares a workspace');
+  }finally{service.dispose();}
 });
 
 test('user project choices and explicit whole-pool selection survive later preference snapshots', async () => {
@@ -524,4 +584,32 @@ test('task list supports arrow-key roving focus without selecting',async()=>{
  rows().at(-1)!.dispatchEvent(new browser.KeyboardEvent('keydown',{key:'Home',bubbles:true}) as unknown as Event);
  assert.equal(browser.document.activeElement,rows()[0] as unknown);
  assert.equal(h.sent.some(r=>r.type==='task.select'),false,'moving focus does not select');
+});
+
+test('unknown zero errors remain observed counts with incomplete coverage on tasks and account cards', () => {
+  const s=snapshot();s.errorStats={total:0,categories:{},events:[],complete:null,incompleteTaskCount:1};
+  s.workOverview=structuredClone(fixture.workOverview);
+  s.workOverview!.accountErrors['account-unknown']={total:0,categories:{},complete:null,incompleteTaskCount:1};
+  const state=createState();applySnapshot(state,s);
+  let dom=renderApp({state,action:()=>{}});
+  const stats=dom.querySelector('.error-stats')!.textContent!;
+  assert.match(stats,/已观测错误 0 次/);assert.match(stats,/观测完整性待核实/);assert.match(stats,/0 次不代表没有发生/);
+  assert.doesNotMatch(stats,/已完整观测的查询范围内没有错误/);
+  state.page='resources';dom=renderApp({state,action:()=>{}});
+  const account=dom.querySelector('[data-action="account.toggle"][data-alias="account-unknown"]')!.closest('article')!;
+  assert.match(account.textContent!,/已观测错误 0 次 · 观测完整性待核实/);
+  s.errorStats={total:0,categories:{},events:[],complete:true,incompleteTaskCount:0};applySnapshot(state,s);state.page='tasks';dom=renderApp({state,action:()=>{}});
+  assert.match(dom.querySelector('.error-stats')!.textContent!,/已完整观测的查询范围内没有错误/);
+});
+
+test('fixed acceptance folders are temporary and completed work keeps artifact references instead', () => {
+  const s=snapshot();s.workOverview=structuredClone(fixture.workOverview);
+  const state=createState();applySnapshot(state,s);
+  const path=s.workOverview!.works[0]!.acceptances[0]!.workspacePath!;
+  let dom=renderApp({state,action:()=>{}});
+  assert.ok(dom.querySelector('.acceptance-summary')!.textContent!.includes(path));
+  assert.match(dom.querySelector('.acceptance-summary')!.textContent!,/总任务结束后清理/);
+  s.workOverview!.works[0]!.status='completed';applySnapshot(state,s);dom=renderApp({state,action:()=>{}});
+  const summary=dom.querySelector('.acceptance-summary')!.textContent!;
+  assert.equal(summary.includes(path),false);assert.match(summary,/固定交付 delivery-ui/);assert.match(summary,/不再作为可用入口/);
 });

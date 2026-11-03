@@ -6,7 +6,11 @@ import { ChannelRpc, type ProtocolMessageRecord } from './rpc.js';
 import { classifyError, ConversationProjection, record, redact, TopicAssembler } from './events.js';
 
 const AGENT = 'zcode-agent';
-export const ZCODE_SERVER_ADAPTER_ID = 'zcode-server/3.16.3/proto-1-wire-3';
+export const ZCODE_SERVER_ADAPTER_ID = 'zcode-server/3.16.3/proto-1-wire-3-single-agent';
+// Verified 3.16.3 native session/create + session/resume toolDenylist: the runtime
+// excludes these tools from its registry, including in yolo/guarded modes.
+export const SINGLE_AGENT_TOOL_DENYLIST = ['Agent', 'Task', 'SendMessage', 'Workflow', 'CreateWorkflow', 'AmendWorkflow', 'ResumeWorkflowRun', 'EvalWorkflowSnippet', 'FillWorkflowHole', 'OffPeakCreate', 'CronCreate', 'CronUpdate'] as const;
+const RESTRICTED_SESSION_PREFIX = 'session_zcode_pool_v1_';
 
 export class RuntimeFault extends Error {
   readonly category;
@@ -42,6 +46,14 @@ function accepted(ack: Record<string, any>, operation: string): void {
   if (!['accepted', 'duplicate', 'noop'].includes(ack.status)) throw new RuntimeFault(`Official ${operation} ${ack.status ?? 'failed'}: ${ack.reasonCode ?? ''} ${ack.message ?? ''}`);
 }
 
+/** Initial V4 admission precedes execution; missing fields never prove emptiness. */
+export function isEmptyInitialDraft(raw: Record<string, any>): boolean {
+  const arrays = [raw.rows?.window, raw.control?.activeWorks, raw.queue?.items, raw.pendingCommands, raw.backgroundWorks,
+    raw.pendingInteractions, raw.subagents?.running, raw.subagents?.childSessionIds];
+  return raw.control?.phase === 'draft' && raw.revision === 0 && raw.seq === 0
+    && raw.subagents?.endedTotal === 0 && arrays.every(value => Array.isArray(value) && value.length === 0);
+}
+
 interface SessionState {
   ref: SessionRef;
   projection: ConversationProjection;
@@ -54,6 +66,9 @@ interface SessionState {
   resolveInitial: () => void;
   rejectInitial: (error: Error) => void;
   initialTimer: NodeJS.Timeout;
+  frames: Promise<void>;
+  nativeDebugKey?: string;
+  nativeDebugComplete: boolean;
   failure?: Error;
 }
 
@@ -95,8 +110,11 @@ export class ZCodeServerConnection implements RuntimeConnection {
   private readonly clientId = `zcode-pool-${randomUUID()}`;
   private readonly rpc: ChannelRpc;
   private readonly sessions = new Map<string, SessionState>();
+  private readonly restrictedSessions = new Set<string>();
+  private origin?: URL;
+  private ingressToken?: string;
   private closed = false;
-  constructor(readonly info: RuntimeInfo, private readonly timeoutMs: number, onProtocolMessage?: (message: ProtocolMessageRecord) => void) {
+  constructor(readonly info: RuntimeInfo, private readonly timeoutMs: number, private readonly onProtocolMessage?: (message: ProtocolMessageRecord) => void, private readonly observeNativeErrors = true) {
     this.rpc = new ChannelRpc(timeoutMs, (error) => {
       if (this.closed) return;
       this.closed = true;
@@ -105,6 +123,8 @@ export class ZCodeServerConnection implements RuntimeConnection {
   }
 
   async initialize(url: URL, token?: string): Promise<void> {
+    this.origin = new URL(url);
+    this.ingressToken = token;
     const ws = new URL('/ws', url); ws.protocol = 'ws:';
     await this.rpc.connect(ws.toString(), token);
     const hello = record(await this.rpc.call(AGENT, 'helloConversationV4'));
@@ -140,9 +160,28 @@ export class ZCodeServerConnection implements RuntimeConnection {
       let project = projects.find((entry) => !entry.deleted && entry.roots?.length === 1 && entry.roots[0]?.rootPath === workspacePath);
       if (!project) project = record(await this.rpc.call('project', 'saveProject', { roots: [workspacePath], primaryRoot: workspacePath, name: basename(workspacePath) }));
       if (typeof project.id !== 'string' || !project.id) throw new RuntimeFault('Official workspace project has no ID');
-      const ack = await this.command({ workspacePath, sessionId: null }, 'createSession', { workspaceId: workspacePath, config: { ...(input.modelSelection ? { modelSelection: input.modelSelection } : {}), mode: input.mode ?? 'build' } }, randomUUID(), project.id);
-      sessionId = ack.result?.sessionId;
-      if (typeof sessionId !== 'string' || !sessionId) throw new RuntimeFault('Official createSession accepted without a session ID; reconcile before retrying', { executionUncertain: true });
+      // V4 createSession silently strips toolDenylist. Use the one native API that
+      // installs it at runtime creation, then subscribe through the replayable API.
+      const catalog = await this.modelCatalog();
+      const preferred = record(catalog.preferredSelection);
+      const requested = input.modelSelection ?? (typeof preferred.providerId === 'string' && typeof preferred.modelId === 'string' ? preferred as ModelSelection : undefined);
+      if (!requested) throw new RuntimeFault('Official model catalog has no explicit selection');
+      const matchingPreferred = preferred.providerId === requested.providerId && preferred.modelId === requested.modelId ? record(preferred.options) : {};
+      const selection = { ...requested, ...(requested.options || matchingPreferred.reasoningLevel ? { options: { ...matchingPreferred, ...requested.options } } : {}) };
+      const requestedSessionId = `${RESTRICTED_SESSION_PREFIX}${randomUUID()}`;
+      let native: Record<string, any>;
+      try {
+        native = record(await this.rpc.call(AGENT, 'createSession', { workspacePath, projectId: project.id, sessionId: requestedSessionId,
+          model: selection, ...(selection.options?.reasoningLevel ? { thoughtLevel: selection.options.reasoningLevel } : {}),
+          // V4 admission persists a deferred session before saving its first
+          // input. Native immediate creation alone does not create that DB row.
+          mode: input.mode ?? 'build', persistence: 'deferred', titleGenerationEnabled: false, toolDenylist: [...SINGLE_AGENT_TOOL_DENYLIST] }));
+      } catch (error) {
+        throw new RuntimeFault(error instanceof Error ? error.message : String(error), { cause: error, executionUncertain: /timed out|closed|WebSocket/i.test(error instanceof Error ? error.message : String(error)) });
+      }
+      sessionId = native.session?.sessionId;
+      if (sessionId !== requestedSessionId) throw new RuntimeFault('Official createSession did not preserve the restricted session identity; reconcile before retrying', { executionUncertain: true });
+      this.restrictedSessions.add(this.key({ workspacePath, sessionId }));
     }
     const ref = { workspacePath, sessionId };
     await this.ensureSubscribed(ref);
@@ -166,7 +205,7 @@ export class ZCodeServerConnection implements RuntimeConnection {
     const initial = new Promise<void>((resolvePromise, rejectPromise) => { resolveInitial = resolvePromise; rejectInitial = rejectPromise; });
     void initial.catch(() => {});
     const wake = new Set<() => void>();
-    const state: SessionState = { ref, projection: new ConversationProjection(ref.sessionId, () => { for (const callback of wake) callback(); }), assembler: new TopicAssembler(), wake, release: () => {}, initial, resolveInitial, rejectInitial, initialTimer: setTimeout(() => this.sessionFailure(state, new Error('Official conversation snapshot timed out')), this.timeoutMs) };
+    const state: SessionState = { ref, projection: new ConversationProjection(ref.sessionId, () => { for (const callback of wake) callback(); }), assembler: new TopicAssembler(), wake, release: () => {}, initial, resolveInitial, rejectInitial, frames: Promise.resolve(), nativeDebugComplete: true, initialTimer: setTimeout(() => this.sessionFailure(state, new Error('Official conversation snapshot timed out')), this.timeoutMs) };
     this.sessions.set(key, state);
     const early: unknown[] = [];
     const accept = (wire: unknown) => {
@@ -177,8 +216,43 @@ export class ZCodeServerConnection implements RuntimeConnection {
       try {
         const frame = state.assembler.accept(wire);
         if (!frame) return;
-        state.projection.apply(frame, state.logEpoch);
-        if (state.projection.snapshot) { clearTimeout(state.initialTimer); state.resolveInitial(); }
+        state.frames = state.frames.then(async () => {
+          if (state.failure || this.closed) return;
+          const payload = record(frame.payload);
+          const changes = payload.kind === 'snapshot' ? [record(payload.snapshot)] : (payload.deltas ?? []).map((delta: any) => delta.op === 'state.updated' ? record(delta.patch) : { row: delta.row });
+          const readFailures = this.observeNativeErrors && changes.some((change: any) => Object.hasOwn(record(change.control), 'apiRetry')
+            || change.row?.kind === 'turnHeader' && change.row.state !== 'running'
+            || change.rows?.window?.some((row: any) => row.kind === 'turnHeader' && row.state !== 'running'));
+          let nativeEvents: unknown[] = [];
+          let nativeObservation: false | { complete: boolean; reason?: string } = false;
+          if (readFailures) {
+            // 3.16.3 readSessionEvents rejects its own real tool payload fields.
+            // Use the dedicated read-only network snapshot as the one source.
+            // Its last-100 window must overlap the previous stable event key.
+            try {
+              const debug = record(await this.rpc.call(AGENT, 'readSessionDebug', ref));
+              if (debug.sessionId !== ref.sessionId || !Array.isArray(debug.networkEntries)) throw new Error('Invalid native network debug snapshot');
+              const entries = debug.networkEntries.map(record);
+              const previous = state.nativeDebugKey === undefined ? -1 : entries.findIndex(entry => entry.eventKey === state.nativeDebugKey);
+              if (state.nativeDebugKey !== undefined && previous < 0 || state.nativeDebugKey === undefined && entries.length >= 100) state.nativeDebugComplete = false;
+              nativeEvents = entries.slice(previous + 1).filter(entry => typeof entry.eventKey === 'string' && entry.eventKey).map(entry => ({
+                sessionId: ref.sessionId, eventId: entry.eventKey, sourceCommandId: entry.queryId, timestamp: entry.recordedAt, type: 'session.updated',
+                payload: { type: entry.statusType, requestId: entry.requestId, attempt: entry.attempt, maxAttempts: entry.maxAttempts,
+                  retryable: entry.retryable, statusCode: entry.statusCode, reason: entry.reason, message: entry.message, delayMs: entry.delayMs,
+                  responseHeaders: Object.fromEntries(Object.entries(record(entry.responseHeaders)).filter(([key]) => key.toLowerCase() === 'retry-after')) },
+              }));
+              state.nativeDebugKey = entries.at(-1)?.eventKey;
+              nativeObservation = { complete: state.nativeDebugComplete, ...(!state.nativeDebugComplete ? { reason: 'native_debug_window_gap' } : {}) };
+            } catch {
+              // Accounting unavailability does not erase a checked execution
+              // terminal or require replaying already completed model work.
+              state.nativeDebugComplete = false;
+              nativeObservation = { complete: false, reason: 'source_read_failed' };
+            }
+          }
+          state.projection.apply(frame, state.logEpoch, nativeEvents, nativeObservation);
+          if (state.projection.snapshot) { clearTimeout(state.initialTimer); state.resolveInitial(); }
+        }).catch(error => this.sessionFailure(state, error instanceof Error ? error : new Error(String(error))));
       } catch (error) { this.sessionFailure(state, error instanceof Error ? error : new Error(String(error))); }
     };
     try {
@@ -205,12 +279,19 @@ export class ZCodeServerConnection implements RuntimeConnection {
     if (!input.prompt.trim()) throw new Error('Task prompt cannot be empty');
     const state = await this.ensureSubscribed(session);
     if (state.projection.snapshot?.control?.activeWorks?.length) throw new RuntimeFault('Session already has active work; wait or cancel before dispatching');
+    if (!this.restrictedSessions.has(this.key(session))) {
+      // Resuming an already resident legacy runtime does not replace its tools.
+      // Only our policy-versioned sessions can prove they were created restricted.
+      if (!session.sessionId.startsWith(RESTRICTED_SESSION_PREFIX)) throw new RuntimeFault('Single-agent tool policy is unverified for this existing session; start a new session before dispatching');
+      await this.rpc.call(AGENT, 'resumeSession', { ...session, toolDenylist: [...SINGLE_AGENT_TOOL_DENYLIST] });
+      this.restrictedSessions.add(this.key(session));
+    }
     if (input.modelSelection) this.assertSelection(session, input.modelSelection);
     const currentSelection = selectionFromSnapshot(state.projection.snapshot!);
     const requestedSelection = input.modelSelection;
     const modelSelection = requestedSelection ? { ...requestedSelection, ...(currentSelection?.options || requestedSelection.options ? { options: { ...currentSelection?.options, ...requestedSelection.options } } : {}) } : undefined;
     const commandId = input.requestId ?? randomUUID();
-    await this.command(session, 'sendText', { text: input.prompt, requestedDelivery: 'startNow', ...(modelSelection ? { modelSelection } : {}), ...(input.mode ? { mode: input.mode } : {}) }, commandId);
+    await this.command(session, 'sendText', { text: input.prompt, requestedDelivery: 'startNow', toolDisallowlist: [...SINGLE_AGENT_TOOL_DENYLIST], ...(modelSelection ? { modelSelection } : {}), ...(input.mode ? { mode: input.mode } : {}) }, commandId);
     return { ...session, turnId: commandId, commandId };
   }
 
@@ -239,6 +320,22 @@ export class ZCodeServerConnection implements RuntimeConnection {
     const raw = state.projection.snapshot!;
     return {...snapshotView(session,raw),cursor:state.projection.cursor};
   }
+  async freshReadSession(session: SessionRef): Promise<SessionSnapshot> {
+    if (this.closed || !this.origin) throw new RuntimeFault('Runtime connection is closed');
+    const reader = new ZCodeServerConnection({ ...this.info }, this.timeoutMs, this.onProtocolMessage, false);
+    try {
+      await reader.initialize(this.origin, this.ingressToken);
+      // syncHistory on this fresh connection only subscribes to the explicit ID.
+      // It never calls openSession/createSession/resumeSession/sendText.
+      return await reader.syncHistory(session);
+    } finally { await reader.close(); }
+  }
+  async readNativeFacts(session: SessionRef): Promise<RuntimeEvent[]> {
+    const state = await this.ensureSubscribed(session);
+    await state.frames;
+    return state.projection.history.filter(event => event.type === 'error' && event.data.origin === 'native_model_request'
+      || event.type === 'runtime_status' && event.data.kind === 'native_error_observation').map(event => structuredClone(event));
+  }
   async readApprovalSnapshot(session: SessionRef) {
     const state=await this.ensureSubscribed(session);
     const raw=structuredClone(state.projection.snapshot!);
@@ -251,7 +348,15 @@ export class ZCodeServerConnection implements RuntimeConnection {
   }
   async queryCommand(session: SessionRef, commandId: string): Promise<Record<string, unknown> | 'unknown'> {
     const response = record(await this.rpc.call(AGENT, 'queryConversationCommandsV4', { workspacePath: session.workspacePath, commands: [{ sessionId: session.sessionId, commandId }] }));
-    return response.results?.[0]?.result === 'unknown' ? 'unknown' : redact(record(response.results?.[0]?.result));
+    if (response.results?.[0]?.result === 'unknown') return 'unknown';
+    const result = record(response.results?.[0]?.result);
+    if (session.sessionId.startsWith(RESTRICTED_SESSION_PREFIX) && result.commandId === commandId && result.status === 'failed'
+      && result.reasonCode === 'fault.command.executionFailed' && result.revisionAtDecision === 0) {
+      const fresh = await this.freshReadSession(session);
+      if (isEmptyInitialDraft(record(fresh.raw))) return { ...redact(result), admissionRejected: true,
+        evidence: `Official command ${commandId} failed at admission revision 0; independent original-session snapshot is still draft at revision/sequence 0 with no rows, active, queued, pending, background or child work` };
+    }
+    return redact(result);
   }
 
   async respondApproval(turn: TurnRef, approvalId: string, decision: ApprovalDecision): Promise<void> {

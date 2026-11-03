@@ -31,7 +31,8 @@ function updateCountdowns(root: HTMLElement): void {
     if (!raw) continue;
     const resetsAt = Number(raw);
     if (Number.isFinite(resetsAt)) {
-      element.textContent = formatResetTime(resetsAt, now);
+      const kind = element.dataset.resetKind;
+      element.textContent = formatResetTime(resetsAt, now, kind === 'reset' || kind === 'expires' ? kind : 'unknown');
     }
   }
 }

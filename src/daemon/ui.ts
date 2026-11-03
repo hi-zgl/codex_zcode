@@ -8,6 +8,8 @@ import type {SessionSnapshot} from '../runtime/types.js';
 import {loadManifest,manifestView,publicArtifactFile,readSavedFile} from './artifacts.js';
 import {bounded,canonicalJson,digest,UiCursors,UiRpcError} from './ui-support.js';
 import {resolveQuotaSnapshot} from './quota-resolver.js';
+import type {WorkView, Commander, ErrorStats} from '../shared/work-contract.js';
+import type {PoolPolicy} from '../core/types.js';
 
 export interface UiApprovalObservation {snapshot:SessionSnapshot;approvals:Record<string,unknown>[];nativeTurnId:string;sourceComplete:boolean;stablePermissionIds:boolean;unattributedCount:number}
 export interface UiBackend {
@@ -18,6 +20,8 @@ export interface UiBackend {
  sendApproval(task:Task,approvalId:string,optionId:string):Promise<void>;
  accounts():Promise<AccountSummary[]>;
  probeQuota(target:{workerId?:string;accountAlias?:string}):Promise<{accountAlias:string;providerId:string;quota:Record<string,unknown>}>;
+ workOverview?(filter:{repositoryPath?:string;workId?:string}):{works:WorkView[];commanders:Commander[];poolPolicy:PoolPolicy};
+ errorStats?(filter:{accountAlias?:string;taskId?:string;workId?:string;fromMs?:number;toMs?:number}):ErrorStats;
 }
 interface StoredReview {descriptor:UiApprovalReview;snapshotKey:string|null}
 interface ActionReceipt {taskId:string;approvalId:string;actionId:string;ownerKey:string;decision:string;responseState:'intent_recorded'|'awaiting_native'|'resolved_unattributed'|'unknown';nativeRevisionAtCheck:number;taskRevision:number;intentAtMs:number}
@@ -68,7 +72,7 @@ export class UiService {
    leaseHeld:task.leaseHeld,executionStopped:task.executionStopped,cancelRequestedAtMs:task.cancelRequestedAt,
    approval:{pendingCount:Number.isSafeInteger(detail.pendingApprovalCount)&&detail.pendingApprovalCount>=0?detail.pendingApprovalCount:task.executionStopped?0:null,
     responsePending:detail.approvalResponsePending===true||actions.some(a=>['intent_recorded','awaiting_native','unknown'].includes(a.responseState)),stateKnown:task.executionStopped||this.backend.attachment(task.taskId)&&Number.isSafeInteger(detail.pendingApprovalCount)},
-   retry:{used:task.busyRetryCount,max:Number.isSafeInteger(policy.busyRetryLimit)?policy.busyRetryLimit:3,reason:'model_busy'}};
+   retry:{used:task.busyRetryCount,max:null,reason:'model_busy'}};
  }
  private detail(task:Task):UiTaskDetail{
   const ws=this.store.getWorkspace(task.workspaceId),result=this.store.getResult(task.taskId),policy=record(task.executionPolicy),binding=record(task.runtimeBinding);
@@ -84,7 +88,7 @@ export class UiService {
    selection:{requestedWorkerId:task.requestedWorkerId,requestedSession:task.session,mode:['build','edit','plan','yolo','guarded'].includes(policy.mode)?policy.mode:'build',requestedModelId:typeof policy.modelId==='string'?policy.modelId:'GLM-5.3-Flash',
     binding:typeof binding.accountAlias==='string'&&typeof binding.providerId==='string'&&typeof binding.modelId==='string'?{accountAlias:binding.accountAlias,providerId:binding.providerId,modelId:binding.modelId}:null},
    verificationPolicy:{complete,defaultDiffCheck:shape&&commands.length===0,commands:complete?commands.map(c=>({command:c.command,args:c.args,timeoutMs:c.timeout_ms})):[],unavailableReason:complete?null:'verification_policy_not_safely_presentable'},
-   attempts:attempts.map(a=>({index:a.index,commandId:a.commandId,sessionId:a.sessionId,turnId:a.turnId,intentAtMs:a.intentAt,acknowledgedAtMs:a.acknowledgedAt,terminalState:a.terminalState,stopProofKind:a.stopProof?.kind??null,failureCategory:a.failureCategory,busyRetryEligible:a.busyRetryEligible,continuationBlocked:a.continuationBlocked})),currentAttemptIndex:attempts.at(-1)?.index??null,
+   attempts:attempts.slice(-25).map(a=>({index:a.index,commandId:a.commandId,sessionId:a.sessionId,turnId:a.turnId,intentAtMs:a.intentAt,acknowledgedAtMs:a.acknowledgedAt,terminalState:a.terminalState,stopProofKind:a.stopProof?.kind??null,failureCategory:a.failureCategory,busyRetryEligible:a.busyRetryEligible,continuationBlocked:a.continuationBlocked})),attemptCount:attempts.length,currentAttemptIndex:attempts.at(-1)?.index??null,
    controls:{cancel:controls(canRecover&&!task.executionStopped&&task.cancelRequestedAt===null,'task_stopped_cancel_pending_or_final',['persist_cancel_intent','request_native_stop','retain_lease_until_stop_proof']),
     reconcile:controls(canRecover&&!this.backend.attachment(task.taskId),'already_attached_or_no_lease',['observe_native_execution','update_task_records','may_release_proved_stopped_lease']),
     resume:controls(canRecover&&!this.backend.attachment(task.taskId)&&hasPolicy,'policy_incomplete_verification_interrupted_or_already_attached',['reattach_current_command','may_run_existing_verification','may_continue_eligible_model_busy_attempt'])},
@@ -155,7 +159,21 @@ export class UiService {
   if(name==='ui_capabilities'){
    if(!p.supportedApiMajors.includes(1))throw new UiRpcError('INCOMPATIBLE_API',{outcome:'not_started'});
    return {selectedApiVersion:{major:1,minor:0},daemonVersion:'0.1.0',instanceId:this.instanceId,storeId:this.store.storeId,servedAtMs:Date.now(),
-    capabilities:Object.fromEntries(['taskDetail','taskLookupByRequest','taskList','quotaSnapshots','quotaProbe','approvalRead','approvalRespondFingerprint','artifactSnapshots','dispatchTask','createWorkspace','importAccounts','startWorker','stopWorker','reconcileTask','resumeTask','cancelTask','poolPolicy','poolLifecycle'].map(k=>[k,{version:1}])),limits:UI_LIMITS,runtime:{platform:process.platform,supportedOfficialVersions:['3.16.3']}};
+    capabilities:{...Object.fromEntries(['taskDetail','taskLookupByRequest','taskList','quotaSnapshots','quotaProbe','approvalRead','approvalRespondFingerprint','artifactSnapshots','dispatchTask','createWorkspace','importAccounts','startWorker','stopWorker','reconcileTask','resumeTask','cancelTask','poolPolicy','poolLifecycle'].map(k=>[k,{version:1}])),workOverview:{version:this.backend.workOverview?1:0},errorStats:{version:this.backend.errorStats?1:0},workTodos:{version:this.backend.workOverview?1:0},commanderQuota:{version:this.backend.workOverview?1:0},accountEnabled:{version:this.backend.workOverview?1:0}},limits:UI_LIMITS,runtime:{platform:process.platform,supportedOfficialVersions:['3.16.3']}};
+  }
+  if(name==='ui_get_work_overview'){
+   if(!this.backend.workOverview)throw new UiRpcError('CAPABILITY_UNAVAILABLE');
+   const overview=this.backend.workOverview({repositoryPath:p.repository_path,workId:p.work_id});
+   const all=overview.works.sort((a,b)=>b.updatedAt-a.updatedAt);const works=all.slice(0,p.limit);
+   const accountErrors=this.backend.errorStats?Object.fromEntries((await this.backend.accounts()).map(account=>{const {total,categories,complete,incompleteTaskCount}=this.backend.errorStats!({accountAlias:account.alias});return [account.alias,{total,categories,complete,incompleteTaskCount}];})):{};
+   const data={...overview,works,total:all.length,observedAtMs:Date.now(),truncated:works.length<all.length,accountErrors};
+   while(data.works.length>1&&Buffer.byteLength(JSON.stringify(data))>UI_LIMITS.responseBytes-2048){data.works.pop();data.truncated=true;}
+   return this.envelope(data);
+  }
+  if(name==='ui_get_error_stats'){
+   if(!this.backend.errorStats)throw new UiRpcError('CAPABILITY_UNAVAILABLE');
+   if(p.from_ms!==undefined&&p.to_ms!==undefined&&p.from_ms>p.to_ms)throw new UiRpcError('INVALID_ARGUMENT');
+   return this.envelope(this.backend.errorStats({accountAlias:p.account_alias,taskId:p.task_id,workId:p.work_id,fromMs:p.from_ms,toMs:p.to_ms}));
   }
   if(name==='ui_get_task_detail'){
    return this.envelope(this.store.readSnapshot(()=>{const task=p.task_id?this.store.getTask(p.task_id):this.store.findTaskByRequestId(p.request_id);if(!task)throw new UiRpcError('NOT_FOUND');return this.detail(task);}));

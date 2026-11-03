@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { UiMethodName, UiRpcParams, UiRpcResult, UiApprovalReview, UiTaskDetail, UiArtifactFile } from '../../../../src/shared/ui-contract.js';
 import { TypedClient, HostError, safeError } from './client.js';
 import { PollCoordinator } from './polling.js';
-import { resolvePreferredRepositoryId } from './project-context.js';
+import { projectChoices,resolvePreferredRepositoryId } from './project-context.js';
 import type { RouterTarget } from './router.js';
 import type { WebviewRequest, RequestPayload } from './protocol.js';
 import type { UiSnapshot, UiActionState } from './types.js';
@@ -21,6 +21,8 @@ export class ActionService implements RouterTarget {
   private client?: TypedClient;
   private disposed = false; private visible = false; private historicalPagesLoaded = false;
   private selectionSequence = 0; private listSequence = 0;
+  private workScopeSequence = 0;
+  private workFilter: {repositoryPath?:string;workId?:string} = {};
   private listFilter: RequestPayload<'tasks.list'>['filter'];
   private readonly rootAbort = new AbortController(); private connectionAbort = new AbortController(); private selectionAbort = new AbortController();
   private readonly taskCache = new Map<string, UiTaskDetail>(); private readonly reviews = new Map<string, ReviewEntry>();
@@ -34,9 +36,49 @@ export class ActionService implements RouterTarget {
     this.poll = new PollCoordinator(signal => this.refreshSnapshot(signal), signal => this.wait(signal), () => this.state.overviewIntervalSeconds * 1000, error => { this.state.connection.stale = true; this.state.connection.error = safeError(error); this.emit(); });
   }
   generation(): number { return this.state.connection.generation; }
-  snapshot(): UiSnapshot { this.state.connection.trusted = this.options.native.trusted(); this.state.preferredRepositoryId = this.options.projectContext ? resolvePreferredRepositoryId(this.options.projectContext(), this.state.resources.workspaces) : null; return this.state; }
+  snapshot(): UiSnapshot {
+    this.state.connection.trusted=this.options.native.trusted();const context=this.options.projectContext?.();
+    this.state.projects=projectChoices(context,this.state.resources.workspaces,[...(this.state.workOverview?.works??[]),...(this.state.decisionTodos??[])]);
+    const repositories=[...this.state.resources.workspaces,...this.state.projects.map(project=>({workspaceId:project.repositoryId,repositoryPath:project.repositoryPath,worktreePath:project.repositoryPath}))];
+    const preferredId=context?resolvePreferredRepositoryId(context,repositories):null;
+    const preferredPath=repositories.find(repository=>repository.workspaceId===preferredId)?.repositoryPath;
+    this.state.preferredRepositoryId=this.state.projects.find(project=>project.repositoryPath===preferredPath)?.repositoryId??null;return this.state;
+  }
   private emit(): void { if (!this.disposed) this.options.onSnapshot(this.snapshot()); }
   setVisible(visible: boolean): void { this.visible = visible; this.poll.setVisible(visible && !!this.client); }
+  async refreshDecisions(): Promise<void> {
+    if(!this.client||this.state.connection.state!=='connected'||!this.state.connection.capabilities.workOverview?.version)return;
+    const generation=this.generation();
+    return this.serialize(`${generation}:decisions.read`,async()=>{
+      try{const overview=(await this.ui('ui_get_work_overview',{apiVersion:1,limit:20})).data;this.updateDecisions(overview);this.emit();}
+      catch(error){if(generation===this.generation()){this.state.connection.stale=true;this.state.connection.error=safeError(error);this.emit();}}
+    });
+  }
+  private updateDecisions(overview:NonNullable<UiSnapshot['workOverview']>):void {
+    this.state.decisionTodos=overview.works.flatMap(work=>work.todos.map(todo=>({workId:work.workId,repositoryPath:work.repositoryPath,goal:work.goal,todo})));
+  }
+  private async loadWorkOverview(signal=this.connectionAbort.signal):Promise<NonNullable<UiSnapshot['workOverview']>> {
+    const scope=this.workFilter,sequence=this.workScopeSequence;
+    const overview=(await this.ui('ui_get_work_overview',{apiVersion:1,limit:20,repository_path:scope.repositoryPath,work_id:scope.workId},signal)).data;
+    if(sequence!==this.workScopeSequence)throw new HostError('STALE_SELECTION','A newer work scope is active.');
+    this.state.workOverview=overview;
+    this.state.workOverviewScope={repositoryPath:scope.repositoryPath??(scope.workId?overview.works[0]?.repositoryPath:null)??null,workId:scope.workId??null};
+    this.state.poolPolicy=overview.poolPolicy;
+    if(!scope.repositoryPath&&!scope.workId)this.updateDecisions(overview);
+    return overview;
+  }
+  async readWorkOverview(payload:RequestPayload<'work.read'>):Promise<NonNullable<UiSnapshot['workOverview']>> {
+    this.requireCapability('workOverview');
+    const repository=payload.repositoryId?this.snapshot().projects.find(project=>project.repositoryId===payload.repositoryId):undefined;
+    if(payload.repositoryId&&!repository)throw new HostError('NOT_FOUND','Choose a project supplied by this Host or the current work overview.');
+    this.workFilter={repositoryPath:repository?.repositoryPath,workId:payload.workId};this.workScopeSequence++;
+    const overview=await this.loadWorkOverview();this.emit();return overview;
+  }
+  async focusWork(workId:string):Promise<void> {
+    const overview=await this.readWorkOverview({workId});
+    if(!overview.works.some(work=>work.workId===workId))throw new HostError('NOT_FOUND','The requested work is no longer available.');
+    this.state.focusRequest={id:randomUUID(),target:'pending',workId};this.emit();
+  }
   setOverviewInterval(seconds: number): void { if (this.state.overviewIntervalSeconds === seconds) return; this.state.overviewIntervalSeconds = seconds; this.poll.intervalChanged(); this.emit(); }
   trustChanged(): void { this.emit(); }
   private requireConnection(): TypedClient { if (!this.client) throw new HostError('NOT_CONNECTED', 'Connect explicitly to the selected host and pool.'); return this.client; }
@@ -69,7 +111,7 @@ export class ActionService implements RouterTarget {
   disconnect(emit = true): void {
     this.poll.setVisible(false); this.poll.reset(); this.connectionAbort.abort(); this.selectionAbort.abort(); this.connectionAbort = new AbortController(); this.selectionAbort = new AbortController(); this.client?.dispose(); this.client = undefined;
     resetDisconnectedSnapshot(this.state, this.options.configurationError, this.generation() + 1);
-    this.reviews.clear(); this.taskCache.clear(); this.deliveryOpened.clear(); this.viewedFiles.clear(); this.listSequence++; this.selectionSequence++; this.historicalPagesLoaded = false; this.listFilter = undefined;
+    this.reviews.clear(); this.taskCache.clear(); this.deliveryOpened.clear(); this.viewedFiles.clear(); this.listSequence++; this.selectionSequence++; this.workScopeSequence++;this.workFilter={};this.historicalPagesLoaded = false; this.listFilter = undefined;
     if (emit) this.emit();
   }
   refresh(signal = this.connectionAbort.signal): Promise<void> { return this.poll.requestRefresh(false, signal); }
@@ -96,11 +138,18 @@ export class ActionService implements RouterTarget {
       for (const worker of this.state.resources.workers) worker.leaseTaskIds = [...new Set([...worker.leaseTaskIds, ...details.filter(t => t.workerId === worker.workerId && t.leaseHeld).map(t => t.taskId)])];
     }
     if (this.state.selectedTaskId && this.state.connection.capabilities.taskDetail?.version) this.mergeDetail(await detailFor(this.state.selectedTaskId));
+    if (this.state.connection.capabilities.workOverview?.version) {
+      try{await this.loadWorkOverview(signal);}catch(error){if(!(error instanceof HostError&&error.code==='STALE_SELECTION'))throw error;}
+      if(this.workFilter.repositoryPath||this.workFilter.workId)await this.refreshDecisions();
+    }
+    if (this.state.connection.capabilities.quotaSnapshots?.version) {
+      await Promise.all(this.state.resources.accounts.map(async account => { const quota = (await this.ui('ui_get_quota', { apiVersion: 1, account_id: account.alias }, signal)).data; this.state.resources.quotas[account.alias] = quota; }));
+    }
     this.state.connection.lastReceivedAtMs = Date.now(); this.state.connection.stale = false; this.state.connection.error = null; this.emit();
   }
   async listTasks(payload: RequestPayload<'tasks.list'>, signal = this.connectionAbort.signal): Promise<unknown> {
     if (!this.state.connection.capabilities.taskList?.version) { if (payload.cursor) throw new HostError('CAPABILITY_UNAVAILABLE', 'Only the recent 50-task window is available.'); return { items: this.state.tasks, scope: this.state.scope, total: null, nextCursor: null }; }
-    const sequence = ++this.listSequence; const filter = payload.filter ?? this.listFilter; const wireFilter = buildTaskListWireFilter(filter, this.state.resources.workspaces);
+    const sequence = ++this.listSequence; const filter = payload.filter ?? this.listFilter; const wireFilter = buildTaskListWireFilter(filter,this.snapshot().projects);
     let page;
     try { page = (await this.ui('ui_list_tasks', { apiVersion: 1, limit: 50, sort: 'created_desc', filter: wireFilter, ...(payload.cursor ? { cursor: payload.cursor } : {}) }, signal)).data; }
     catch (error) { if (error instanceof HostError && ['CURSOR_STALE', 'CURSOR_INVALID'].includes(error.code)) { this.state.listNextCursor = null; this.state.total = null; this.state.notice = 'The task list changed. These loaded rows are retained; reload the first page for a current list.'; this.emit(); } throw error; }
@@ -248,7 +297,19 @@ export class ActionService implements RouterTarget {
           catch (error) { const safe = safeError(error); if (generation === this.generation()) this.action({ key: 'pool.shutdown', phase: safe.unknownOutcome ? 'unknown' : 'failed', message: safe.message, error: safe }); throw error; }
         });
       }
-      case 'pool.policy.set': this.requireCapability('poolPolicy', true); return this.mutate('pool.policy.set', () => this.requireConnection().legacy('set_pool_policy', { max_concurrent_tasks: request.payload.maxConcurrentTasks }, this.connectionAbort.signal));
+      case 'pool.policy.set': {
+        this.requireCapability('poolPolicy', true); const p = request.payload;
+        return this.mutate('pool.policy.set', () => this.requireConnection().legacy('set_pool_policy', { ...(p.maxConcurrentTasks !== undefined ? {max_concurrent_tasks:p.maxConcurrentTasks}:{}), ...(p.retryIntervalMs !== undefined ? {retry_interval_ms:p.retryIntervalMs}:{}), ...(p.recoveryWaitMs !== undefined ? {recovery_wait_ms:p.recoveryWaitMs}:{}), ...(p.silenceCheckMs !== undefined ? {silence_check_ms:p.silenceCheckMs}:{}), ...(p.lowQuotaThresholdPercent !== undefined ? {low_quota_threshold_percent:p.lowQuotaThresholdPercent}:{}), ...(p.defaultCommanderQuota !== undefined ? {default_commander_quota:p.defaultCommanderQuota}:{}) }, this.connectionAbort.signal));
+      }
+      case 'commander.quota.set': this.requireCapability('commanderQuota', true); return this.mutate(`commander:${request.payload.commanderId}:quota`, () => this.requireConnection().legacy('set_commander_quota', {commander_id:request.payload.commanderId,default_quota:request.payload.defaultQuota}, this.connectionAbort.signal));
+      case 'account.enabled.set': this.requireCapability('accountEnabled', true); return this.mutate(`account:${request.payload.accountAlias}:enabled`, () => this.requireConnection().legacy('set_account_enabled', {account_id:request.payload.accountAlias,enabled:request.payload.enabled}, this.connectionAbort.signal));
+      case 'work.todo.resolve': this.requireCapability('workTodos', true); return this.mutate(`todo:${request.payload.todoId}`, () => this.requireConnection().legacy('resolve_work_todo', {work_id:request.payload.workId,todo_id:request.payload.todoId,action:request.payload.action,...(request.payload.availableAccounts?{available_accounts:request.payload.availableAccounts}:{}),user_confirmed:true}, this.connectionAbort.signal));
+      case 'work.read':return this.readWorkOverview(request.payload);
+      case 'errors.read': {
+        this.requireCapability('errorStats'); const p = request.payload;
+        const stats = (await this.ui('ui_get_error_stats', {apiVersion:1,account_alias:p.accountAlias,task_id:p.taskId,work_id:p.workId,from_ms:p.fromMs,to_ms:p.toMs})).data;
+        this.state.errorStats = stats; this.state.errorStatsQuery = {...p,observedAtMs:Date.now()}; this.emit(); return stats;
+      }
       case 'connection.configure': if (!this.options.native.configureConnection) throw new HostError('ACTION_UNAVAILABLE', 'Connection configuration is unavailable in this Host.'); await this.options.native.configureConnection(); return { configured: true };
       case 'daemon.start': assertRealHostAction(this.options, this.state, 'daemon'); await this.options.native.startDaemon!(); return { started: true };
       case 'connect': return this.connect();

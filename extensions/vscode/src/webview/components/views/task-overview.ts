@@ -61,7 +61,7 @@ export function renderOverview(_ctx: RenderContext, snapshot: UiSnapshot, task: 
       ])
     ));
   }
-  node.append(section('执行记录', attempts));
+  node.append(section(`执行记录 · 累计 ${detail.attemptCount ?? detail.attempts.length} 次，显示最近 ${detail.attempts.length} 次`, attempts));
   return node;
 }
 
@@ -80,7 +80,7 @@ export function renderTaskControls(ctx: RenderContext, snapshot: UiSnapshot, tas
     const reason = mutationReason(snapshot, 'resumeTask') ?? (!detail.verificationPolicy.complete ? '核验策略尚不能完整安全显示。' : !detail.controls.resume.available ? detail.controls.resume.reason ?? '当前状态不适用。' : null);
     actions.append(
       actionWithReason(ctx, '恢复观察', 'resume', data, reason, true, `task:${task.taskId}:resume`, { icon: icon('play', { size: 12 }) }),
-      el('p', 'field-hint', '附着原执行；结束后可能运行既有核验，明确繁忙时可使用剩余的原会话续跑。')
+      el('p', 'field-hint', '附着原执行；结束后可能运行既有核验，明确未实际执行的通道故障按设置持续恢复。')
     );
   }
   if (task.status !== 'verifying' && (detail.controls.cancel.available || isActive(task) || ['blocked', 'interrupted'].includes(task.status))) {

@@ -67,7 +67,7 @@ test('daemon SIGKILL recovery observes the persisted continuation command and ve
  const f=await fixture(t,[{command:process.execPath,args:['-e',"require('node:fs').appendFileSync('verification-count','once\\n')"],timeout_ms:1000}]);
  const setup=new DurableTaskStore(f.databasePath);setup.recordAttemptFailure(f.taskId,'request',{category:'model_busy',busyRetryEligible:true});
  setup.recordAttemptTerminal(f.taskId,'request','failed',{kind:'history_stopped',evidence:'Busy original command stopped with no native active work'});
- const continuation=setup.beginBusyContinuation(f.taskId,'request',3);setup.close();assert.notEqual(continuation.currentCommandId,'request');
+ const continuation=setup.beginBusyContinuation(f.taskId,'request');setup.close();assert.notEqual(continuation.currentCommandId,'request');
  await f.native('running',0,[],continuation.currentCommandId);const first=f.daemon();await readyTask(f.root,f.taskId,'running');
  assert.equal(f.task().turnId,continuation.currentCommandId);assert.equal(f.task().leaseHeld,true);await kill(first.child);
  await f.native('completedSuccess',1,[],continuation.currentCommandId);const second=f.daemon();await readyTask(f.root,f.taskId,'succeeded');

@@ -76,7 +76,7 @@ await page.addInitScript(() => {
       setState: value => { state = structuredClone(value); window.__persistedUi = state; } };
   };
 });
-const action = (name, extra = '') => page.locator(`[data-action="${name}"]${extra}`).first();
+const action = (name, extra = '') => page.locator(`[data-action="${name}"]${extra}:visible`).first();
 const waitState = async predicate => {
   for (let count = 0; count < 100; count++) { if (predicate(service.snapshot())) return; await new Promise(resolve => setTimeout(resolve, 30)); }
   throw new Error('Host state condition timed out');
@@ -118,10 +118,52 @@ try {
   await action('connect').click();
   await waitState(state => state.connection.state === 'connected');
   await action('task.select').waitFor();
-  assert.ok(transport.calls.every(call => ['ui_capabilities', 'overview', 'ui_list_tasks', 'ui_get_task_detail'].includes(call.method)), 'initial connection is read-only');
+  assert.ok(transport.calls.every(call => ['ui_capabilities', 'overview', 'ui_list_tasks', 'ui_get_task_detail', 'ui_get_work_overview', 'ui_get_quota'].includes(call.method)), 'initial connection is read-only');
   assert.equal(await action('connection.codexSetup').isDisabled(), true, 'mock mode cannot generate real MCP configuration');
   assert.equal(await page.locator('[data-details="task-advanced"]').getAttribute('open'), null, 'manual dispatch starts folded under advanced actions');
   report.push('Explicit connection and real Host/router bridge; no transport before click');
+
+  const graph=page.locator('[data-work-graph="work-demo"]');await graph.waitFor();
+  assert.equal(await graph.locator('[data-stage-id]').count(),4);
+  assert.equal(await graph.locator('path.stage-edge').count(),4);
+  const positions=await graph.locator('[data-stage-id]').evaluateAll(nodes=>Object.fromEntries(nodes.map(node=>[node.dataset.stageId,{x:node.getBoundingClientRect().x,y:node.getBoundingClientRect().y}])));
+  assert.ok(positions.plan.x<positions.api.x&&positions.api.x===positions.ui.x&&positions.api.x<positions.integrate.x,'parallel branches share a column between serial dependencies');
+  const uiStage=graph.locator('[data-stage-id="ui"]');
+  assert.equal(await uiStage.getAttribute('data-stage-state'),'running','execution success alone cannot light a stage');
+  await uiStage.locator('summary').click();await uiStage.getByText('实现任务与阶段展示',{exact:true}).waitFor();
+  assert.match(await page.locator('.work-facts').textContent(),/外部资源，不占账号/);
+  await page.locator('.work-overview').screenshot({path:join(output,'stages-parallel-wide.png')});
+  const originalWork=structuredClone(transport.fixture.workOverview.works[0]);
+  const work=transport.fixture.workOverview.works[0];const stage=work.stages.find(stage=>stage.stageId==='ui');
+  stage.status='completed';stage.confirmation={summary:'指挥已检查固定交付并确认阶段目标',deliveryIds:['delivery-ui'],acceptanceIds:['acceptance-ui'],confirmedAt:Date.now()};work.acceptances[0].status='passed';
+  await service.refresh();await delivery;
+  await page.locator('[data-stage-id="ui"][data-stage-state="completed"]').waitFor();
+  assert.equal(await page.locator('[data-stage-id="ui"]').getAttribute('open'),'','refresh retains the expanded stage');
+  await page.locator('.work-overview').screenshot({path:join(output,'stages-confirmed-wide.png')});
+  stage.status='rework';stage.rework=true;stage.confirmation=null;work.acceptances[0].status='failed';
+  await service.refresh();await delivery;
+  await page.locator('[data-stage-id="ui"][data-stage-state="rework"]').waitFor();
+  assert.equal(await page.locator('[data-stage-id="ui"]').evaluate(node=>node.classList.contains('stage-completed')),false);
+  await page.locator('.work-overview').screenshot({path:join(output,'stages-rework-wide.png')});
+  await page.setViewportSize({width:320,height:900});await checkLayout('stages-rework');await page.setViewportSize({width:320,height:900});
+  await page.locator('.work-overview').screenshot({path:join(output,'stages-rework-narrow.png')});
+  transport.fixture.workOverview.works[0]=originalWork;await service.refresh();await delivery;await page.setViewportSize({width:1280,height:900});
+  report.push('Actual serial/parallel dependency graph, expandable account/subtask facts, independent acceptance, commander confirmation and completion revoked on rework; wide/narrow screenshots');
+
+  transport.fixture.workOverview.works[0].todos=[{todoId:'resource-decision',kind:'resource_shortage',summary:'申请 2 个账号，当前只可用 1 个；等待用户决定',itemIds:[],availableAccounts:1,createdAt:Date.now()}];
+  await service.refresh();await delivery;
+  service.state.focusRequest={id:'browser-pending-focus',target:'pending',workId:'work-demo'};service.trustChanged();await delivery;
+  await page.waitForFunction(()=>document.activeElement?.id==='pending-items');
+  assert.equal(await page.locator('.scope-bar [data-filter="project"]').inputValue(),'/demo/project','notification navigation reveals the related project');
+  await action('work.todo.resolve','[data-todo-id="resource-decision"]').click();
+  await waitState(state=>state.workOverview.works[0].todos.length===0);
+  const partial=transport.calls.filter(call=>call.method==='resolve_work_todo');assert.equal(partial.length,1);assert.equal(partial[0].params.available_accounts,1);assert.equal(partial[0].params.user_confirmed,true);
+  await action('scope.pool').click();
+  await page.locator('.error-stats > summary').click();await page.locator('[data-field="errors.hours"]').selectOption('0');await action('errors.read').click();
+  await waitState(state=>state.errorStats?.total===5);assert.equal(service.snapshot().errorStats.categories.model_busy,5);assert.ok(service.snapshot().errorStats.events.every(event=>event.recoveredAt!==null));
+  await page.locator('.error-stats').getByText('已观测错误 5 次',{exact:true}).waitFor();
+  await page.locator('.error-stats > summary').click();
+  report.push('Returning user lands on the related pending project, explicitly confirms fewer accounts once, and sees five actual recovered busy errors');
 
   // Test responsive geometry and themes using the actual bundled styles and browser layout.
   for (const theme of ['vscode-dark', 'vscode-light', 'vscode-high-contrast']) {
@@ -185,6 +227,19 @@ try {
   await page.screenshot({ path: join(output, 'settings.png'), fullPage: true });
   await auditContrast('settings');
   report.push('Shared concurrency policy: invalid limits gated, zero pauses new dispatch, empty removes limit and occupied tasks continue');
+  await page.locator('[data-field="policy.retrySeconds"]').fill('7');
+  await page.locator('[data-field="policy.recoveryMinutes"]').fill('3');
+  await page.locator('[data-field="policy.silenceMinutes"]').fill('12');
+  await page.locator('[data-field="policy.lowQuotaPercent"]').fill('6');
+  await page.locator('[data-field="policy.defaultQuota"]').fill('3');
+  await action('pool.execution.set').click();
+  await waitState(state=>state.poolPolicy.retryIntervalMs===7000&&state.poolPolicy.recoveryWaitMs===180000&&state.poolPolicy.silenceCheckMs===720000);
+  assert.equal(service.snapshot().poolPolicy.maxConcurrentTasks,null,'recovery settings do not silently change the global cap');
+  const recoveryWrite=transport.calls.filter(call=>call.method==='set_pool_policy').at(-1).params;
+  assert.equal(recoveryWrite.retry_interval_ms,7000);assert.equal(recoveryWrite.recovery_wait_ms,180000);assert.equal(recoveryWrite.silence_check_ms,720000);assert.equal(Object.hasOwn(recoveryWrite,'max_concurrent_tasks'),false);
+  await page.locator('[data-field="commanderQuota:commander-demo"]').fill('3');await action('commander.quota.set').click();
+  await waitState(state=>state.workOverview.commanders[0].defaultQuota===3);assert.equal(service.snapshot().workOverview.works[0].requestedAccounts,2,'default quota changes do not rewrite this work request');
+  report.push('Retry/recovery/silence controls preserve seconds/minutes to milliseconds and default quota remains separate from the current work quota');
 
   await action('page', '[data-page="tasks"]').click();
   await action('task.select', '[data-task-id="task-approval"]').click();
@@ -224,7 +279,7 @@ try {
   const dispatched = transport.calls.filter(call => call.method === 'dispatch_task');
   assert.equal(dispatched.length, 1);
   assert.equal(dispatched[0].params.prompt, promptCanary);
-  assert.equal(dispatched[0].params.busy_retry_limit, 3);
+  assert.equal(Object.hasOwn(dispatched[0].params, 'busy_retry_limit'), false);
   assert.ok(!JSON.stringify([...storage.values()]).includes(promptCanary), 'Host recovery storage excludes prompt');
   await action('cancel').click();
   assert.equal(transport.calls.filter(call => call.method === 'cancel_task').length, 0, 'destructive cancel needs a second, explicit confirmation');
@@ -235,7 +290,7 @@ try {
   await waitState(state => !!state.detail?.cancelRequestedAtMs);
   assert.equal(service.snapshot().detail.leaseHeld, true, 'cancellation request does not prove release');
   assert.ok(transport.calls.filter(call => call.method === 'cancel_task').length === 1);
-  report.push('Composer dispatches once with stable identity/default immediate continuation limit; cancellation retains unproved occupancy');
+  report.push('Composer dispatches once with stable identity and no retry-count limit; cancellation retains unproved occupancy');
 
   const stoppingCallsBeforeDisconnect = transport.calls.filter(call => ['daemon_stop', 'stop_worker', 'cancel_task'].includes(call.method)).length;
   await action('disconnect').click();

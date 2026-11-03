@@ -11,7 +11,7 @@ export interface EventPage { events?: EventRow[]; items?: EventRow[]; nextCursor
 export interface PatchPage { available: boolean; patch?: string; content?: string; text?: string; nextOffset: number | null; offset?: number }
 export interface ArtifactText { file: UiArtifactFile; side: 'base' | 'final'; text: string; loadedBytes: number; totalBytes: number; nextOffsetBytes: number | null; decoder: TextDecoder; complete: boolean; error: string | null }
 export interface LocalState {
-  snapshot: UiSnapshot | null; page: Page; tab: DetailTab; filters: Filters; detailOpen: boolean;
+  snapshot: UiSnapshot | null; page: Page; tab: DetailTab; filters: Filters; detailOpen: boolean; selectedWorkId: string | null;
   expandedAccounts: Set<string>; reviews: Map<string, ReviewContent>; events: EventRow[]; eventsCursor: number | null; eventsLoaded: boolean;
   patch: string; patchLoaded: boolean; patchNextOffset: number | null; artifact: ArtifactText | null;
   pending: Set<string>; errors: Map<string, string>; message: string; messageTone: 'info' | 'error'; armedConfirm: string | null; draft: TaskDraft | null; draftDirty: boolean;
@@ -37,7 +37,7 @@ export function readPersisted(value: unknown): PersistedUi | null {
   return { version: 1, identity: p.identity, page: p.page as PersistedUi['page'], tab: p.tab!, filters: { project: filters.project, status: filters.status, worker: filters.worker, workspace: filters.workspace, query: filters.query }, selectedTaskId: p.selectedTaskId ?? null };
 }
 export function createState(persisted: unknown = null): LocalState {
-  return { snapshot: null, page: 'tasks', tab: 'overview', filters: defaultFilters(), detailOpen: false, expandedAccounts: new Set(), reviews: new Map(), events: [], eventsCursor: null, eventsLoaded: false, patch: '', patchLoaded: false, patchNextOffset: null, artifact: null, pending: new Set(), errors: new Map(), message: '', messageTone: 'info', armedConfirm: null, draft: null, draftDirty: false, workerId: '', workerAccount: '', baseRef: 'HEAD', settingsInterval: '30', settingsConcurrency: '', policyDirty: false, validation: {}, taskLookup: '', loadedIdentity: null, restore: readPersisted(persisted), deliveryVisited: false, inspectedFiles: new Set(), rawFields: new Map(), submittedDraftToken: null, importSummary: null, projectDefaultApplied: false, dismissedActions: new Set(), accountSortMode: 'quota_first' };
+  return { snapshot: null, page: 'tasks', tab: 'overview', filters: defaultFilters(), detailOpen: false, selectedWorkId: null, expandedAccounts: new Set(), reviews: new Map(), events: [], eventsCursor: null, eventsLoaded: false, patch: '', patchLoaded: false, patchNextOffset: null, artifact: null, pending: new Set(), errors: new Map(), message: '', messageTone: 'info', armedConfirm: null, draft: null, draftDirty: false, workerId: '', workerAccount: '', baseRef: 'HEAD', settingsInterval: '30', settingsConcurrency: '', policyDirty: false, validation: {}, taskLookup: '', loadedIdentity: null, restore: readPersisted(persisted), deliveryVisited: false, inspectedFiles: new Set(), rawFields: new Map(), submittedDraftToken: null, importSummary: null, projectDefaultApplied: false, dismissedActions: new Set(), accountSortMode: 'quota_first' };
 }
 export function connectionIdentity(snapshot: UiSnapshot): string { return `${snapshot.connection.host}\u0000${snapshot.connection.poolHome}\u0000${snapshot.connection.storeId ?? ''}`; }
 export function clearTaskContent(state: LocalState): void {
@@ -57,7 +57,7 @@ export function applySnapshot(state: LocalState, snapshot: UiSnapshot): boolean 
   const changedInstance = previous?.connection.instanceId && snapshot.connection.instanceId !== previous.connection.instanceId;
   const changedGeneration = previous && snapshot.connection.generation !== previous.connection.generation;
   if (changedIdentity) {
-    state.filters = defaultFilters(); state.tab = 'overview'; state.detailOpen = false;
+    state.filters = defaultFilters(); state.tab = 'overview'; state.detailOpen = false; state.selectedWorkId = null;
     state.expandedAccounts.clear(); state.draft = null; state.draftDirty = false; state.page = 'tasks';
     state.pending.clear(); state.errors.clear(); state.message = ''; state.armedConfirm = null; state.restore = null; state.rawFields.clear(); state.submittedDraftToken = null; state.importSummary = null; state.projectDefaultApplied = false; state.policyDirty = false;
     state.dismissedActions.clear();
@@ -77,9 +77,9 @@ export function applySnapshot(state: LocalState, snapshot: UiSnapshot): boolean 
   }
   if (resolvedIdentity && !state.projectDefaultApplied && (snapshot.preferredRepositoryId !== undefined || snapshot.resources.workspaces.length > 0)) {
     state.projectDefaultApplied = true;
-    // Preference is only an opaque ID for a registered repository. Paths never come from
+    // Preference is an opaque ID for Host/work project facts. Paths never come from
     // page input, and later active-editor changes cannot overwrite the user's filter.
-    const preferred = snapshot.resources.workspaces.find(workspace => workspace.workspaceId === snapshot.preferredRepositoryId);
+    const preferred = snapshot.projects.find(project => project.repositoryId === snapshot.preferredRepositoryId);
     if (preferred) { state.filters.project = preferred.repositoryPath; defaultProjectChanged = true; }
   }
   if (resolvedIdentity) state.loadedIdentity = identity;
@@ -156,6 +156,7 @@ export function workerUnavailable(snapshot: UiSnapshot, workerId: string): strin
   if (worker.runningTaskCount === undefined) return '执行器的运行状态尚未确认，请刷新资源。';
   if (worker.runningTaskCount !== 0) return '执行器当前仍在运行其他操作。';
   const health = snapshot.resources.accounts.find(account => account.alias === worker.accountAlias)?.health;
+  if (snapshot.resources.accounts.find(account => account.alias === worker.accountAlias)?.enabled === false) return '此账号已暂停新派发。';
   if (['blocked', 'invalid', 'cooling'].includes(health ?? '')) return `绑定账号状态为 ${health}，不可派发。`;
   return null;
 }
@@ -168,7 +169,6 @@ export function validateDraft(snapshot: UiSnapshot, draft: TaskDraft): Record<st
   if (!draft.prompt.trim()) errors.prompt = '请输入任务提示词。';
   else if (draft.prompt.length > 100_000) errors.prompt = '提示词超过 100000 个 UTF-16 单元。';
   if (!draft.modelId.trim()) errors.modelId = '请输入明确的模型 ID。';
-  if (!Number.isInteger(draft.busyRetryLimit) || draft.busyRetryLimit < 0 || draft.busyRetryLimit > 10) errors.busyRetryLimit = '续跑上限须为 0–10 的整数。';
   if (draft.verifyCommands.length > 10) errors.verifyCommands = '最多配置 10 项核验命令。';
   for (const [index, command] of draft.verifyCommands.entries()) {
     if (!command.command.trim()) errors[`verify.${index}.command`] = '请输入命令名称。';

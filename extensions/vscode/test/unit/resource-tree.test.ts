@@ -61,6 +61,7 @@ async function loadResourceTree(): Promise<new (snapshot: () => UiSnapshot) => a
 
 function mockSnapshot(accounts: any[] = [], workers: any[] = [], workspaces: any[] = []): UiSnapshot {
   return {
+    projects:[],
     connection: {
       state: 'connected', mode: 'mock', generation: 1, host: 'test-host',
       poolHome: '/mock/pool', trusted: true, lastReceivedAtMs: Date.now(), stale: false,
@@ -76,7 +77,7 @@ function mockSnapshot(accounts: any[] = [], workers: any[] = [], workspaces: any
       quotas: {}
     },
     approvals: null, delivery: { manifest: null, files: [], nextCursor: null, reviewed: false },
-    draft: { workspaceId: 'w1', workerId: 'wrk1', prompt: '', session: 'continue', mode: 'build', modelId: 'GLM', busyRetryLimit: 1, verifyCommands: [], submitToken: 'token' },
+    draft: { workspaceId: 'w1', workerId: 'wrk1', prompt: '', session: 'continue', mode: 'build', modelId: 'GLM', verifyCommands: [], submitToken: 'token' },
     actions: [], overviewIntervalSeconds: 30, poolPolicy: null, notice: null
   };
 }

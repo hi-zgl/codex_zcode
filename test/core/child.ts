@@ -32,7 +32,7 @@ const execute = (): void => {
       store.acknowledgeDispatch(task.taskId,{sessionId:'native-session',turnId:requestId});
       store.recordAttemptFailure(task.taskId,requestId,{category:'model_busy',busyRetryEligible:true});
       store.recordAttemptTerminal(task.taskId,requestId,'failed',{kind:'history_stopped',evidence:'Exact busy turn failed; activeWorks empty'});
-      store.beginBusyContinuation(task.taskId,requestId,3);
+      store.beginBusyContinuation(task.taskId,requestId);
     }
     process.stdout.write(`${JSON.stringify({ taskId: task.taskId })}\n`);
   } catch (error) {

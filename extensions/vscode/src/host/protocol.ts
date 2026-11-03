@@ -5,7 +5,7 @@ const empty = z.object({}).strict();
 export const draftSchema = z.object({
   workspaceId: z.string().max(150), workerId: z.string().max(150), prompt: z.string().max(100_000),
   session: z.enum(['continue', 'new']), mode: z.enum(['build', 'edit', 'plan', 'yolo', 'guarded']),
-  modelId: z.string().min(1).max(200), busyRetryLimit: z.number().int().min(0).max(10),
+  modelId: z.string().min(1).max(200),
   verifyCommands: z.array(z.object({ command: z.string().min(1).max(4096), args: z.array(z.string().max(4096)).max(100), timeoutMs: z.number().int().min(100).max(300_000) }).strict()).max(10),
   submitToken: id,
 }).strict();
@@ -15,7 +15,12 @@ export const requestPayloads = {
   ready: empty, connect: empty, disconnect: empty, refresh: empty,
   'connection.configure': empty, 'daemon.start': empty,
   'connection.codexSetup': empty, 'pool.shutdown':empty,
-  'pool.policy.set':z.object({maxConcurrentTasks:z.number().int().min(0).max(64).nullable()}).strict(),
+  'pool.policy.set':z.object({maxConcurrentTasks:z.number().int().min(0).max(64).nullable().optional(),retryIntervalMs:z.number().int().min(1000).max(86400000).optional(),recoveryWaitMs:z.number().int().min(1000).max(86400000).optional(),silenceCheckMs:z.number().int().min(1000).max(86400000).optional(),lowQuotaThresholdPercent:z.number().min(0).max(100).optional(),defaultCommanderQuota:z.number().int().min(0).max(64).optional()}).strict(),
+  'commander.quota.set':z.object({commanderId:id,defaultQuota:z.number().int().min(0).max(64)}).strict(),
+  'account.enabled.set':z.object({accountAlias:id,enabled:z.boolean()}).strict(),
+  'work.read':z.object({repositoryId:id.optional(),workId:id.optional()}).strict(),
+  'work.todo.resolve':z.object({workId:id,todoId:id,action:z.enum(['approve_partial','retry','resolve']),availableAccounts:z.number().int().min(1).max(64).optional()}).strict(),
+  'errors.read':z.object({accountAlias:id.optional(),taskId:id.optional(),workId:id.optional(),fromMs:z.number().int().nonnegative().optional(),toMs:z.number().int().nonnegative().optional()}).strict(),
   'tasks.list': z.object({ filter: z.object({ repositoryId:id.optional(),workspaceId:id.optional(),workerId:id.optional(),statuses:z.array(z.enum(['queued','dispatching','running','waiting_approval','verifying','succeeded','failed','cancelled','blocked','interrupted'])).max(10).optional(),leaseHeld:z.boolean().optional(),query:z.string().max(200).optional() }).strict().optional(),cursor:z.string().max(2048).optional() }).strict(), 'task.select': task,
   'draft.change': z.object({ draft: draftSchema }).strict(),
   dispatch: z.object({ submitToken: id }).strict(),

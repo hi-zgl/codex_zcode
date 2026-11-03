@@ -81,6 +81,9 @@ export interface RuntimeConnection {
   respondApproval(turn: TurnRef, approvalId: string, decision: ApprovalDecision): Promise<void>;
   cancel(turn: TurnRef): Promise<void>;
   syncHistory(session: SessionRef): Promise<SessionSnapshot>;
+  /** A new read-only subscription to the original session; never sends or resumes a turn. */
+  freshReadSession?(session: SessionRef): Promise<SessionSnapshot>;
+  readNativeFacts?(session: SessionRef): Promise<RuntimeEvent[]>;
   readApprovalSnapshot?(session: SessionRef): Promise<ApprovalSourceSnapshot>;
   queryCommand(session: SessionRef, commandId: string): Promise<Record<string, unknown> | 'unknown'>;
   /** Official billing read; no local estimates of cloud balance. */

@@ -3,7 +3,7 @@ import type { UiQuota } from '../../../../../../../src/shared/ui-contract.js';
 import { mutationReason } from '../../../state.js';
 import { icon } from '../../../icons.js';
 import type { RenderContext } from '../../types.js';
-import { el } from '../../dom.js';
+import { el, errorCategoryLabel, errorObservationLabel } from '../../dom.js';
 import { badge, pulseDot } from '../../primitives.js';
 import { button } from '../../button.js';
 import { renderQuotaWindow, renderQuotaPanel, formatQuotaNumber, renderTierBadge, resolveQuotaUnit } from './quota-panel.js';
@@ -155,6 +155,16 @@ export function renderAccountCard(
   toggle.setAttribute('aria-controls', `quota-${alias}`);
 
   const card = el('article', 'resource-card account-card', toolbar, slot, toggle);
+  const observed=activeSnapshot?.observedAtMs;
+  const stale=activeSnapshot?.freshness==='stale'||typeof observed==='number'&&nowMs-observed>(quota?.displayFreshnessWindowMs??120000);
+  card.append(el('p',`field-hint ${stale||quota?.lastProbe.state==='failed'?'quota-stale':''}`,`${activeSnapshot?activeSnapshot.source==='live_probe'?'官方查询':'导入快照':'尚无额度快照'} · ${observed?new Date(observed).toLocaleString('zh-CN',{hour12:false}):'观测时间未知'}${quota?.lastProbe.state==='failed'?' · 最近查询失败，保留旧值':stale?' · 数据已过旧':''}`));
+  const tasks = snapshot.workOverview?.works.flatMap(work => work.items.filter(item => item.accountAlias === alias && item.taskId).map(item => ({work,item}))) ?? [];
+  const active = tasks.filter(({item})=>snapshot.resources.workers.some(worker=>worker.accountAlias===alias&&item.taskId&&worker.leaseTaskIds.includes(item.taskId)));
+  card.append(el('p','field-hint',active.length?active.map(({work,item})=>`指挥 ${work.commanderId} · ${item.title}`).join('；'):'当前无已知指挥任务占用'));
+  const errors=snapshot.workOverview?.accountErrors?.[alias];
+  if(errors)card.append(el('p','field-hint',`已观测错误 ${errors.total} 次 · ${errorObservationLabel(errors.complete)}${errors.complete!==true?`（${errors.incompleteTaskCount} 项任务）`:''}${Object.entries(errors.categories).map(([category,count])=>` · ${errorCategoryLabel(category)} ${count}`).join('')}`));
+  if(snapshot.connection.capabilities.errorStats?.version)card.append(button(ctx,'查看账号错误','account.errors',{accountAlias:alias}));
+  if(snapshot.connection.capabilities.accountEnabled?.version)card.append(button(ctx,account.enabled===false?'启用新派发':'暂停此账号新派发','account.enabled.set',{accountAlias:alias,enabled:String(account.enabled===false)},{reason:mutationReason(snapshot,'accountEnabled')}));
 
   if (expanded) {
     const panel = renderQuotaPanel(ctx, alias, quota, nowMs);

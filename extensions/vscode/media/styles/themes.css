@@ -33,7 +33,7 @@ body.vscode-light {
   --shadow-color: var(--vscode-widget-shadow, rgba(31, 35, 40, 0.16));
   --surface-card: var(--surface);
   --warning-text: color-mix(in srgb, var(--warning) 60%, var(--text));
-  --success-text: color-mix(in srgb, var(--success) 50%, var(--text));
+  --success-text: color-mix(in srgb, var(--success) 45%, var(--text));
   --danger-text: color-mix(in srgb, var(--danger) 75%, var(--text));
   --info-text: color-mix(in srgb, var(--info) 75%, var(--text));
 }

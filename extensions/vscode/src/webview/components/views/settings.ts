@@ -23,6 +23,15 @@ export function renderSettings(ctx: RenderContext, snapshot: UiSnapshot): HTMLEl
   const numericConcurrency = Number(rawConcurrency);
   const validConcurrency = rawConcurrency === '' || (Number.isInteger(numericConcurrency) && numericConcurrency >= 0 && numericConcurrency <= 64);
   const policy = snapshot.poolPolicy;
+  const setting = (key:string, fallback:number, min:string, max:string, step='1') => {
+    const control = input(ctx.state.rawFields.get(`policy.${key}`) ?? String(fallback), `policy.${key}`, 'number');
+    control.min = min; control.max = max; control.step = step; return control;
+  };
+  const retry = setting('retrySeconds', (policy?.retryIntervalMs ?? 5000) / 1000, '1', '86400');
+  const recovery = setting('recoveryMinutes', (policy?.recoveryWaitMs ?? 120000) / 60000, '0.017', '1440', 'any');
+  const silence = setting('silenceMinutes', (policy?.silenceCheckMs ?? 900000) / 60000, '0.017', '1440', 'any');
+  const low = setting('lowQuotaPercent', policy?.lowQuotaThresholdPercent ?? 5, '0', '100', 'any');
+  const defaultQuota = setting('defaultQuota', policy?.defaultCommanderQuota ?? 2, '0', '64');
   const policyReason = mutationReason(snapshot, 'poolPolicy') ?? (!policy ? '并发设置尚未读取，请刷新连接。' : !validConcurrency ? '请输入 0–64 的整数，或留空不限制。' : null);
   const diagnostic = {
     host: connection.host,
@@ -61,6 +70,25 @@ export function renderSettings(ctx: RenderContext, snapshot: UiSnapshot): HTMLEl
       actionWithReason(ctx, '保存并发上限', 'pool.policy.set', {}, policyReason, true),
       messageFor(ctx, 'pool.policy.set')
     ),
+    section('重试、让号与静默核查',
+      el('div', 'form-grid',
+        field('基础重试间隔（秒）', retry, '默认 5 秒；官方明确要求等待时优先遵守。', ctx.state.validation['policy.retrySeconds']),
+        field('连续恢复等待让号（分钟）', recovery, '默认 2 分钟；仅确认未实际执行且原执行已停止时归还账号。', ctx.state.validation['policy.recoveryMinutes']),
+        field('执行静默只读核查（分钟）', silence, '默认 15 分钟；不发送提示词，不凭静默判定失败。', ctx.state.validation['policy.silenceMinutes']),
+        field('低额度阈值（剩余 %）', low, '默认 5%；不打断正常执行，后续派发换号。', ctx.state.validation['policy.lowQuotaPercent']),
+        field('新指挥默认账号配额', defaultQuota, '本次任务明确申请的配额临时覆盖默认值；0 暂停此范围新派发。', ctx.state.validation['policy.defaultQuota'])
+      ),
+      el('p', 'field-hint', '重试次数只累计统计，不设置总次数上限；恢复执行不清空历史错误。未知执行状态保留账号并核实。'),
+      actionWithReason(ctx, '保存恢复与配额设置', 'pool.execution.set', {}, mutationReason(snapshot, 'poolPolicy'), true),
+      messageFor(ctx, 'pool.execution.set')
+    ),
+    ...(snapshot.workOverview?.commanders.length ? [section('各指挥默认配额',
+      ...snapshot.workOverview.commanders.map(commander => {
+        const control = input(ctx.state.rawFields.get(`commanderQuota:${commander.commanderId}`) ?? String(commander.defaultQuota), `commanderQuota:${commander.commanderId}`, 'number');
+        control.min = '0'; control.max = '64'; control.step = '1';
+        return el('div', 'commander-quota-row', field(commander.label || commander.commanderId, control, '本次任务结束后恢复采用此默认值。'), actionWithReason(ctx, '保存配额', 'commander.quota.set', {commanderId:commander.commanderId}, mutationReason(snapshot, 'commanderQuota')));
+      })
+    )] : []),
     section('后台连接',
       el('p', 'field-hint', '断开面板只停止观察。收工会检查整个池，无任务占用才停止所有执行器与后台；账号和任务数据保留。下次使用需明确启动后台。'),
       kv([

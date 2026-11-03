@@ -5,7 +5,6 @@ import {
   formatResetLabel,
   resolveQuotaSnapshot,
   directProbeAccount,
-  QUOTA_LIMIT_URL,
   BILLING_BALANCE_URL,
 } from '../../src/daemon/quota-resolver.js';
 import type { AccountCredentials } from '../../src/accounts/index.js';
@@ -46,7 +45,7 @@ test('resolveQuotaSnapshot normalizes limits into windows and calculates percent
         {
           type: 'TOKENS_LIMIT',
           unitType: 'token',
-          unit: 1000,
+          number: 1000,
           currentValue: 250,
           remaining: 750,
           nextResetTime: now + 3600_000,
@@ -116,60 +115,30 @@ test('resolveQuotaSnapshot handles fallback when only remaining is present', () 
   assert.equal(snapshot.windows[0].remaining, 150);
 });
 
-test('directProbeAccount invokes quota endpoint with credentials and handles fallback', async () => {
-  const account: AccountCredentials = {
-    alias: 'acc-1',
-    provider: 'zai',
-    userId: 'user-1',
-    accessToken: 'test-token',
-    zcodeJwtToken: 'jwt-token',
-    userInfo: {},
-    raw: {},
-    health: 'available',
-  };
-
-  let requestedUrl = '';
-  let authHeader = '';
-
+test('directProbeAccount uses the official Start Plan contract without crossing into Coding Plan', async () => {
+  const account: AccountCredentials = { alias: 'acc-1', provider: 'zai', userId: 'user-1', accessToken: 'test-token', zcodeJwtToken: 'jwt-token', userInfo: {}, raw: {}, health: 'available' };
+  const calls: string[] = [];
   const mockFetch: typeof fetch = async (input, init) => {
-    requestedUrl = String(input);
-    authHeader = (init?.headers as Record<string, string>)?.Authorization ?? '';
-    return {
-      ok: true,
-      status: 200,
-      json: async () => ({
-        code: 200,
-        data: {
-          level: 'Pro',
-          limits: [],
-          remaining: { count: 50 },
-        },
-      }),
-    } as any;
+    calls.push(String(input));
+    const headers = init?.headers as Record<string, string>;
+    assert.equal(headers.Authorization, 'Bearer jwt-token');
+    assert.equal(headers['X-ZCode-App-Version'], '3.16.3');
+    assert.equal(init?.redirect, 'error');
+    assert(init?.signal);
+    return { ok: true, status: 200, json: async () => ({ code: 0, data: { server_time: 1793641715,
+      plans: [{ plan_id: 'current', status: 'active', ends_at: 1993667600 }],
+      balances: [{ plan_id: 'current', total_units: 100, remaining_units: 75, used_units: 25, unit_type: 'token', expires_at: 1993667600 }],
+    } }) } as any;
   };
-
   const result = await directProbeAccount(account, mockFetch);
-  assert.equal(requestedUrl, QUOTA_LIMIT_URL);
-  assert.equal(authHeader, 'Bearer jwt-token');
+  assert.deepEqual(calls, [`${BILLING_BALANCE_URL}?app_version=3.16.3`]);
   assert.equal(result.accountAlias, 'acc-1');
   assert.equal(result.providerId, 'account:zai-start-plan');
   assert.equal(result.quota.authenticated, true);
-
-  // Test fallback if primary URL fails
-  const mockFallbackFetch: typeof fetch = async (input) => {
-    const url = String(input);
-    if (url === QUOTA_LIMIT_URL) {
-      return { ok: false, status: 404 } as any;
-    }
-    return {
-      ok: true,
-      status: 200,
-      json: async () => ({ code: 200, data: { level: 'Start' } }),
-    } as any;
-  };
-
-  const fallbackResult = await directProbeAccount(account, mockFallbackFetch);
-  assert.equal(fallbackResult.accountAlias, 'acc-1');
+  assert.equal(result.quota.serverTime, 1793641715000);
+  const snapshot = resolveQuotaSnapshot({source:'live_probe',accountAlias:account.alias,providerId:result.providerId,rawQuota:result.quota});
+  assert.equal(snapshot.percentage?.value, 75);
+  assert.equal(snapshot.windows[0].resetKind, 'expires');
 });
 
 test('resolveQuotaSnapshot resolves real exported account structures with quota_raw and subscription_raw', () => {
@@ -252,7 +221,7 @@ test('resolveQuotaSnapshot resolves real exported account structures with quota_
   assert.notEqual(win.resetsLabel, null);
 });
 
-test('directProbeAccount throws business error on HTTP 200 with code 500', async () => {
+test('directProbeAccount reports a failed probe without forwarding a server payload', async () => {
   const account: AccountCredentials = {
     alias: 'acc-err',
     provider: 'zai',
@@ -279,7 +248,8 @@ test('directProbeAccount throws business error on HTTP 200 with code 500', async
   await assert.rejects(
     () => directProbeAccount(account, mockBusinessErrorFetch),
     (err: Error) => {
-      assert.match(err.message, /当前用户不存在coding plan/);
+      assert.match(err.message, /HTTP 200, code 500/);
+      assert.equal(err.message.includes('当前用户'), false);
       return true;
     }
   );
@@ -294,4 +264,36 @@ test('resolveQuotaSnapshot redacts credential-like fields from rawSnapshot', () 
   });
   assert.equal(JSON.stringify(snapshot).includes('CANARY'), false);
   assert.equal(snapshot.remaining, 5);
+});
+
+
+test('quota percentage semantics distinguish Start Plan fractions, used percentages, and unknown values', () => {
+  const base = { source: 'live_probe' as const, accountAlias:'a', providerId:'account:zai-start-plan' };
+  const start = resolveQuotaSnapshot({...base, rawQuota:{quota:{limits:[{bucketId:'b',unitType:'token',percentage:0.25,period:'one_time',nextResetTime:1793667600000}]},remaining:{percentage:0.25}}});
+  assert.equal(start.percentage?.value,25);
+  assert.equal(start.percentage?.scale,'0_to_100');
+  assert.equal(start.windows[0].percentageUsed,75);
+  assert.equal(start.windows[0].resetKind,'expires');
+  assert.match(start.windows[0].resetsLabel!,/到期/);
+  const coding = resolveQuotaSnapshot({...base,rawQuota:{quota:{limits:[{type:'TIME_LIMIT',unit:5,percentage:0.5}]}}});
+  assert.equal(coding.windows[0].percentageUsed,0.5,'Coding Plan 0.5 is 0.5% used, never a remaining fraction');
+  assert.equal(coding.percentage?.value,99.5);
+  assert.equal(coding.windows[0].total,null,'the numeric unit is not a fabricated quota total');
+  const unknown = resolveQuotaSnapshot({...base,rawQuota:{quota_raw:[{show_name:'quota'}]}});
+  assert.equal(unknown.windows[0].percentageUsed,null);
+  assert.equal(unknown.percentage,null);
+  assert.equal(unknown.windows[0].unit,'unknown');
+  const count = resolveQuotaSnapshot({...base,rawQuota:{remaining:{count:10}}});
+  assert.equal(count.windows[0].percentageUsed,null);
+  assert.equal(count.windows[0].windowType,'custom');
+  assert.equal(count.windows[0].unit,'unknown');
+});
+
+test('an expired Start Plan is a successful empty entitlement, not invalid credentials', async () => {
+  const account: AccountCredentials = {alias:'acc-expired',provider:'zai',userId:'u',accessToken:'a',zcodeJwtToken:'j',userInfo:{},raw:{},health:'available'};
+  const result=await directProbeAccount(account,async()=>({ok:true,status:200,json:async()=>({code:0,data:{server_time:2000000000,plans:[{plan_id:'p',status:'active',ends_at:1900000000}],balances:[{plan_id:'p',total_units:100,remaining_units:100,expires_at:1900000000}]}})}) as any);
+  assert.equal(result.quota.authenticated,true);
+  assert.equal(result.quota.unavailableReason,'no_plan');
+  assert.equal(result.quota.startPlanExpired,true);
+  assert.deepEqual(result.quota.quota_raw,[]);
 });

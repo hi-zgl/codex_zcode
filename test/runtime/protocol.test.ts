@@ -7,7 +7,7 @@ import { crc32 } from 'node:zlib';
 import { WebSocketServer } from 'ws';
 import { ConversationProjection, TopicAssembler, classifyError, redact } from '../../src/runtime/zcode-server/events.js';
 import { FrameDecoder, decodeValues, encodeFrame, encodeValue } from '../../src/runtime/zcode-server/rpc.js';
-import { ZCodeServerAdapter } from '../../src/runtime/zcode-server/index.js';
+import { ZCodeServerAdapter, SINGLE_AGENT_TOOL_DENYLIST, isEmptyInitialDraft } from '../../src/runtime/zcode-server/index.js';
 
 test('official Initialize fixture decodes across socket fragmentation', () => {
   // SocketProtocol regular/type=1, 13-byte header, Channel Initialize [200], undefined body.
@@ -75,7 +75,62 @@ test('recorded permission/error normalize and terminal metadata updates do not c
   assert.equal(received.find((event) => event.type === 'error').turnId, undefined);
 });
 
-test('adapter follows official handshake, buffers events, and waits for authoritative terminal', async () => {
+test('native failed occurrences count individual attempts without counting retry snapshots or terminal twice', () => {
+  const received: any[] = [];
+  const projection = new ConversationProjection('s', event => received.push(event));
+  const header = { kind: 'turnHeader', rowId: 1, turnId: 'native-turn', sourceCommandId: 'command', state: 'running', startedAt: 1 };
+  projection.apply({ toSeq: 0, payload: { kind: 'snapshot', snapshot: { sessionId: 's', logEpoch: 'e', seq: 0, revision: 0, rows: { window: [header] }, control: { phase: 'running', activeWorks: [{ sourceCommandId: 'command' }] } } } });
+  const failed = Array.from({ length: 5 }, (_, i) => ({ sessionId: 's', eventId: `failure-${i}`, turnId: 'native-turn', seq: i + 1, timestamp: i + 2, type: 'session.updated', payload: {
+    type: 'model_request_failed', requestId: 'request', attempt: i + 1, maxAttempts: 5, retryable: i < 4, reason: 'provider_overloaded', message: 'Provider is overloaded', statusCode: 529,
+    requestHeaders: { Authorization: 'PRIVATE' }, responseHeaders: { 'Set-Cookie': 'PRIVATE', 'Retry-After': '7' },
+  } }));
+  const retry = { attempt: 4, maxAttempts: 5, nextRetryAt: 7006, reasonCode: 'fault.provider.serverError' };
+  projection.apply({ fromSeq: 0, toSeq: 1, payload: { kind: 'deltas', deltas: [{ op: 'state.updated', patch: { control: { phase: 'running', apiRetry: retry, activeWorks: [{ sourceCommandId: 'command' }] } } }] } }, 'e', failed.slice(0, 4));
+  projection.apply({ fromSeq: 1, toSeq: 2, payload: { kind: 'deltas', deltas: [{ op: 'state.updated', patch: { control: { phase: 'running', apiRetry: retry, activeWorks: [{ sourceCommandId: 'command' }] } } }] } }, 'e', failed.slice(0, 4));
+  const error = { code: 'model_overloaded', message: 'Provider is overloaded', at: 9, attribution: { source: 'provider', reason: 'provider_overloaded', statusCode: 529 } };
+  projection.apply({ fromSeq: 2, toSeq: 3, payload: { kind: 'deltas', deltas: [{ op: 'row.upserted', row: { ...header, state: 'failed', endedAt: 9 } }, { op: 'state.updated', patch: { control: { phase: 'error', apiRetry: null, activeWorks: [], lastError: error } } }] } }, 'e', [failed[4], { sessionId: 's', eventId: 'terminal', turnId: 'native-turn', type: 'turn.failed', payload: { error } }]);
+  const occurrences = received.filter(event => event.data.origin === 'native_model_request');
+  assert.equal(occurrences.length, 5);
+  assert(occurrences.every(event => event.turnId === 'command' && event.data.category === 'model_busy' && event.data.retryAfterMs === 7000));
+  assert.equal(received.filter(event => event.type === 'runtime_status' && event.data.kind === 'api_retry').length, 1);
+  assert.equal(received.find(event => event.type === 'turn_failed').data.occurrenceKey, 'native-model:failure-4');
+  assert.equal(received.at(-1).data.occurrenceKey, 'native-model:failure-4');
+  assert.equal(new Set(received.filter(event => event.type === 'error').map(event => event.data.occurrenceKey)).size, 5);
+  assert(!JSON.stringify(received).includes('PRIVATE'));
+});
+
+test('native failures without the original native turn identity stay unattributed', () => {
+  const received: any[] = [];
+  const projection = new ConversationProjection('s', event => received.push(event));
+  projection.apply({ toSeq: 0, payload: { kind: 'snapshot', snapshot: { sessionId: 's', logEpoch: 'e', seq: 0, rows: { window: [] }, control: {} } } }, 'e', [{ sessionId: 's', eventId: 'failure', type: 'session.updated', payload: { type: 'model_request_failed', requestId: 'r', attempt: 1, statusCode: 503 } }]);
+  const failure = received.find(event => event.type === 'error');
+  assert.equal(failure.turnId, undefined);
+  assert.equal(failure.data.errorAttribution, 'unattributed');
+  assert.equal(failure.data.occurrenceKey, 'native-model:failure');
+});
+
+test('error statistics prove only continuously observed turns complete', () => {
+  const received: any[] = [], old: any[] = [];
+  const snapshot = { sessionId: 's', logEpoch: 'e', seq: 0, rows: { window: [] as any[] }, control: {} };
+  const header = { kind: 'turnHeader', rowId: 1, turnId: 'native', sourceCommandId: 'command', startedAt: Date.now() - 20, endedAt: Date.now(), state: 'completedSuccess' };
+  const live = new ConversationProjection('s', event => received.push(event));
+  live.apply({ toSeq: 0, payload: { kind: 'snapshot', snapshot } });
+  live.apply({ fromSeq: 0, toSeq: 1, payload: { kind: 'deltas', deltas: [{ op: 'row.appended', row: { ...header, state: 'running' } }] } }, 'e');
+  live.apply({ fromSeq: 1, toSeq: 2, payload: { kind: 'deltas', deltas: [{ op: 'row.upserted', row: header }] } }, 'e', [], true);
+  assert.equal(received.find(event => event.data.kind === 'native_error_observation').data.complete, true);
+  const cold = new ConversationProjection('s', event => old.push(event));
+  cold.apply({ toSeq: 0, payload: { kind: 'snapshot', snapshot: { ...snapshot, rows: { window: [header] } } } }, 'e', [], true);
+  assert.equal(old.find(event => event.data.kind === 'native_error_observation').data.complete, null);
+  assert.equal(old.find(event => event.data.kind === 'native_error_observation').data.reason, 'attached_history_unverified');
+});
+
+test('admission rejection proof requires a complete unchanged initial draft', () => {
+  const initial = { revision: 0, seq: 0, rows: { window: [] }, control: { phase: 'draft', activeWorks: [] }, queue: { items: [] }, pendingCommands: [], backgroundWorks: [], pendingInteractions: [], subagents: { running: [], childSessionIds: [], endedTotal: 0 } };
+  assert.equal(isEmptyInitialDraft(initial), true);
+  for (const changed of [ { ...initial, revision: 1 }, { ...initial, seq: 1 }, { ...initial, pendingCommands: undefined }, { ...initial, queue: { items: [{ dispatch: { state: 'promoting' } }] } }, { ...initial, rows: { window: [{ kind: 'turnHeader' }] } }, { ...initial, backgroundWorks: [{ status: 'resultPending' }] } ]) assert.equal(isEmptyInitialDraft(changed), false);
+});
+
+test('adapter creates a deferred restricted session before V4 admission and waits for authoritative terminal', async () => {
   const server = createServer((request, response) => {
     assert.equal(request.url, '/api/server-info');
     response.setHeader('content-type', 'application/json');
@@ -85,15 +140,17 @@ test('adapter follows official handshake, buffers events, and waits for authorit
   let hello = false;
   let initialized = false;
   let seq = 0;
-  let eventId: number | undefined;
+  let sessionId = 'uncreated';
+  let subscriptions = 0;
   let selected = { providerId: 'account:zai-start-plan', modelId: 'GLM-5.3-Flash' };
   const commandTypes: string[] = [];
   wss.on('connection', (socket) => {
     socket.send(Buffer.from('01000000000000000000000006040106c80100', 'hex'));
     const decoder = new FrameDecoder();
+    let eventId: number | undefined;
     const event = (payload: unknown, fromSeq: number, toSeq: number) => {
       assert.notEqual(eventId, undefined);
-      socket.send(encodeFrame([204, eventId], { wireVersion: 3, kind: 'complete', deliveryKind: 'online', logicalFrameId: String(toSeq), logicalFrameOrdinal: toSeq + 1, topic: 'conversation/session-test', subscriptionId: 'sub-test', frame: { topic: 'conversation/session-test', subscriptionId: 'sub-test', logEpoch: 'epoch-test', fromSeq, toSeq, payload } }));
+      socket.send(encodeFrame([204, eventId], { wireVersion: 3, kind: 'complete', deliveryKind: 'online', logicalFrameId: String(toSeq), logicalFrameOrdinal: toSeq + 1, topic: `conversation/${sessionId}`, subscriptionId: 'sub-test', frame: { topic: `conversation/${sessionId}`, subscriptionId: 'sub-test', logEpoch: 'epoch-test', fromSeq, toSeq, payload } }));
     };
     socket.on('message', (raw) => {
       for (const [rawHeader, body] of decoder.accept(raw as Buffer)) {
@@ -107,16 +164,23 @@ test('adapter follows official handshake, buffers events, and waits for authorit
         else if (channel === 'project' && method === 'saveProject') { assert.deepEqual(params.roots, ['/isolated/workspace']); result = { id: 'project-test', roots: [{ rootPath: '/isolated/workspace' }] }; }
         else if (method === 'helloConversationV4') { hello = true; result = { protocolVersion: 3, clientMode: 'web-remote-replayable', deliveryProfile: 'replayable' }; }
         else if (method === 'initializeConversationV4') { assert.equal(hello, true); assert.equal(params.kind, 'clientHello'); initialized = true; }
+        else if (channel === 'model-selection' && method === 'getView') result = { preferredSelection: { ...selected, options: { reasoningLevel: 'max' } } };
+        else if (method === 'createSession') {
+          assert.equal(params.projectId, 'project-test');
+          assert.deepEqual(params.toolDenylist, [...SINGLE_AGENT_TOOL_DENYLIST]);
+          assert.equal(params.thoughtLevel, 'max');
+          assert.equal(params.titleGenerationEnabled, false);
+          assert.equal(params.persistence, 'deferred');
+          assert.match(params.sessionId, /^session_zcode_pool_v1_/);
+          selected = params.model; sessionId = params.sessionId;
+          commandTypes.push('createSession'); result = { session: { sessionId } };
+        }
         else if (method === 'sendConversationCommandV4') {
           assert.equal(initialized, true);
           commandTypes.push(params.envelope.type);
           const envelope = params.envelope;
-          if (envelope.type === 'createSession') {
-            assert.equal(params.projectId, 'project-test');
-            selected = envelope.payload.config.modelSelection;
-            result = { commandId: envelope.commandId, status: 'accepted', revisionAtDecision: 0, result: { type: 'createSession', sessionId: 'session-test' } };
-          } else {
             assert.equal(envelope.type, 'sendText');
+            assert.deepEqual(envelope.payload.toolDisallowlist, [...SINGLE_AGENT_TOOL_DENYLIST]);
             assert.equal(envelope.payload.modelSelection.options.reasoningLevel, 'max');
             result = { commandId: envelope.commandId, status: 'accepted', revisionAtDecision: 0, result: { type: 'inputAccepted', delivery: 'startNow', inputId: 'input' } };
             // All events arrive before command ACK: the public iterator must still return them.
@@ -124,11 +188,17 @@ test('adapter follows official handshake, buffers events, and waits for authorit
             event({ kind: 'deltas', deltas: [{ op: 'row.appended', row: header }] }, seq, ++seq);
             event({ kind: 'deltas', deltas: [{ op: 'row.appended', row: { kind: 'assistantText', rowId: 2, turnId: 'product-turn', text: 'Actual response', state: 'complete' } }] }, seq, ++seq);
             event({ kind: 'deltas', deltas: [{ op: 'row.upserted', row: { ...header, state: 'completedSuccess', endedAt: Date.now() } }, { op: 'state.updated', patch: { control: { phase: 'completedSuccess', activeWorks: [] } } }] }, seq, ++seq);
-          }
         } else if (method === 'subscribeConversationV4') {
-          event({ kind: 'snapshot', snapshot: { sessionId: 'session-test', logEpoch: 'epoch-test', seq, revision: 0, config: { provider: selected.providerId, model: selected.modelId, thought: 'max', mode: 'build' }, control: { phase: 'draft', activeWorks: [] }, pendingInteractions: [], usage: {}, rows: { window: [] } } }, 0, seq);
+          subscriptions++;
+          assert.equal(params.sessionId, sessionId);
+          event({ kind: 'snapshot', snapshot: { sessionId, logEpoch: 'epoch-test', seq, revision: subscriptions, config: { provider: selected.providerId, model: selected.modelId, thought: 'max', mode: 'build' }, control: { phase: 'draft', activeWorks: [] }, queue: { items: [], autoDrain: true }, pendingCommands: [], backgroundWorks: [], pendingInteractions: [], usage: {}, rows: { window: [] } } }, 0, seq);
           result = { ack: { subscriptionId: 'sub-test', mode: 'snapshot', logEpoch: 'epoch-test' } };
         } else if (method === 'unsubscribeConversationV4') result = undefined;
+        else if (method === 'readSessionDebug') {
+          // Accounting-source failure cannot erase a confirmed execution terminal.
+          socket.send(encodeFrame([202, id], { message: 'Native network debug unavailable' }));
+          continue;
+        }
         else throw new Error(`Unexpected mock method ${method}`);
         socket.send(encodeFrame([201, id], result));
       }
@@ -152,8 +222,13 @@ test('adapter follows official handshake, buffers events, and waits for authorit
     }
     assert.equal(received.find((entry) => entry.type === 'turn_started')?.turnId, turn.turnId);
     assert.equal(received.at(-1)?.turnId, turn.turnId);
+    assert(received.some(event => event.type === 'runtime_status' && event.data.kind === 'native_error_observation' && event.data.complete === null && event.data.reason === 'source_read_failed'));
     assert.equal((await connection.syncHistory(session)).summary, 'Actual response');
-    assert.deepEqual(commandTypes, ['createSession', 'sendText']);
+    const before = (await connection.syncHistory(session)).revision;
+    const fresh = await connection.freshReadSession(session);
+    assert.equal(fresh.revision, before + 1, 'a fresh reader must obtain a new initial snapshot');
+    assert.equal((await connection.syncHistory(session)).revision, before, 'the existing connection still holds its own projection');
+    assert.deepEqual(commandTypes, ['createSession', 'sendText'], 'fresh read never creates, resumes, or dispatches work');
   } finally {
     await connection?.close();
     for (const client of wss.clients) client.terminate();

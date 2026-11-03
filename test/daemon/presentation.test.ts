@@ -91,7 +91,8 @@ test('pool control and overview views expose only numeric policy fields within t
   assert.equal(classifyMcpError(new Error('Pool concurrency limit reached; private diagnostic')),'POOL_CAPACITY_REACHED');
   const error=presentMcpError('POOL_CAPACITY_REACHED','dispatch_task',{request_id:'request',workspace_id:'workspace',worker_id:'worker'});
   assert.equal(JSON.parse(error.text).error,'POOL_CAPACITY_REACHED');
-  assert.match(JSON.parse(error.text).message,/No task was queued/);
+  assert.match(JSON.parse(error.text).message,/did not queue a task/);
+  assert.match(JSON.parse(error.text).nextAction,/pool_control/);
   assert.match(JSON.parse(error.text).nextAction,/same request_id/);
 });
 
@@ -221,7 +222,7 @@ test('persisted native errors give fixed actionable diagnostics without echoing 
 });
 
 test('busy retry polling exposes only counts and the fixed reason in every task view', () => {
-  const retry = { used: 2, max: 3, reason: 'model_busy', error: forbidden, raw: forbidden, prompt: forbidden, context: forbidden, commandId: forbidden };
+  const retry = { used: 2, max: null, reason: 'model_busy', error: forbidden, raw: forbidden, prompt: forbidden, context: forbidden, commandId: forbidden };
   const own = task({ retry, detail: { reason: forbidden, error: forbidden, category: 'model_busy', retry } });
   const responses = [
     view('overview', { tasks: [own] }),
@@ -232,32 +233,33 @@ test('busy retry polling exposes only counts and the fixed reason in every task 
   ];
   for (const response of responses) {
     const projected = response.value.task ?? response.value.tasks[0];
-    assert.deepEqual(projected.retry, { used: 2, max: 3, reason: 'model_busy' });
+    assert.deepEqual(projected.retry, { used: 2, max: null, reason: 'model_busy' });
     assert.equal(projected.diagnostic.code, 'MODEL_BUSY');
     assert.doesNotMatch(response.text, /PRIVATE-NATIVE-CONTEXT|"context"|"prompt"|"raw"|"commandId"/);
     assert.ok(Buffer.byteLength(response.text) < MCP_COMPACT_TARGET_BYTES);
   }
+  assert.deepEqual(view('wait', { tasks: [task({ retry: { used: 400, max: 3, reason: 'transient_fault' } })] }).value.tasks[0].retry, { used: 400, max: null, reason: 'transient_fault' });
   const unused = view('wait', { tasks: [task()], changedTaskIds: [] });
   assert.equal(unused.value.tasks[0].retry, undefined);
   for (const invalid of [
-    { used: -1, max: 3, reason: 'model_busy' }, { used: 4, max: 3, reason: 'model_busy' },
-    { used: 1.5, max: 3, reason: 'model_busy' }, { used: 1, max: 3, reason: forbidden },
+    { used: -1, max: null, reason: 'model_busy' },
+    { used: 1.5, max: null, reason: 'model_busy' }, { used: 1, max: null, reason: forbidden },
   ]) assert.equal(view('wait', { tasks: [task({ retry: invalid })] }).value.tasks[0].retry, undefined);
 });
 
 test('busy continuation logs retain counts without native context or failure text', () => {
   const logs = view('get_logs', { events: [{ taskId: 'task-1', revision: 8, type: 'busy_continue_intent', detail: {
-    retry: { used: 1, max: 3, reason: 'model_busy', raw: forbidden, context: forbidden },
+    retry: { used: 1, max: null, reason: 'model_busy', raw: forbidden, context: forbidden },
     reason: forbidden, error: forbidden, previousCommandId: forbidden, commandId: forbidden,
   } }] }, { task_id: 'task-1', cursor: 7 });
-  assert.deepEqual(logs.value.events[0].detail, { retry: { used: 1, max: 3, reason: 'model_busy' } });
+  assert.deepEqual(logs.value.events[0].detail, { retry: { used: 1, max: null, reason: 'model_busy' } });
   assert.equal(logs.value.events[0].detailOmitted, true);
   assert.equal(logs.value.nextCursor, 8);
   assert.doesNotMatch(logs.text, /PRIVATE-NATIVE-CONTEXT|"context"|"raw"|"previousCommandId"|"commandId"/);
 });
 
 test('busy retry tasks retain fixed inspection guidance after recovery becomes uncertain', () => {
-  const retry = { used: 1, max: 3, reason: 'model_busy' };
+  const retry = { used: 1, max: null, reason: 'model_busy' };
   for (const detail of [
     { requiresInspection: true, reason: forbidden },
     { requiresInspection: true, reason: forbidden, message: forbidden },
@@ -354,4 +356,10 @@ test('UTF-8 truncation and credential defense are deterministic', () => {
   const cleaned = redactPresentationText(raw);
   assert.doesNotMatch(cleaned, /private-token|private-key|private-password/);
   assert.equal(redactPresentationText(raw), cleaned);
+});
+
+ test('MCP pool account quotas identify stale imports without inferring time or usage units', () => {
+  const projected = view('pool_control', { accounts: [{ alias: 'account-1', quota: { total: 500, remaining: 400, updatedAt: 1234, raw: forbidden } }] }, { action: 'read' });
+  assert.deepEqual(projected.value.accounts[0].quota, { source: 'imported', freshness: 'stale', observedAtMs: null, unit: 'unknown', total: 500, remaining: 400, updatedAt: { value: 1234, unit: 'unknown' } });
+  assert.doesNotMatch(projected.text, /PRIVATE-NATIVE-CONTEXT|"raw"/);
 });

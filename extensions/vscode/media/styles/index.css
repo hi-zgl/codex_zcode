@@ -14,7 +14,7 @@
  *    - components/badges-skeletons.css: Status indicators, pulse dots, skeleton loaders
  *    - components/tier-badges.css: Monospace subscription badges (.tier-b, .max, .pro, etc.)
  *    - components/quota-panel.css: Translucent container, 3-column .q-win grid, slot layouts
- *    - components/quota-bar.css: Precision 3-color tier bar, .in-fill contrast inverted text
+ *    - components/quota-bar.css: Precision 3-color tier bar, readable theme-surface labels
  *    - components/quota-warning.css: Stale cache alert box (.quota-cache-warning)
  *    - components/forms-code.css: Form fields, inputs, code viewers, diffs, selects
  *
@@ -39,8 +39,8 @@
  *   scripts/test-browser.mjs); numbers use tabular figures globally.
  * - Focus: one :focus-visible ring (tokens.css); components must not remove it.
  * - Icons: Codicons (CC BY 4.0) inlined via src/webview/icons.ts; fill=currentColor.
- * - Quota bars: mint (<70%), amber (>=70%), red (>=90%); text inverts when the
- *   fill passes 58% (.qbar-pct.in-fill).
+ * - Quota bars: mint (<70%), amber (>=70%), red (>=90%); labels use an opaque
+ *   theme surface for contrast across the filled and unfilled portions.
  * - Contrast target: WCAG 2.1 AA (4.5:1 text, 3:1 UI) in the shipped themes;
  *   high-contrast themes add explicit outlines (themes.css).
  */
@@ -71,6 +71,7 @@
    ========================================================================== */
 @import './views/shell.css';
 @import './views/tasks-list.css';
+@import './views/work-overview.css';
 @import './views/task-detail.css';
 @import './views/approvals.css';
 @import './views/delivery.css';

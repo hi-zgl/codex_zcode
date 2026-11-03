@@ -50,8 +50,8 @@ export function renderTaskDetail(ctx: RenderContext, snapshot: UiSnapshot, task:
   }
   if (task.retry) {
     node.append(el('div', 'retry-strip',
-      el('strong', '', `原会话立即继续 · 已使用 ${task.retry.used}/${task.retry.max} 次`),
-      el('span', '', task.retry.max === 0 ? '已关闭模型繁忙续跑' : '仅明确的 model_busy，沿用账号、模型与会话；初次派发不计入')
+      el('strong', '', `通道恢复 · 累计重试 ${task.retry.used} 次`),
+      el('span', '', '次数仅用于统计，不限制总重试；未知执行状态先核实')
     ));
   }
   if (!detail) node.append(notice('当前接口未提供可信安全详情；已有结果可读，写动作不可用。', 'warning'));

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { DEFAULT_EXECUTION_SETTINGS } from '../../src/core/work-store.js';
 import { execFile } from 'node:child_process';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -78,7 +79,7 @@ class BufferedFake implements RuntimeConnection {
     if (this.historyError) throw this.historyError;
     return {
       ...session, phase: this.nativeState, revision: 1, cursor: '2', summary: 'Fixture completed', pendingApprovals: [],
-      raw: { sessionId: session.sessionId, control: { phase: this.nativeState, activeWorks: this.activeWorks }, rows: { window: [
+      raw: { queue:{items:[]},pendingCommands:[],backgroundWorks:[],sessionId: session.sessionId, control: { phase: this.nativeState, activeWorks: this.activeWorks }, rows: { window: [
         { kind: 'turnHeader', rowId: 1, turnId: 'product-turn', sourceCommandId: this.sourceCommandId ?? this.current?.commandId ?? 'request', state: this.nativeState },
         { kind: 'assistantText', rowId: 2, turnId: 'product-turn', text: 'Fixture completed' },
       ] } },
@@ -268,11 +269,11 @@ test('RPC pool policy is shared by overview and admission and lowering it never 
   store.registerWorkspace({...original,workspaceId:'second',worktreePath:join(root,'second'),branch:'second'});
   const capabilities=await coordinator.call('ui_capabilities',{bootstrapVersion:1,client:{name:'test',version:'1'},supportedApiMajors:[1]}) as any;
   assert.equal(capabilities.capabilities.poolPolicy.version,1);
-  assert.deepEqual(await coordinator.call('get_pool_policy',{}),{maxConcurrentTasks:null,occupiedSlots:0,availableSlots:null});
+  assert.deepEqual(await coordinator.call('get_pool_policy',{}),{...DEFAULT_EXECUTION_SETTINGS,maxConcurrentTasks:null,occupiedSlots:0,availableSlots:null});
   await coordinator.call('set_pool_policy',{max_concurrent_tasks:1});fake.hold();
   const first=await dispatch(coordinator);await waitFor(()=>store.getTask(first.task.taskId).status==='running');
   const running=store.getTask(first.task.taskId);
-  const paused={maxConcurrentTasks:0,occupiedSlots:1,availableSlots:0};
+  const paused={...DEFAULT_EXECUTION_SETTINGS,maxConcurrentTasks:0,occupiedSlots:1,availableSlots:0};
   assert.deepEqual(await coordinator.call('set_pool_policy',{max_concurrent_tasks:0}),paused);
   assert.deepEqual(store.getTask(running.taskId),running);assert.equal(fake.closed,false);
   assert.equal((await dispatch(coordinator)).created,false);
@@ -281,10 +282,10 @@ test('RPC pool policy is shared by overview and admission and lowering it never 
   assert.equal(store.listTasks().length,1);assert.equal(fake.sendCalls,1);
   assert.deepEqual((await coordinator.call('overview',{}) as any).poolPolicy,paused);
   await assert.rejects(coordinator.call('set_pool_policy',{max_concurrent_tasks:65}),/Invalid parameters/);
-  await assert.rejects(coordinator.call('set_pool_policy',{}),/Invalid parameters/);
+  assert.deepEqual(await coordinator.call('set_pool_policy',{}),paused);
   fake.release();assert.equal((await completed(store,coordinator,running.taskId)).status,'succeeded');
-  assert.deepEqual(await coordinator.call('get_pool_policy',{}),{maxConcurrentTasks:0,occupiedSlots:0,availableSlots:0});
-  assert.deepEqual(await coordinator.call('set_pool_policy',{max_concurrent_tasks:null}),{maxConcurrentTasks:null,occupiedSlots:0,availableSlots:null});
+  assert.deepEqual(await coordinator.call('get_pool_policy',{}),{...DEFAULT_EXECUTION_SETTINGS,maxConcurrentTasks:0,occupiedSlots:0,availableSlots:0});
+  assert.deepEqual(await coordinator.call('set_pool_policy',{max_concurrent_tasks:null}),{...DEFAULT_EXECUTION_SETTINGS,maxConcurrentTasks:null,occupiedSlots:0,availableSlots:null});
 });
 
 test('dispatch waits for a pending worker stop before acquiring occupancy or sending', async (t) => {
@@ -657,4 +658,45 @@ test('partial Worker stop failure keeps daemon available and never forces termin
 test('daemon_start reaching a live daemon reports ready instead of an empty JSON-RPC result', async (t) => {
   const { coordinator } = await fixture(t);
   assert.deepEqual(await coordinator.call('daemon_start', {}), { ready: true });
+});
+
+test('recovery persists initial native error facts before its cursor and invalidates historical completeness',async t=>{
+ const {store,coordinator,fake}=await fixture(t);const task=store.dispatch({requestId:'request',workspaceId:'workspace',workerId:'worker',prompt:'observe'}).task;store.beginDispatch(task.taskId,{runtimeBinding:{accountAlias:'account-fixture',providerId:'account:zai-start-plan',modelId:'GLM-5.3-Flash'}});store.bindSession(task.taskId,'native-session');store.markInterrupted(task.taskId);store.work.updateExecution(task.taskId,{nativeErrorsComplete:true,nativeErrorsReason:'previous_connection'});
+ fake.nativeState='running';fake.sourceCommandId='request';fake.activeWorks=[{sourceCommandId:'request',turnId:'product-turn'}];
+ const occurredAt=Date.now()-60000;
+ Object.defineProperty(fake,'readNativeFacts',{value:async()=>[{id:'native-1',cursor:'1',sessionId:'native-session',turnId:'request',timestamp:occurredAt,type:'error',data:{origin:'native_model_request',errorAttribution:'turn',category:'model_busy',occurrenceKey:'native-model:one'}},{id:'coverage',cursor:'2',sessionId:'native-session',turnId:'request',timestamp:Date.now(),type:'runtime_status',data:{kind:'native_error_observation',complete:null,reason:'attached_history_unverified'}}]});
+ const before=store.work.execution(task.taskId).lastVisibleActivityAt;await coordinator.call('resume_task',{task_id:task.taskId});assert.equal(store.work.errorStats({taskId:task.taskId}).total,1);assert.equal(store.work.execution(task.taskId).nativeErrorsComplete,null);assert.equal(store.work.execution(task.taskId).lastVisibleActivityAt,before);assert.equal(store.work.execution(task.taskId).executionCommandId,null);assert.equal(fake.sendCalls,0);assert.equal(store.work.errorStats({taskId:task.taskId}).events[0]!.occurredAt,occurredAt);assert.equal(store.work.errorStats({taskId:task.taskId,fromMs:occurredAt+1}).total,0);
+});
+
+
+test('transient connection and session setup retry before persisting model dispatch intent', async t => {
+ for (const phase of ['connect','session'] as const) await t.test(phase, async t => {
+  const {store,coordinator,fake}=await fixture(t);store.setPoolPolicy({retryIntervalMs:1000,recoveryWaitMs:10000});
+  const calls:number[]=[];let fail=true;
+  const transient=()=>Object.assign(new Error('temporary native setup fault'),{code:'ECONNRESET',retryAfterMs:1100});
+  const open=fake.openSession.bind(fake);
+  fake.openSession=async input=>{if(phase==='session'){calls.push(Date.now());if(fail){fail=false;throw transient();}}return open(input);};
+  Object.defineProperty(coordinator.adapter,'connect',{value:async()=>{if(phase==='connect'){calls.push(Date.now());if(fail){fail=false;throw transient();}}return fake;}});
+  fake.onSend=session=>{const task=store.listTasks()[0]!;assert.equal(task.status,'dispatching');assert.equal(task.sessionId,session.sessionId);assert.ok(task.dispatchAttemptedAt);};
+  const result=await dispatch(coordinator);
+  await waitFor(()=>store.work.execution(result.task.taskId).waitingSince!==null);
+  const queued=store.getTask(result.task.taskId);assert.equal(queued.status,'queued');assert.equal(queued.leaseHeld,true);assert.equal(queued.dispatchAttemptedAt,null);assert.equal(store.getCurrentAttempt(queued.taskId),null);assert.equal(fake.sendCalls,0);
+  const task=await completed(store,coordinator,queued.taskId);assert.equal(task.status,'succeeded');assert.equal(fake.sendCalls,1);assert.ok(calls[1]!-calls[0]!>=1050);
+  const errors=store.work.errorStats({taskId:task.taskId});assert.equal(errors.total,1);assert.equal(errors.events[0]!.accountAlias,'account-fixture');assert.ok(errors.events[0]!.recoveredAt);
+ });
+});
+
+test('semantic session setup failure stops before model dispatch without automatic retry', async t => {
+ const {store,coordinator,fake}=await fixture(t);let opens=0;
+ fake.openSession=async input=>{opens++;return {sessionId:'foreign',workspacePath:input.workspacePath+'/foreign'};};
+ const result=await dispatch(coordinator);const task=await completed(store,coordinator,result.task.taskId);
+ assert.equal(task.status,'failed');assert.equal(task.dispatchAttemptedAt,null);assert.equal(task.stopProof!.kind,'not_dispatched');assert.equal(task.leaseHeld,false);assert.equal(opens,1);assert.equal(fake.sendCalls,0);
+});
+
+test('cancellation during transient setup wait releases occupancy and never sends a command', async t => {
+ const {store,coordinator,fake}=await fixture(t);store.setPoolPolicy({retryIntervalMs:1000});
+ Object.defineProperty(coordinator.adapter,'connect',{value:async()=>{throw Object.assign(new Error('connect refused'),{code:'ECONNREFUSED'});}});
+ const result=await dispatch(coordinator);await waitFor(()=>store.work.execution(result.task.taskId).waitingSince!==null);
+ await coordinator.call('cancel_task',{task_id:result.task.taskId});await waitFor(()=>!coordinator.jobs.has(result.task.taskId));
+ const task=store.getTask(result.task.taskId);assert.equal(task.status,'cancelled');assert.equal(task.leaseHeld,false);assert.equal(task.dispatchAttemptedAt,null);assert.equal(fake.sendCalls,0);
 });

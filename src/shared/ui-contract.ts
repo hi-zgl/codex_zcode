@@ -1,4 +1,6 @@
 import { z } from 'zod';
+import { workViewSchema, commanderSchema, errorStatsSchema } from './work-contract.js';
+import { poolPolicySchema } from './methods.js';
 
 /** Wire-only schemas. This module deliberately has no Node, daemon, store or VS Code imports. */
 export const UI_API_VERSION = 1 as const;
@@ -22,14 +24,15 @@ export const uiCapabilitiesSchema = z.object({
   selectedApiVersion:z.object({major:version,minor:uint}),daemonVersion:text,instanceId:uiIdSchema,storeId:uiIdSchema,servedAtMs:uint,
   capabilities:z.object({taskDetail:capability,taskLookupByRequest:capability,taskList:capability,quotaSnapshots:capability,quotaProbe:capability,
     approvalRead:capability,approvalRespondFingerprint:capability,artifactSnapshots:capability,dispatchTask:capability,createWorkspace:capability,
-    importAccounts:capability,startWorker:capability,stopWorker:capability,reconcileTask:capability,resumeTask:capability,cancelTask:capability,poolPolicy:capability,poolLifecycle:capability}),
+    importAccounts:capability,startWorker:capability,stopWorker:capability,reconcileTask:capability,resumeTask:capability,cancelTask:capability,poolPolicy:capability,poolLifecycle:capability,
+    workOverview:capability,errorStats:capability,workTodos:capability,commanderQuota:capability,accountEnabled:capability}),
   limits:z.object({requestBytes:uint,responseBytes:uint,chunkBytes:uint,taskPageItems:uint,approvalPageItems:uint,artifactPageItems:uint,approvalSnapshotBytes:uint,editorFileBytes:uint}),
   runtime:z.object({platform:text,supportedOfficialVersions:z.array(text)}),
 });
 export const uiTaskSummarySchema = z.object({taskId:uiIdSchema,workspaceId:uiIdSchema,workerId:uiIdSchema.nullable(),status:uiTaskStatusSchema,
   revision:uint,createdAtMs:uint,updatedAtMs:uint,leaseHeld:z.boolean(),executionStopped:z.boolean(),cancelRequestedAtMs:time,
   approval:z.object({pendingCount:uint.nullable(),responsePending:z.boolean(),stateKnown:z.boolean()}),
-  retry:z.object({used:uint,max:uint,reason:z.literal('model_busy')})});
+  retry:z.object({used:uint,max:uint.nullable(),reason:z.literal('model_busy')})});
 export const uiAttemptSchema = z.object({index:uint,commandId:uiIdSchema,sessionId:uiIdSchema.nullable(),turnId:uiIdSchema.nullable(),intentAtMs:uint,
   acknowledgedAtMs:time,terminalState:z.enum(['completedSuccess','failed','completedInterrupted']).nullable(),stopProofKind:text.nullable(),
   failureCategory:text.nullable(),busyRetryEligible:z.boolean(),continuationBlocked:z.boolean()});
@@ -37,12 +40,12 @@ const control = z.object({available:z.boolean(),reason:text.nullable(),effects:z
 export const uiTaskDetailSchema = uiTaskSummarySchema.extend({requestId:uiIdSchema,
   workspace:z.object({workspaceId:uiIdSchema,repositoryPath:text,worktreePath:text,branch:text,baseCommit:text,state:z.enum(['active','merged','abandoned'])}),
   execution:z.object({dispatchAttemptedAtMs:time,currentCommandId:uiIdSchema,sessionId:uiIdSchema.nullable(),turnId:uiIdSchema.nullable(),
-    stopProof:z.object({kind:z.enum(['runtime_terminal','process_exited','history_stopped','not_dispatched']),observedAtMs:time,evidenceSummary:text}).nullable(),
+    stopProof:z.object({kind:z.enum(['runtime_terminal','process_exited','history_stopped','not_dispatched','admission_rejected']),observedAtMs:time,evidenceSummary:text}).nullable(),
     attachment:z.enum(['attached','not_attached','unknown']),finalizing:z.boolean()}),
   selection:z.object({requestedWorkerId:uiIdSchema.nullable(),requestedSession:z.enum(['continue','new']),mode:z.enum(['build','edit','plan','yolo','guarded']),requestedModelId:text,
     binding:z.object({accountAlias:uiIdSchema,providerId:text,modelId:text}).nullable()}),
   verificationPolicy:z.object({complete:z.boolean(),defaultDiffCheck:z.boolean(),commands:z.array(z.object({command:text,args:z.array(text),timeoutMs:uint})).max(10),unavailableReason:text.nullable()}),
-  attempts:z.array(uiAttemptSchema).max(11),currentAttemptIndex:uint.nullable(),controls:z.object({cancel:control,reconcile:control,resume:control}),
+  attempts:z.array(uiAttemptSchema).max(25),attemptCount:uint.optional(),currentAttemptIndex:uint.nullable(),controls:z.object({cancel:control,reconcile:control,resume:control}),
   result:z.object({available:z.boolean(),createdAtMs:time,summary:text,summaryTruncated:z.boolean(),changedFileCount:uint,artifactCount:uint,
     verification:z.array(z.object({commandDisplay:text,exitCode:z.number().int().nullable(),summary:text,summaryTruncated:z.boolean()})),blockers:z.array(text),
     manifestState:z.enum(['available','legacy_patch_only','not_captured','unavailable'])}),diagnostic:z.object({code:text,message:text}).nullable()});
@@ -55,10 +58,11 @@ export const uiQuotaWindowItemSchema = z.object({
   total: z.number().finite().nullable(),
   used: z.number().finite().nullable(),
   remaining: z.number().finite().nullable(),
-  percentageUsed: z.number().finite().min(0).max(100),
+  percentageUsed: z.number().finite().min(0).max(100).nullable(),
   unit: text,
   resetsAtMs: time,
   resetsLabel: text.nullable(),
+  resetKind: z.enum(['reset','expires','unknown']).optional(),
 });
 export const uiQuotaSnapshotSchema = z.object({
   source: z.enum(['imported_snapshot','live_probe']),
@@ -76,6 +80,7 @@ export const uiQuotaSnapshotSchema = z.object({
   total: z.number().finite().nullable().default(null),
   used: z.number().finite().nullable().default(null),
   remaining: z.number().finite().nullable().default(null),
+  /** Remaining percentage; live normalized data uses 0_to_100. Unknown is never a full meter. */
   percentage: z.object({value:z.number().finite(),scale:z.enum(['0_to_100','0_to_1','unknown'])}).nullable().default(null),
   authenticated: z.boolean().nullable().default(null),
   freshness: z.enum(['fresh','stale','unknown']).default('unknown'),
@@ -129,6 +134,9 @@ const chunkParams = {offset_bytes:uint,limit_bytes:uint.min(1).max(UI_LIMITS.chu
 const chunkResult = {offsetBytes:uint,dataBase64:text,byteLength:uint,nextOffsetBytes:uint.nullable(),totalBytes:uint};
 export const uiMethods = {
   ui_capabilities:{params:z.object({bootstrapVersion:version,client:z.object({name:text.min(1).max(100),version:text.min(1).max(100)}).strict(),supportedApiMajors:z.array(uint.positive()).min(1).max(10)}).strict(),result:uiCapabilitiesSchema},
+  ui_get_work_overview:{params:z.object({...v,repository_path:text.max(4096).optional(),work_id:uiIdSchema.optional(),limit:uint.min(1).max(50).default(20)}).strict(),
+    result:uiEnvelopeSchema(z.object({works:z.array(workViewSchema).max(50),commanders:z.array(commanderSchema),poolPolicy:poolPolicySchema,total:uint,observedAtMs:uint,truncated:z.boolean(),accountErrors:z.record(errorStatsSchema.pick({total:true,categories:true,complete:true,incompleteTaskCount:true})).default({})}))},
+  ui_get_error_stats:{params:z.object({...v,account_alias:uiIdSchema.optional(),task_id:uiIdSchema.optional(),work_id:uiIdSchema.optional(),from_ms:uint.optional(),to_ms:uint.optional()}).strict(),result:uiEnvelopeSchema(errorStatsSchema)},
   ui_get_task_detail:{params:z.object({...v,task_id:uiIdSchema.optional(),request_id:uiIdSchema.optional()}).strict().refine(p=>!!p.task_id!==!!p.request_id),result:uiEnvelopeSchema(uiTaskDetailSchema)},
   ui_list_tasks:{params:z.object({...v,filter:z.object({repository_path:text.max(4096).optional(),workspace_id:uiIdSchema.optional(),worker_id:uiIdSchema.optional(),statuses:z.array(uiTaskStatusSchema).max(10).optional(),lease_held:z.boolean().optional(),query:text.max(200).optional()}).strict().optional(),sort:z.literal('created_desc').default('created_desc'),limit:uint.min(1).max(100).default(50),cursor:cursor.optional()}).strict(),
     result:uiEnvelopeSchema(z.object({items:z.array(uiTaskSummarySchema),total:uint,nextCursor:cursor.nullable(),listRevision:uint,observedAtMs:uint,scope:z.literal('all_matching_tasks')}))},

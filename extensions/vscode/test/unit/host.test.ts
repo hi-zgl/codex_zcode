@@ -216,9 +216,9 @@ test('accounts.probeAll batches all available accounts with dynamic quota update
   await h.execute('connect');
   const demo=h.service.state.resources.accounts.find(a=>a.alias==='account-demo');
   const review=h.service.state.resources.accounts.find(a=>a.alias==='account-review');
-  assert.equal(demo?.email,'pjsc45sv1w@xenveroes.pro');
-  assert.equal(demo?.name,'pjsc45sv1w@xenveroes.pro');
-  assert.equal(review?.email,'iloveyou@globalsmv.com');
+  assert.equal(demo?.email,'builder@example.invalid');
+  assert.equal(demo?.name,'builder@example.invalid');
+  assert.equal(review?.email,'reviewer@example.invalid');
 
   const firstProbe:any=await h.execute('account.probe',{accountAlias:'account-demo'});
   const firstRemaining=firstProbe.live?.remaining;
@@ -235,5 +235,19 @@ test('accounts.probeAll batches all available accounts with dynamic quota update
   const thirdRemaining=h.service.state.resources.quotas['account-demo']?.live?.remaining;
   assert.notEqual(secondRemaining,thirdRemaining);
  }finally{h.service.dispose();}
+});
+
+test('typed error reads retain observed counts and unknown completeness including zero-error accounts',async()=>{
+  const h=await harness();
+  try{
+    await h.execute('connect');
+    const account=h.service.state.workOverview!.accountErrors['account-unknown'];
+    assert.equal(account.total,0);assert.equal(account.complete,null);assert.equal(account.incompleteTaskCount,1);
+    await h.execute('errors.read',{taskId:'task-unknown'});
+    assert.equal(h.service.state.errorStats!.total,0);assert.equal(h.service.state.errorStats!.complete,null);
+    await h.execute('errors.read',{taskId:'task-complete'});
+    assert.equal(h.service.state.errorStats!.total,5);assert.equal(h.service.state.errorStats!.complete,true);
+    assert.equal(new Set(h.service.state.errorStats!.events.map(event=>event.occurrenceKey)).size,5);
+  }finally{h.service.dispose();}
 });
 

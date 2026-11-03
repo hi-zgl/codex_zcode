@@ -8,9 +8,7 @@
  *     < 70% usage: Mint Green (var(--mint))
  *    >= 70% usage: Amber Warning (var(--amber), .warn)
  *    >= 90% usage: Alert Red Danger (var(--red), .danger)
- * - Contrast text inversion (.in-fill):
- *     When fill width >= 58%, font flips to high-contrast dark (#0e1116, 700 weight).
- *     Otherwise, font renders as soft light grey (#97a1b4) over the dark track.
+ * - Labels use an opaque theme surface so contrast does not depend on fill width.
  * - Tabular figures (tabular-nums) for zero-jitter rendering
  */
 
@@ -50,7 +48,12 @@
 /* Centered Monospace Percentage Label */
 .qbar-pct {
   position: absolute;
-  inset: 0;
+  inset: 0 auto 0 50%;
+  transform: translateX(-50%);
+  width: max-content;
+  max-width: 100%;
+  padding: 0 5px;
+  background: var(--surface);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -58,7 +61,7 @@
   font-size: var(--font-sm);
   font-weight: 500;
   letter-spacing: 0.02em;
-  color: var(--qbar-text-outside);
+  color: var(--text);
   font-variant-numeric: tabular-nums;
   font-feature-settings: "tnum" 1;
   pointer-events: none;
@@ -67,11 +70,11 @@
   transition: color 0.2s ease;
 }
 
-/* In-Fill High Contrast Text Inversion (Remaining >= 58%) */
+/* Full meters keep the same readable label surface. */
 .qbar-pct.in-fill {
-  color: var(--qbar-text-inside);
+  color: var(--text);
   font-weight: 700;
-  text-shadow: 0 0 1px color-mix(in srgb, #fff 15%, transparent);
+  text-shadow: none;
 }
 
 /* Compact / Mini Variant */
@@ -122,7 +125,7 @@ body.vscode-high-contrast .qbar-pct {
   color: CanvasText;
 }
 body.vscode-high-contrast .qbar-pct.in-fill {
-  color: HighlightText;
+  color: CanvasText;
 }
 
 @media (forced-colors: active) {
@@ -137,7 +140,7 @@ body.vscode-high-contrast .qbar-pct.in-fill {
     color: CanvasText;
   }
   .qbar-pct.in-fill {
-    color: HighlightText;
+    color: CanvasText;
   }
 }
 

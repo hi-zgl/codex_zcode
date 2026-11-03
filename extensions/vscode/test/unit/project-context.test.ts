@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { resolvePreferredRepositoryId, type RegisteredProjectWorkspace } from '../../src/host/project-context.js';
+import { projectChoices,resolvePreferredRepositoryId, type RegisteredProjectWorkspace } from '../../src/host/project-context.js';
 
 const projects: RegisteredProjectWorkspace[] = [
   { workspaceId: 'a-task-2', repositoryPath: '/projects/a', worktreePath: '/pool/worktrees/a-two' },
@@ -36,4 +36,13 @@ test('ambiguous registrations and non-host paths do not guess a repository', () 
   assert.equal(resolvePreferredRepositoryId({ workspaceFolderPaths: [], activeFilePath: '/pool/worktrees/b/file.ts' }, conflicting), null);
   assert.equal(resolvePreferredRepositoryId({ workspaceFolderPaths: ['relative/path'], activeFilePath: 'untitled:Document-1' }, projects), null);
   assert.equal(resolvePreferredRepositoryId({ workspaceFolderPaths: ['/projects/a\0'] }, projects), null);
+});
+test('cold work and Host project choices retain identity after preparation and keep source/worktree subfolders with their source',()=>{
+  const context={workspaceFolderPaths:['/projects/cold']};
+  const cold=projectChoices(context,[],[{repositoryPath:'/projects/cold'}]);assert.equal(cold.length,1);
+  const prepared=projectChoices(context,[{workspaceId:'later-workspace',repositoryPath:'/projects/cold',worktreePath:'/pool/cold'}],[]);
+  assert.deepEqual(prepared,cold,'creating a workspace cannot invalidate an active project filter');
+  assert.deepEqual(projectChoices(context,[],[]),cold,'the Host folder can identify pending work before preparation');
+  assert.deepEqual(projectChoices({workspaceFolderPaths:['/projects/a/src','/pool/worktrees/a-two/src']},projects,[]).map(project=>project.repositoryPath),['/projects/a','/projects/b']);
+  assert.deepEqual(projectChoices({workspaceFolderPaths:['relative','/bad\0']},[],[]),[]);
 });

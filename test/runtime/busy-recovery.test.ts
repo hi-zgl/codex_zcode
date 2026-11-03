@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { classifyError, classifyTurnFailure, ConversationProjection } from '../../src/runtime/zcode-server/events.js';
+import { classifyError, classifyTurnFailure, ConversationProjection, extractRetryAfterMs } from '../../src/runtime/zcode-server/events.js';
 import type { RuntimeEvent } from '../../src/runtime/types.js';
 
 const start = 1_793_491_200_000;
@@ -171,4 +171,14 @@ test('clearing error resets deduplication and a split error-before-terminal is s
   same.apply([{ op: 'state.updated', patch: { control: { lastError: null } } }]);
   same.apply([{ op: 'state.updated', patch: { control: { lastError: unowned } } }]);
   assert.equal(same.events.filter(event => event.type === 'error').length, 2);
+});
+
+
+test('provider retry delays respect units and do not read arbitrary output', () => {
+  assert.equal(extractRetryAfterMs({ data: { retryAfterMs: 1500 } }), 1500);
+  assert.equal(extractRetryAfterMs({ response: { headers: { 'Retry-After': '2' } } }), 2000);
+  assert.equal(extractRetryAfterMs({ retryDelayMs: 500, data: { retry_after: 3 } }), 3000);
+  assert.equal(extractRetryAfterMs({ headers: { 'retry-after': 'Tue, 03 Nov 2026 00:00:10 GMT' } }, Date.parse('2026-11-03T00:00:00Z')), 10000);
+  assert.equal(extractRetryAfterMs({ data: { retryAfter: -1 }, nextRetryAt: 999999 }), undefined);
+  assert.equal(extractRetryAfterMs({ kind: 'assistantText', text: 'retry after 99 seconds', retryAfterMs: 99000 }), undefined);
 });

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { DEFAULT_EXECUTION_SETTINGS } from '../../src/core/work-store.js';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { once } from 'node:events';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -78,20 +79,20 @@ test('request IDs are durable, compare normalized payloads, and never create dup
 
 test('pool policy persists bounded limits and zero across reopen while null preserves unlimited admission', async t => {
   const {store,databasePath}=await fixture(t);
-  assert.deepEqual(store.getPoolPolicy(),{maxConcurrentTasks:null,occupiedSlots:0,availableSlots:null});
+  assert.deepEqual(store.getPoolPolicy(),{...DEFAULT_EXECUTION_SETTINGS,maxConcurrentTasks:null,occupiedSlots:0,availableSlots:null});
   store.setPoolPolicy({maxConcurrentTasks:MAX_POOL_CONCURRENT_TASKS});
-  assert.deepEqual(store.getPoolPolicy(),{maxConcurrentTasks:64,occupiedSlots:0,availableSlots:64});
-  for(const invalid of [-1,0.5,MAX_POOL_CONCURRENT_TASKS+1,Infinity,NaN,undefined,'2']) {
+  assert.deepEqual(store.getPoolPolicy(),{...DEFAULT_EXECUTION_SETTINGS,maxConcurrentTasks:64,occupiedSlots:0,availableSlots:64});
+  for(const invalid of [-1,0.5,MAX_POOL_CONCURRENT_TASKS+1,Infinity,NaN,'2']) {
     assert.throws(()=>store.setPoolPolicy({maxConcurrentTasks:invalid as number}),code('INVALID_ARGUMENT'));
   }
   store.setPoolPolicy({maxConcurrentTasks:0});store.close();
   const reopened=new DurableTaskStore(databasePath);t.after(()=>reopened.close());
   workspace(reopened);
-  assert.deepEqual(reopened.getPoolPolicy(),{maxConcurrentTasks:0,occupiedSlots:0,availableSlots:0});
+  assert.deepEqual(reopened.getPoolPolicy(),{...DEFAULT_EXECUTION_SETTINGS,maxConcurrentTasks:0,occupiedSlots:0,availableSlots:0});
   assert.throws(()=>dispatch(reopened),code('POOL_CAPACITY_REACHED'));
   assert.equal(reopened.listTasks().length,0);
   reopened.setPoolPolicy({maxConcurrentTasks:null});dispatch(reopened);
-  assert.deepEqual(reopened.getPoolPolicy(),{maxConcurrentTasks:null,occupiedSlots:1,availableSlots:null});
+  assert.deepEqual(reopened.getPoolPolicy(),{...DEFAULT_EXECUTION_SETTINGS,maxConcurrentTasks:null,occupiedSlots:1,availableSlots:null});
 });
 
 test('lowering the pool limit preserves queued, approval, verification and uncertain task leases without adding a queue', async t => {
@@ -102,7 +103,7 @@ test('lowering the pool limit preserves queued, approval, verification and uncer
   store.transitionTask(one.taskId,'waiting_approval');
   store.beginDispatch(two.taskId);store.markInterrupted(two.taskId);
   const before=store.listTasks(),revision=store.getRevision();
-  assert.deepEqual(store.setPoolPolicy({maxConcurrentTasks:1}),{maxConcurrentTasks:1,occupiedSlots:2,availableSlots:0});
+  assert.deepEqual(store.setPoolPolicy({maxConcurrentTasks:1}),{...DEFAULT_EXECUTION_SETTINGS,maxConcurrentTasks:1,occupiedSlots:2,availableSlots:0});
   assert.deepEqual(store.listTasks(),before);assert.equal(store.getRevision(),revision);
   const next={requestId:'third',workspaceId:'third',workerId:'third'};
   assert.throws(()=>dispatch(store,next),code('POOL_CAPACITY_REACHED'));
@@ -118,7 +119,7 @@ test('lowering the pool limit preserves queued, approval, verification and uncer
   store.transitionTask(two.taskId,'failed',{executionStopped:{kind:'history_stopped',evidence:'Exact original native turn stopped'}});
   const admitted=dispatch(store,next);
   assert.equal(admitted.status,'queued');
-  assert.deepEqual(store.getPoolPolicy(),{maxConcurrentTasks:1,occupiedSlots:1,availableSlots:0});
+  assert.deepEqual(store.getPoolPolicy(),{...DEFAULT_EXECUTION_SETTINGS,maxConcurrentTasks:1,occupiedSlots:1,availableSlots:0});
   assert.throws(()=>dispatch(store,{requestId:'fourth',workspaceId:'workspace',workerId:'fourth'}),code('POOL_CAPACITY_REACHED'));
 });
 
@@ -127,7 +128,7 @@ test('version-three migration preserves existing occupancy and defaults the new 
   const legacy=new DatabaseSync(databasePath);try{legacy.exec('DROP TABLE pool_policy; PRAGMA user_version = 3;');}finally{legacy.close();}
   const migrated=new DurableTaskStore(databasePath);t.after(()=>migrated.close());
   assert.equal(migrated.storeId,storeId);assert.equal(migrated.getTask(task.taskId).leaseHeld,true);
-  assert.deepEqual(migrated.getPoolPolicy(),{maxConcurrentTasks:null,occupiedSlots:1,availableSlots:null});
+  assert.deepEqual(migrated.getPoolPolicy(),{...DEFAULT_EXECUTION_SETTINGS,maxConcurrentTasks:null,occupiedSlots:1,availableSlots:null});
 });
 
 function downgradeToVersionOne(databasePath: string): void {
@@ -162,7 +163,7 @@ test('version-one migration preserves leases, immutable results, original reques
   assert.throws(()=>migrated.dispatch({...input,executionPolicy:{...policy,busyRetryLimit:0}}),code('IDEMPOTENCY_CONFLICT'));
   migrated.recordAttemptFailure(pending.taskId,'legacy',{category:'model_busy',busyRetryEligible:true});
   migrated.recordAttemptTerminal(pending.taskId,'legacy','failed',{kind:'history_stopped',evidence:'Exact stopped busy turn'});
-  assert.throws(()=>migrated.beginBusyContinuation(pending.taskId,'legacy',3),code('INVALID_TRANSITION'),'legacy provider/account identity must never be guessed');
+  assert.throws(()=>migrated.beginBusyContinuation(pending.taskId,'legacy'),code('INVALID_TRANSITION'),'legacy provider/account identity must never be guessed');
   const check=new DatabaseSync(databasePath);try{assert.deepEqual(check.prepare('SELECT payload FROM tasks WHERE task_id = ?').get(pending.taskId),before);}finally{check.close();}
 });
 
@@ -183,16 +184,16 @@ test('busy continuation intent, attempt identity and cancellation survive reopen
   store.acknowledgeDispatch(task.taskId,{sessionId:'native',turnId:'request'});
   store.recordAttemptFailure(task.taskId,'request',{category:'model_busy',busyRetryEligible:true});
   store.recordAttemptTerminal(task.taskId,'request','failed',{kind:'history_stopped',evidence:'Current native failed with no active work'});
-  const next=store.beginBusyContinuation(task.taskId,'request',3);assert.equal(next.requestId,'request');assert.notEqual(next.currentCommandId,'request');assert.equal(next.turnId,null);
+  const next=store.beginBusyContinuation(task.taskId,'request');assert.equal(next.requestId,'request');assert.notEqual(next.currentCommandId,'request');assert.equal(next.turnId,null);
   assert.equal(next.leaseHeld,true);assert.equal(store.hasEnteredVerification(task.taskId),false);assert.equal(store.getResult(task.taskId),null);
-  assert.throws(()=>store.beginBusyContinuation(task.taskId,'request',3),code('RUNTIME_REFERENCE_CONFLICT'));
+  assert.throws(()=>store.beginBusyContinuation(task.taskId,'request'),code('RUNTIME_REFERENCE_CONFLICT'));
   store.requestCancellation(task.taskId);store.close();const reopened=new DurableTaskStore(databasePath);t.after(()=>reopened.close());reopened.recoverInterruptedTasks();
   const persisted=reopened.getTask(task.taskId);assert.equal(persisted.currentCommandId,next.currentCommandId);assert.equal(persisted.busyRetryCount,1);assert.notEqual(persisted.cancelRequestedAt,null);
   assert.equal(reopened.listAttempts(task.taskId).length,2);assert.equal(reopened.getCurrentAttempt(task.taskId)!.acknowledgedAt,null);assert.equal(persisted.leaseHeld,true);
   assert.throws(()=>reopened.beginDispatch(task.taskId),code('DISPATCH_ALREADY_ATTEMPTED'));
   reopened.recordAttemptFailure(task.taskId,next.currentCommandId,{category:'model_busy',busyRetryEligible:true});
   reopened.recordAttemptTerminal(task.taskId,next.currentCommandId,'failed',{kind:'history_stopped',evidence:'Exact continuation stopped'});
-  assert.throws(()=>reopened.beginBusyContinuation(task.taskId,next.currentCommandId,3),code('CANCEL_REQUESTED'));
+  assert.throws(()=>reopened.beginBusyContinuation(task.taskId,next.currentCommandId),code('CANCEL_REQUESTED'));
 });
 
 test('workspace and worker leases are transactional and uncertain tasks retain them', async (t) => {
@@ -250,7 +251,7 @@ test('a committed continuation intent survives SIGKILL without replaying the sto
   reopened.recoverInterruptedTasks();const task=reopened.getTask(taskId);
   assert.equal(task.currentCommandId,before.currentCommandId);assert.equal(task.leaseHeld,true);assert.equal(task.turnId,null);assert.equal(task.executionStopped,false);assert.equal(reopened.hasEnteredVerification(taskId),false);
   assert.equal(reopened.listAttempts(taskId).length,2);assert.equal(reopened.getCurrentAttempt(taskId)!.acknowledgedAt,null);assert.equal(reopened.getResult(taskId),null);
-  assert.throws(()=>reopened.beginDispatch(taskId),code('DISPATCH_ALREADY_ATTEMPTED'));assert.throws(()=>reopened.beginBusyContinuation(taskId,'request',3),code('RUNTIME_REFERENCE_CONFLICT'));
+  assert.throws(()=>reopened.beginDispatch(taskId),code('DISPATCH_ALREADY_ATTEMPTED'));assert.throws(()=>reopened.beginBusyContinuation(taskId,'request'),code('RUNTIME_REFERENCE_CONFLICT'));
   assert.equal(reopened.dispatch({requestId:'request',workspaceId:'workspace',workerId:'worker',prompt:'Durability fixture'}).created,false);
   assert.equal(reopened.listEvents(taskId).filter(event=>event.type==='busy_continue_intent').length,1);
 });
@@ -284,7 +285,7 @@ test('racing processes on different workspaces share one durable pool admission 
   assert.equal(results.filter(value=>value.taskId).length,1);
   assert.equal(results.filter(value=>value.error==='POOL_CAPACITY_REACHED').length,1);
   assert.equal(store.listTasks().length,1);
-  assert.deepEqual(store.getPoolPolicy(),{maxConcurrentTasks:1,occupiedSlots:1,availableSlots:0});
+  assert.deepEqual(store.getPoolPolicy(),{...DEFAULT_EXECUTION_SETTINGS,maxConcurrentTasks:1,occupiedSlots:1,availableSlots:0});
 });
 
 test('worker selection acquires its lease before recording a dispatch intent', async (t) => {
@@ -459,4 +460,24 @@ test('unsafe JSON and stale stop observations cannot partially mutate durable st
   assert.throws(() => store.observeExecutionStopped(task.taskId, { kind: 'process_exited', evidence: 'old exit', observedAt: 1 }), code('INVALID_STOP_PROOF'));
   assert.equal(store.getRevision(), before);
   assert.equal(store.getTask(task.taskId).leaseHeld, true);
+});
+
+test('native error identities replace matching terminal placeholders without hiding different faults',async t=>{
+ const {store}=await fixture(t);workspace(store);const task=dispatch(store);
+ store.work.recordError(task.taskId,'request','model_busy','Terminal failure');store.work.recordError(task.taskId,'request','model_busy','Actual request failure','native-model:1');assert.equal(store.work.errorStats({taskId:task.taskId}).total,1);
+ store.work.recordError(task.taskId,'request','server_error','A distinct later channel failure');assert.equal(store.work.errorStats({taskId:task.taskId}).total,2);
+ store.work.recordError(task.taskId,'request','model_busy','Second actual request failure','native-model:2');store.work.recordError(task.taskId,'request','model_busy','Replayed actual request failure','native-model:2');assert.equal(store.work.errorStats({taskId:task.taskId}).total,3);assert.equal(store.work.execution(task.taskId).errorCount,3);
+});
+
+
+test('native occurrence times replace observation placeholders and retain time-range filtering', async t => {
+ const {store}=await fixture(t);workspace(store);const task=dispatch(store);const occurredAt=Date.now()-60000;
+ store.work.recordError(task.taskId,'request','model_busy','Observed terminal failure');
+ store.work.recordError(task.taskId,'request','model_busy','Historical official request failure','native-model:old',{occurredAt});
+ assert.equal(store.work.errorStats({taskId:task.taskId}).events[0]!.occurredAt,occurredAt);
+ assert.equal(store.work.errorStats({taskId:task.taskId,fromMs:occurredAt,toMs:occurredAt}).total,1);
+ assert.equal(store.work.errorStats({taskId:task.taskId,fromMs:occurredAt+1}).total,0);
+ store.work.recordError(task.taskId,'request','server_error','Invalid timestamp uses observation time','native-model:invalid',{occurredAt:Number.NaN});
+ assert.equal(store.work.errorStats({taskId:task.taskId}).total,2);
+ assert.ok(store.work.errorStats({taskId:task.taskId}).events.every(e=>Number.isSafeInteger(e.occurredAt)));
 });

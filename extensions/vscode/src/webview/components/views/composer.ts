@@ -42,15 +42,10 @@ export function renderComposer(ctx: RenderContext, snapshot: UiSnapshot): HTMLEl
   prompt.dataset.focus = 'draft.prompt';
   form.append(field('要完成的工作', prompt, '描述目标、要求和验收方式。内容只发送给所选执行器的当前任务。', ctx.state.validation.prompt));
   const model = input(draft.modelId, 'draft.modelId');
-  const retries = input(String(draft.busyRetryLimit), 'draft.busyRetryLimit', 'number');
-  retries.min = '0';
-  retries.max = '10';
-  retries.step = '1';
   form.append(el('div', 'form-grid',
     field('模型 ID', model, '后台会检查模型是否可用。', ctx.state.validation.modelId),
     field('运行模式', select(draft.mode, 'draft.mode', ['build', 'edit', 'plan', 'yolo', 'guarded'].map(mode => [mode, mode])), '由已安装的运行环境决定具体行为。'),
-    field('会话', select(draft.session, 'draft.session', [['continue', '继续最近可复用会话'], ['new', '新会话']]), '仅复用同任务目录、同执行器且已停止的会话；没有则新建。'),
-    field('模型繁忙时续跑次数', retries, '默认 3 次；0 关闭，最多 10 次。使用原会话发送“继续”。', ctx.state.validation.busyRetryLimit)
+    field('会话', select(draft.session, 'draft.session', [['continue', '继续最近可复用会话'], ['new', '新会话']]), '仅复用同任务目录、同执行器且已停止的会话；没有则新建。')
   ));
   const commands = section('核验命令', el('p', 'field-hint', '任务执行结束后运行这些命令检查结果，最多 10 项。'));
   for (const [index, command] of draft.verifyCommands.entries()) {

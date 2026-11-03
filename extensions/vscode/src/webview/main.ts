@@ -5,6 +5,7 @@ import type { UiApprovalReview, UiRpcResult } from '../../../../src/shared/ui-co
 import { renderApp } from './components.js';
 import { applySnapshot, approvalDisabled, clearTaskContent, connectionIdentity, createState, defaultFilters, persistedUi, validateDraft, type ArtifactChunk, type DetailTab, type EventPage, type LocalState, type PatchPage, type ReviewContent } from './state.js';
 import { ToastManager } from './toast-manager.js';
+import { drawStageEdges } from './components/views/work-flow.js';
 import { captureFrame, restoreFrame, updateInput, canFlushDraft, buildListPayload, applyVerifiedApprovalRead, applyApprovalRespondSuccess, applyApprovalRespondError, appendArtifactChunk } from './form-controller.js';
 
 declare function acquireVsCodeApi(): VsCodeApi;
@@ -27,6 +28,7 @@ export class WorkbenchApp {
   private readonly liveAssertive: HTMLElement;
   private readonly announcedReceipts = new Map<string, string>();
   private lastAnnouncedMessage = '';
+  private lastFocusRequest: string | null = null;
 
   constructor(private readonly root: HTMLElement, readonly bridge: WebviewBridge) {
     this.state = createState(bridge.getState());
@@ -42,6 +44,7 @@ export class WorkbenchApp {
     this.disposeSubscription = bridge.subscribe(snapshot => this.receiveSnapshot(snapshot));
     root.addEventListener('input', this.onInput); root.addEventListener('change', this.onChange); root.addEventListener('keydown', this.onKeyDown);
     root.addEventListener('pointerdown', this.onPointerDown, true); window.addEventListener('pointerup', this.onPointerUp, true); window.addEventListener('pointercancel', this.onPointerUp, true);
+    root.addEventListener('toggle', this.onGraphLayout, true); window.addEventListener('resize', this.onGraphLayout);
     this.render();
   }
   async start(): Promise<void> {
@@ -49,14 +52,15 @@ export class WorkbenchApp {
   }
   private receiveSnapshot(snapshot: UiSnapshot): void {
     const oldTask = this.state.snapshot?.selectedTaskId; const oldGeneration = this.state.snapshot?.connection.generation;
-    const defaultProjectChanged = applySnapshot(this.state, snapshot);
+    let defaultProjectChanged = applySnapshot(this.state, snapshot);let focusedWork=false;
+    if(snapshot.focusRequest&&snapshot.focusRequest.id!==this.lastFocusRequest){this.lastFocusRequest=snapshot.focusRequest.id;this.state.page='tasks';const work=snapshot.workOverview?.works.find(work=>work.workId===snapshot.focusRequest!.workId);this.state.filters.project=work?.repositoryPath??'';this.state.selectedWorkId=work?.workId??null;this.state.projectDefaultApplied=true;defaultProjectChanged=true;focusedWork=true;this.focusAfterRender='#pending-items';}
     if (oldTask !== snapshot.selectedTaskId || oldGeneration !== snapshot.connection.generation) this.selectionSequence++;
     if (this.state.tab === 'delivery' && snapshot.selectedTaskId) this.state.deliveryVisited = true;
     const restore = this.state.restore;
     const restoreSelection = restore && restore.identity === connectionIdentity(snapshot) && (snapshot.connection.storeId !== null || snapshot.connection.state === 'legacy-readonly') ? restore.selectedTaskId : null;
     if (snapshot.connection.storeId !== null || snapshot.connection.state === 'legacy-readonly') this.state.restore = null;
     this.render();
-    if (defaultProjectChanged || (restore && restore.identity === connectionIdentity(snapshot) && snapshot.connection.storeId !== null)) void this.serverFilter();
+    if (defaultProjectChanged || (restore && restore.identity === connectionIdentity(snapshot) && snapshot.connection.storeId !== null)) void this.serverFilter(!focusedWork);
     if (restoreSelection && restoreSelection !== snapshot.selectedTaskId) void this.action('task.select', { taskId: restoreSelection });
   }
   render(): void {
@@ -65,6 +69,7 @@ export class WorkbenchApp {
     this.renderQueued = false; const frame = captureFrame(this.root);
     this.root.replaceChildren(renderApp({ state: this.state, action: (name, data) => void this.action(name, data) }));
     restoreFrame(this.root, frame, this.focusAfterRender); this.focusAfterRender = null;
+    drawStageEdges(this.root);
     const persisted = persistedUi(this.state); if (persisted) this.bridge.setState(persisted);
     this.toasts.attachToastInteractions();
     this.announce();
@@ -114,6 +119,15 @@ export class WorkbenchApp {
   }
   async action(name: string, data: Record<string, string> = {}): Promise<void> {
     const snapshot = this.state.snapshot;
+    if (name === 'work.select') {
+      if(!snapshot?.workOverview?.works.some(work=>work.workId===data.workId)){
+        const overview=await this.run('work.read',()=>this.bridge.request<'work.read',NonNullable<UiSnapshot['workOverview']>>('work.read',{workId:data.workId}));
+        const work=overview?.works.find(work=>work.workId===data.workId);if(!work)return;
+        this.state.filters.project=work.repositoryPath;this.state.projectDefaultApplied=true;await this.serverFilter();
+      }
+      this.state.selectedWorkId=data.workId;this.render();return;
+    }
+    if (name === 'task.approvals') { await this.action('task.select', {taskId:data.taskId}); await this.action('tab',{tab:'approvals'});return; }
     if (name === 'confirm.arm') { this.state.armedConfirm = data.key; this.render(); return; }
     if (name === 'confirm.cancel') { this.disarmConfirm(); return; }
     if (this.state.armedConfirm) this.state.armedConfirm = null;
@@ -125,8 +139,15 @@ export class WorkbenchApp {
       this.state.page = 'compose'; this.state.validation = {}; this.render(); this.focus('page-title'); return;
     }
     if (name === 'detail.back') { this.state.detailOpen = false; this.render(); this.focusTask(); return; }
-    if (name === 'filters.clear') { this.state.filters = defaultFilters(); this.state.projectDefaultApplied = true; this.render(); await this.serverFilter(); return; }
+    if (name === 'filters.clear') { this.state.filters = defaultFilters(); this.state.projectDefaultApplied = true; this.render(); await this.serverFilter(true); return; }
     if (name === 'filter.status') { this.state.filters.status = data.value; this.render(); await this.serverFilter(); return; }
+    if (name === 'scope.pool' || name === 'scope.project') {
+      const preferred = snapshot?.projects.find(project => project.repositoryId === snapshot.preferredRepositoryId);
+      if (name === 'scope.project' && !preferred && !this.state.filters.project) return;
+      this.state.filters.project = name === 'scope.pool' ? '' : preferred?.repositoryPath ?? this.state.filters.project;
+      this.state.projectDefaultApplied = true; this.render(); await this.serverFilter(true); return;
+    }
+    if (name === 'pool.pause') { this.state.settingsConcurrency = '0'; this.state.policyDirty = true; await this.action('pool.policy.set'); return; }
     if (name === 'tab') {
       if (!tabs.includes(data.tab as DetailTab)) return;
       this.state.tab = data.tab as DetailTab; if (this.state.tab === 'delivery') this.state.deliveryVisited = true; this.render();
@@ -187,6 +208,43 @@ export class WorkbenchApp {
         this.state.settingsConcurrency = this.state.snapshot?.poolPolicy?.maxConcurrentTasks == null ? '' : String(this.state.snapshot.poolPolicy.maxConcurrentTasks);
         this.state.message = value === 0 ? '已暂停新派发；正在运行的任务继续。' : value === null ? '已取消池级并发上限。' : `并发任务上限已设为 ${value}；正在运行的任务继续。`;
       }); return;
+    }
+    if (name === 'pool.execution.set') {
+      const policy = snapshot?.poolPolicy;
+      const read = (key:string,fallback:number) => Number(this.state.rawFields.get(`policy.${key}`) ?? fallback);
+      const retry = read('retrySeconds',(policy?.retryIntervalMs ?? 5000)/1000);
+      const recovery = read('recoveryMinutes',(policy?.recoveryWaitMs ?? 120000)/60000);
+      const silence = read('silenceMinutes',(policy?.silenceCheckMs ?? 900000)/60000);
+      const low = read('lowQuotaPercent',policy?.lowQuotaThresholdPercent ?? 5);
+      const quota = read('defaultQuota',policy?.defaultCommanderQuota ?? 2);
+      for (const [key,value,multiplier] of [['retrySeconds',retry,1000],['recoveryMinutes',recovery,60000],['silenceMinutes',silence,60000]] as const) {
+        if (!Number.isFinite(value) || value*multiplier<1000 || value*multiplier>86400000 || !Number.isInteger(value*multiplier)) this.state.validation[`policy.${key}`] = '请输入 1 秒至 24 小时之间的有效时长。';
+      }
+      if (!Number.isFinite(low) || low<0 || low>100) this.state.validation['policy.lowQuotaPercent'] = '请输入 0–100。';
+      if (!Number.isInteger(quota) || quota<0 || quota>64) this.state.validation['policy.defaultQuota'] = '请输入 0–64 的整数。';
+      if (Object.keys(this.state.validation).some(key=>key.startsWith('policy.'))) { this.render(); this.focusInvalid(); return; }
+      await this.run(name, async()=>{await this.bridge.request('pool.policy.set',{retryIntervalMs:retry*1000,recoveryWaitMs:recovery*60000,silenceCheckMs:silence*60000,lowQuotaThresholdPercent:low,defaultCommanderQuota:quota}); for(const key of this.state.rawFields.keys()) if(key.startsWith('policy.')) this.state.rawFields.delete(key);this.state.message='恢复与配额设置已保存。';}); return;
+    }
+    if (name === 'commander.quota.set') {
+      const commander = snapshot?.workOverview?.commanders.find(item=>item.commanderId===data.commanderId); if(!commander) return;
+      const value=Number(this.state.rawFields.get(`commanderQuota:${data.commanderId}`) ?? commander.defaultQuota);
+      if(!Number.isInteger(value)||value<0||value>64) {this.state.message='指挥配额须为 0–64 的整数。';this.state.messageTone='error';this.render();return;}
+      await this.run(name,async()=>{await this.bridge.request('commander.quota.set',{commanderId:data.commanderId,defaultQuota:value});this.state.rawFields.delete(`commanderQuota:${data.commanderId}`);this.state.message='指挥默认配额已保存，已有执行继续。';});return;
+    }
+    if (name === 'account.enabled.set') { await this.run(name,()=>this.bridge.request('account.enabled.set',{accountAlias:data.accountAlias,enabled:data.enabled==='true'}));return; }
+    if (name === 'account.errors') { this.state.rawFields.set('errors.account',data.accountAlias);this.state.rawFields.set('errors.task','');this.state.page='tasks';this.render();const panel=this.root.querySelector<HTMLDetailsElement>('details.error-stats');if(panel)panel.open=true;await this.action('errors.read');return; }
+    if (name === 'work.todo.resolve') {
+      const amount=Number(this.state.rawFields.get(`partialAccounts:${data.todoId}`) ?? data.availableAccounts);
+      const todo=snapshot?.workOverview?.works.find(work=>work.workId===data.workId)?.todos.find(todo=>todo.todoId===data.todoId);
+      if(data.decision==='approve_partial'&&(!Number.isInteger(amount)||amount<1||amount>(todo?.availableAccounts??0))){this.state.message='请输入不超过当前可用数量的账号数。';this.state.messageTone='error';this.render();return;}
+      await this.run(`todo:${data.todoId}`,()=>this.bridge.request('work.todo.resolve',{workId:data.workId,todoId:data.todoId,action:data.decision as 'approve_partial'|'retry'|'resolve',...(data.decision==='approve_partial'?{availableAccounts:amount}:{})}));return;
+    }
+    if (name === 'errors.read') {
+      const accountAlias=this.state.rawFields.get('errors.account') || undefined;
+      const chosen=this.state.rawFields.get('errors.task') || '';
+      const taskId=chosen==='current' ? snapshot?.selectedTaskId ?? undefined : chosen || data.taskId;
+      const hours=Number(this.state.rawFields.get('errors.hours') ?? '24');
+      await this.run(name,()=>this.bridge.request('errors.read',{accountAlias,taskId,...(hours>0?{fromMs:Date.now()-hours*3600000}:{})}));return;
     }
     if (name === 'accounts.import') {
       await this.run(name, async () => {
@@ -274,6 +332,7 @@ export class WorkbenchApp {
     }
   }
   private onInput = (event: Event): void => { if (!(event.target instanceof HTMLSelectElement)) this.handleFormInput(event, false); };
+  private onGraphLayout = (): void => { if (!this.destroyed) drawStageEdges(this.root); };
   private onChange = (event: Event): void => { if (event.target instanceof HTMLSelectElement) this.handleFormInput(event, true); };
   private onPointerDown = (): void => { this.pointerGesture = true; };
   private onPointerUp = (): void => {
@@ -283,7 +342,7 @@ export class WorkbenchApp {
   private handleFormInput(event: Event, changed: boolean): void {
     updateInput(this.state, event, changed, {
       render: () => this.render(), scheduleDraft: () => this.scheduleDraft(),
-      triggerFilter: debounced => { if (this.filterTimer) clearTimeout(this.filterTimer); if (debounced) this.filterTimer = setTimeout(() => void this.serverFilter(), 250); else void this.serverFilter(); }
+      triggerFilter: debounced => { const projectChanged=(event.target as HTMLElement).dataset.filter==='project';if (this.filterTimer) clearTimeout(this.filterTimer); if (debounced) this.filterTimer = setTimeout(() => void this.serverFilter(projectChanged), 250); else void this.serverFilter(projectChanged); }
     });
   }
   private scheduleDraft(): void {
@@ -296,9 +355,12 @@ export class WorkbenchApp {
     await this.bridge.request('draft.change', { draft });
     if (JSON.stringify(draft) === JSON.stringify(this.state.draft)) this.state.draftDirty = false;
   }
-  private async serverFilter(): Promise<void> {
-    if (!this.state.snapshot?.connection.capabilities.taskList?.version) return;
-    try { await this.bridge.request('tasks.list', buildListPayload(this.state)); this.state.errors.delete('tasks.list'); }
+  private async serverFilter(changeWorkScope=false): Promise<void> {
+    const snapshot=this.state.snapshot;if(!snapshot)return;const payload=buildListPayload(this.state);
+    try { await Promise.all([
+      ...(snapshot.connection.capabilities.taskList?.version?[this.bridge.request('tasks.list',payload)]:[]),
+      ...(changeWorkScope&&snapshot.connection.capabilities.workOverview?.version?[this.bridge.request('work.read',{repositoryId:payload.filter?.repositoryId})]:[])
+    ]);this.state.errors.delete('tasks.list'); }
     catch (error) { if (!(error instanceof BridgeError && ['STALE_SELECTION', 'STALE_CONNECTION'].includes(error.detail.code))) this.state.errors.set('tasks.list', error instanceof Error ? error.message : '列表读取失败。'); }
     this.render();
   }
@@ -332,6 +394,7 @@ export class WorkbenchApp {
     this.toasts.dispose(); this.livePolite.remove(); this.liveAssertive.remove();
     this.root.removeEventListener('input', this.onInput); this.root.removeEventListener('change', this.onChange); this.root.removeEventListener('keydown', this.onKeyDown); clearTaskContent(this.state); this.state.draft = null; this.bridge.dispose();
     this.root.removeEventListener('pointerdown', this.onPointerDown, true); window.removeEventListener('pointerup', this.onPointerUp, true); window.removeEventListener('pointercancel', this.onPointerUp, true);
+    this.root.removeEventListener('toggle', this.onGraphLayout, true); window.removeEventListener('resize', this.onGraphLayout);
   }
 }
 

@@ -17,6 +17,17 @@ export function text(value: unknown, fallback = '当前接口未提供'): string
 export function date(value: number | null | undefined): string {
   return typeof value === 'number' && Number.isFinite(value) ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '时间未知';
 }
+export function errorCategoryLabel(category: string): string {
+  const names: Record<string,string>={model_busy:'模型繁忙',rate_limited:'限流',rate_limit:'限流',timeout:'超时',server_error:'服务故障',transport_error:'通信故障',quota_exhausted:'额度不足',auth_invalid:'认证失效',risk_blocked:'风险拦截',unknown:'未知故障'};
+  return names[category] ?? category;
+}
+export function errorObservationLabel(complete: boolean | null): string {
+  return complete === true ? '当前范围观测完整' : complete === false ? '观测不完整' : '观测完整性待核实';
+}
+export function errorObservationReason(reason: string): string {
+  const reasons:Record<string,string>={not_observed:'尚未确认原生错误观察',attached_history_unverified:'恢复观察前的原生历史尚未核实',official_history_expired:'原生历史窗口已过期，无法补证遗漏',live_turn_observed:'已持续观察本回合'};
+  return reasons[reason] ?? '存在尚未核实的原生观察范围';
+}
 
 export function bytes(value: number | null | undefined): string {
   return value == null ? '大小未知' : value < 1024 ? `${value} B` : value < 1024 * 1024 ? `${(value / 1024).toFixed(1)} KiB` : `${(value / 1024 / 1024).toFixed(1)} MiB`;

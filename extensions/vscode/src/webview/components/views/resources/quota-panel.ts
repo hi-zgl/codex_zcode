@@ -23,18 +23,19 @@ export function formatQuotaNumber(value: number | null | undefined, compact: boo
 }
 
 /** Formats relative reset countdown with tabular figures (e.g., "5小时后重置"). */
-export function formatResetTime(resetsAtMs: number | null, nowMs: number = Date.now()): string {
+export function formatResetTime(resetsAtMs: number | null, nowMs: number = Date.now(), kind: 'reset'|'expires'|'unknown' = 'reset'): string {
   if (resetsAtMs === null || !Number.isFinite(resetsAtMs)) return '—';
   const diff = resetsAtMs - nowMs;
-  if (diff <= 0) return '已重置';
+  const action = kind === 'expires' ? '到期' : kind === 'reset' ? '重置' : '到达官方时间点';
+  if (diff <= 0) return kind === 'expires' ? '已到期' : kind === 'reset' ? '重置时间已到，待刷新' : '官方时间点已到';
   const mins = Math.ceil(diff / 60_000);
-  if (mins < 60) return `${mins}分钟后重置`;
+  if (mins < 60) return `${mins}分钟后${action}`;
   // Derive every unit from the same rounded-up minute count so boundaries never read
   // "0小时59分" (59.5 min) or "0天" (23h59.5m).
   const hours = Math.floor(mins / 60);
   const remMins = mins % 60;
-  if (hours < 24) return remMins > 0 ? `${hours}小时${remMins}分后重置` : `${hours}小时后重置`;
-  return `${Math.floor(mins / 1_440)}天后重置`;
+  if (hours < 24) return remMins > 0 ? `${hours}小时${remMins}分后${action}` : `${hours}小时后${action}`;
+  return `${Math.floor(mins / 1_440)}天后${action}`;
 }
 
 /** Formats relative elapsed time string (e.g., "3分钟前"). */
@@ -53,7 +54,7 @@ export function renderTierBadge(tier: UiQuotaTier | string | undefined): HTMLEle
   const raw = (tier ?? 'unknown').toLowerCase();
   const known = ['max', 'pro', 'lite', 'start', 'trial', 'free'];
   const matched = known.includes(raw) ? raw : 'other';
-  const label = raw === 'unknown' ? 'FREE' : raw.toUpperCase();
+  const label = raw === 'unknown' ? '等级未知' : raw.toUpperCase();
   const badgeNode = el('span', `tier-b ${matched}`, label);
   badgeNode.setAttribute('aria-label', `订阅等级: ${label}`);
   return badgeNode;
@@ -95,7 +96,7 @@ export function renderQuotaWindow(win: UiQuotaWindowItem, nowMs: number = Date.n
     barLabel = `${formatQuotaNumber(win.remaining, mini)}${unitStr ? ` ${unitStr}` : ''} 剩余`;
   }
 
-  const bar = renderQuotaBar({
+  const bar = win.percentageUsed === null ? el('span', 'quota-unknown', barLabel ?? '余量比例未知') : renderQuotaBar({
     percentageUsed: win.percentageUsed,
     labelOverride: barLabel,
     compact: mini,
@@ -106,9 +107,9 @@ export function renderQuotaWindow(win: UiQuotaWindowItem, nowMs: number = Date.n
     bar.title = `${win.name}：余量 ${formatQuotaNumber(win.remaining)} / 总量 ${formatQuotaNumber(win.total)}${unitDesc}`;
   }
 
-  const countdownText = win.resetsLabel ?? formatResetTime(win.resetsAtMs, nowMs);
+  const countdownText = win.resetsLabel ?? formatResetTime(win.resetsAtMs, nowMs, win.resetKind ?? 'unknown');
   const reset = el('span', 'q-win-reset', countdownText);
-  if (win.resetsAtMs) reset.dataset.resetsAt = String(win.resetsAtMs);
+  if (win.resetsAtMs) { reset.dataset.resetsAt = String(win.resetsAtMs); reset.dataset.resetKind = win.resetKind ?? 'unknown'; }
 
   row.append(label, bar, reset);
   return row;

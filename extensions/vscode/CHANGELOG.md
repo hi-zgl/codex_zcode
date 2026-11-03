@@ -1,5 +1,5 @@
-# Changelog
+# 当前版本
 
-## 0.1.0
+`0.1.0` 提供一体后台与 MCP、共享账号池工作台、总任务及真实依赖阶段图、实施/验收分离、配额与恢复设置、集中待办、错误统计、完整审批和不可变交付读取。
 
-First explicit-connect workspace extension with native task/resource views, capability-gated actions, complete approval review and immutable artifact diffs.
+具体能力与验证范围以源码仓库的 `docs/validation/current.md` 为准。

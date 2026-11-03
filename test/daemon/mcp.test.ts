@@ -27,18 +27,15 @@ test('real MCP stdio forwards to daemon; MCP exit does not terminate daemon', {t
   const transport=new StdioClientTransport({command:process.execPath,args:['--import','tsx',fileURLToPath(new URL('../../src/mcp/main.ts',import.meta.url))],env:env as Record<string,string>,stderr:'pipe'});
   await client.connect(transport);
   const tools=await client.listTools();
-  assert.ok(tools.tools.some(t=>t.name==='zcode_dispatch_task'));
-  assert.ok(tools.tools.some(t=>t.name==='zcode_get_pool_policy'));
-  assert.ok(tools.tools.some(t=>t.name==='zcode_set_pool_policy'));
-  assert.ok(!tools.tools.some(t=>t.name==='zcode_import_accounts'));
-  const result=await client.callTool({name:'zcode_overview',arguments:{}});
+  assert.deepEqual(tools.tools.map(t=>t.name).sort(),['zcode_advance_work','zcode_inspect','zcode_pool_control','zcode_submit_work','zcode_wait_work']);
+  const result=await client.callTool({name:'zcode_pool_control',arguments:{action:'read'}});
   assert.equal(result.isError,undefined);
   assert.deepEqual(readText(result).tasks,[]);
-  assert.deepEqual(readText(result).poolPolicy,{maxConcurrentTasks:null,occupiedSlots:0,availableSlots:null});
-  const policy=await client.callTool({name:'zcode_set_pool_policy',arguments:{max_concurrent_tasks:0}});
-  assert.deepEqual(readText(policy),{maxConcurrentTasks:0,occupiedSlots:0,availableSlots:0});
-  assert.deepEqual(await rpcCall('get_pool_policy',{}, {root}),readText(policy),'MCP and local clients share one persisted policy');
-  assert.deepEqual(readText(await client.callTool({name:'zcode_get_pool_policy',arguments:{}})),readText(policy));
+  assert.equal(readText(result).poolPolicy.retryIntervalMs,5000);assert.equal(readText(result).poolPolicy.recoveryWaitMs,120000);assert.equal(readText(result).poolPolicy.silenceCheckMs,900000);
+  const policy=await client.callTool({name:'zcode_pool_control',arguments:{action:'configure',policy:{max_concurrent_tasks:0},user_requested_pool_change:true}});
+  assert.equal(readText(policy).poolPolicy.maxConcurrentTasks,0);
+  assert.deepEqual(await rpcCall('get_pool_policy',{}, {root}),readText(policy).poolPolicy,'MCP and local clients share one persisted policy');
+  assert.deepEqual(readText(await client.callTool({name:'zcode_pool_control',arguments:{action:'start'}})).poolPolicy,readText(policy).poolPolicy);
   await client.close();client=undefined;
   const overview=await rpcCall<{tasks:unknown[]}>('overview',{}, {root});
   assert.deepEqual(overview.tasks,[]);
@@ -92,42 +89,38 @@ async function fakeMcp(t:TestContext, handler:(method:string,args:Record<string,
 test('real MCP stdio bounds hostile replies and native errors without exposing private context', {timeout:20000}, async t=>{
  const privateText='PRIVATE-PROMPT-CREDENTIAL-'.repeat(2000);
  const {client,requests}=await fakeMcp(t,(method)=>{
-  if(method==='probe_worker')return {info:{version:'3.16.3',authenticated:true,supported:true},quota:{provider:{id:'private-provider',credentials:privateText},remaining:{count:500},raw:privateText,history:privateText}};
-  if(method==='get_result')throw new Error(`Bearer actual-secret raw_snapshot=${privateText}`);
-  if(method==='dispatch_task')throw new Error('Workspace is held by task private-task');
+  if(method==='inspect')throw new Error(`Bearer actual-secret raw_snapshot=${privateText}`);
+  if(method==='submit_work')throw new Error('Workspace is held by task private-task');
   return {tasks:[{taskId:'task-1',status:'running',revision:10,leaseHeld:true,prompt:privateText,detail:{summary:privateText,arguments:privateText}}],raw:privateText,history:privateText};
  });
- const overview=await client.callTool({name:'zcode_overview',arguments:{}});
+ const overview=await client.callTool({name:'zcode_pool_control',arguments:{action:'read'}});
  assert.equal(readText(overview).tasks[0].taskId,'task-1');
  assert.doesNotMatch(JSON.stringify(overview),/PRIVATE-PROMPT-CREDENTIAL|"prompt"|"history"|"raw"/);
- const probe=await client.callTool({name:'zcode_probe_worker',arguments:{worker_id:'worker-1'}});
- assert.equal(readText(probe).quota.remaining.count,500);
- assert.doesNotMatch(JSON.stringify(probe),/private-provider|PRIVATE-PROMPT-CREDENTIAL|credentials/);
- const failed=await client.callTool({name:'zcode_get_result',arguments:{task_id:'task-1'}});
+ const failed=await client.callTool({name:'zcode_inspect',arguments:{kind:'result',task_id:'task-1'}});
  assert.equal(failed.isError,true);
  assert.equal(readText(failed).error,'REQUEST_FAILED');
  assert.equal(readText(failed).task_id,'task-1');
  assert.doesNotMatch(JSON.stringify(failed),/actual-secret|PRIVATE-PROMPT-CREDENTIAL|raw_snapshot/);
- const busy=await client.callTool({name:'zcode_dispatch_task',arguments:{workspace_id:'workspace-1',worker_id:'worker-1',request_id:'request-1',prompt:'Do the task'}});
+ const busy=await client.callTool({name:'zcode_submit_work',arguments:{request_id:'request-1',commander_id:'commander',repository:'/project',goal:'Do the task',criteria:['observable'],stages:[{stageId:'build',title:'Build'}]}});
  assert.equal(busy.isError,true);
  assert.equal(readText(busy).error,'WORKSPACE_BUSY');
- assert.match(readText(busy).message,/reconcile/);
- assert.equal(requests.length,4);
+ assert.match(readText(busy).message,/Inspect/);
+ assert.equal(requests.length,3);
 });
 
 test('real MCP stdio validates listed schemas and rejects unknown or huge invalid input before RPC', {timeout:20000}, async t=>{
  const {client,requests}=await fakeMcp(t,()=>({}));
  const listed=await client.listTools();
- const dispatch=listed.tools.find(tool=>tool.name==='zcode_dispatch_task')!;
- assert.equal((dispatch.inputSchema.properties?.prompt as any).maxLength,100_000);
+ const dispatch=listed.tools.find(tool=>tool.name==='zcode_submit_work')!;
+ assert.equal((dispatch.inputSchema.properties?.goal as any).maxLength,12_000);
  assert.ok(!listed.tools.some(tool=>tool.name==='zcode_daemon_stop'||tool.name==='zcode_import_accounts'));
- const pool=listed.tools.find(tool=>tool.name==='zcode_set_pool_policy')!;
- assert.ok(pool.inputSchema.properties?.max_concurrent_tasks);
+ const pool=listed.tools.find(tool=>tool.name==='zcode_pool_control')!;
+ assert.ok(pool.inputSchema.properties?.policy);
  for(const max_concurrent_tasks of [-1,65,0.5,'2']){
-  const invalidPolicy=await client.callTool({name:'zcode_set_pool_policy',arguments:{max_concurrent_tasks}});
+  const invalidPolicy=await client.callTool({name:'zcode_pool_control',arguments:{action:'configure',policy:{max_concurrent_tasks}}});
   assert.equal(invalidPolicy.isError,true);assert.equal(readText(invalidPolicy).error,'INVALID_ARGUMENT');
  }
- const invalid=await client.callTool({name:'zcode_wait',arguments:{task_ids:Array.from({length:3000},()=>123),after_revision:{['PRIVATE-KEY-'.repeat(1000)]:-1}}});
+ const invalid=await client.callTool({name:'zcode_wait_work',arguments:{work_id:123,commander_id:'commander',after_revision:{['PRIVATE-KEY-'.repeat(1000)]:-1}}});
  assert.equal(invalid.isError,true);
  assert.equal(readText(invalid).error,'INVALID_ARGUMENT');
  assert.doesNotMatch(JSON.stringify(invalid),/PRIVATE-KEY/);

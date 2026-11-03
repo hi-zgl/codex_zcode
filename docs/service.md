@@ -6,9 +6,9 @@
 
 ## 普通使用的启动与收工
 
-使用 VS Code 扩展时，点击“启动后台并连接”启动管理后台；在资源页单独启动 Worker。Codex 使用 `zcode_daemon_start`、`zcode_start_worker` 完成相同操作。状态查询不会启动后台。
+使用 VS Code 扩展时，点击“启动后台并连接”启动管理后台；在资源页单独启动 Worker。Codex 通过 `zcode_pool_control` 的 `start` 明确启动后台，高层交办自动准备 Worker。状态查询不会启动后台。
 
-结束工作时用“收工：停止实例与后台”或 `zcode_shutdown_pool`：有任务占用会拒绝，不自动取消；无占用才依次停止 Worker，全部成功后关闭后台。账号、任务及工作区保留。部分实例无法停止时后台继续运行，应刷新检查。旧 daemon 未提供 `poolLifecycle` 能力时，需先在空闲时升级后台。
+结束工作时用“收工：停止实例与后台”或 `zcode_pool_control` 的 `shutdown`：有任务占用会拒绝，不自动取消；无占用才依次停止 Worker，全部成功后关闭后台。账号、任务及工作区保留。部分实例无法停止时后台继续运行，应刷新检查。旧 daemon 未提供 `poolLifecycle` 能力时，需先在空闲时升级后台。
 
 CLI 的 `shutdown-pool` 对应同一收工操作；`daemon-stop` 是高级的“仅停止调度后台”，仍保留 Worker，二者不可混淆。以下 systemd 方式仍是可选高级部署，不需要为了普通启动/收工额外安装服务。
 
@@ -82,7 +82,7 @@ systemctl --user disable zcode-pool.service
 
 ## Worker 与用户会话
 
-daemon 停止或崩溃不会主动终止官方 Worker。为保持这一语义，unit 使用 `KillMode=process`，只向 daemon 主进程发信号。systemd 可能对该设置提示其不符合完整控制进程组的推荐方式；本原型保留该行为，Worker 的停止仍通过核验进程身份后的 `stop_worker` 完成。
+daemon 停止或崩溃不会主动终止官方 Worker。为保持这一语义，unit 使用 `KillMode=process`，只向 daemon 主进程发信号。systemd 可能对该设置提示其不符合完整控制进程组的推荐方式；Worker 的停止仍通过核验进程身份后的 `stop_worker` 完成。
 
 `KillMode=process` 不能保证 Worker 跨用户 manager 退出、注销、系统重启或 logind 清理存活；后台常驻还取决于该机器的用户会话和 linger 策略。项目不会自动修改这些系统设置。生产化若需由 systemd 完整管理所有进程，应进一步把 Worker 划分为独立的受管服务或 scope。
 

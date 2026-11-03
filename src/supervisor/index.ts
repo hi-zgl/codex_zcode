@@ -141,7 +141,7 @@ export class WorkerSupervisor {
     const workerRoot = this.workerRoot(workerId);
     if (Buffer.byteLength(join(workerRoot, 'data/.zcode/server/run/control.sock')) > 107) throw new Error('Worker control socket path exceeds the Linux limit; choose a shorter pool root or worker ID');
     await privateDirectory(this.poolRoot);
-    for (const dir of [join(this.poolRoot, 'workers'), workerRoot, join(workerRoot, 'data'), join(workerRoot, 'data/.zcode'), join(workerRoot, 'data/.zcode/server'), join(workerRoot, 'logs'), join(workerRoot, 'artifacts')]) await privateDirectory(dir);
+    for (const dir of [join(this.poolRoot, 'workers'), workerRoot, join(workerRoot, 'data'), join(workerRoot, 'data/.zcode'), join(workerRoot, 'data/.zcode/cli'), join(workerRoot, 'data/.zcode/cli/db'), join(workerRoot, 'data/.zcode/server'), join(workerRoot, 'logs'), join(workerRoot, 'artifacts')]) await privateDirectory(dir);
     const canonicalPool = await realpath(this.poolRoot);
     const canonicalWorker = await realpath(workerRoot);
     if (!isInside(canonicalPool, canonicalWorker)) throw new Error('Worker directory escapes pool root');
@@ -229,11 +229,13 @@ export class WorkerSupervisor {
     const logPath = join(workerRoot, 'logs/server.log');
     const log = createWriteStream(logPath, { flags: 'a', mode: 0o600 });
     await chmod(logPath, 0o600).catch(() => undefined);
-    const env: NodeJS.ProcessEnv = { ...process.env, ZCODE_DATA_BASE_DIR: join(workerRoot, 'data'), ZCODE_SERVER_ROOT: serverRoot, ZCODE_CREDENTIAL_SECRET: secret, ZCODE_POOL_OWNERSHIP: ownershipMarker, ZCODE_SERVER_SKIP_SERVICE_REGISTRATION: '1' };
+    const env: NodeJS.ProcessEnv = { ...process.env, ZCODE_DATA_BASE_DIR: join(workerRoot, 'data'), ZCODE_STORAGE_DIR: join(workerRoot, 'data/.zcode'), ZCODE_SESSION_DB_PATH: join(workerRoot, 'data/.zcode/cli/db/db.sqlite'), ZCODE_SERVER_ROOT: serverRoot, ZCODE_CREDENTIAL_SECRET: secret, ZCODE_POOL_OWNERSHIP: ownershipMarker, ZCODE_SERVER_SKIP_SERVICE_REGISTRATION: '1' };
     delete env.DISPLAY;
     delete env.WAYLAND_DISPLAY;
     delete env.ZCODE_AGENT_SERVER_COMMAND;
     delete env.ZCODE_AGENT_SERVER_ARGS_JSON;
+    // The legacy alias can override SESSION_DB_PATH by environment insertion order.
+    delete env.ZCODE_SESSION_DB;
     const child = spawn(runtime.node, [runtime.cli, 'serve', '--server-root', serverRoot, '--json'], { env, detached: true, stdio: ['ignore', 'pipe', 'pipe'], cwd: workerRoot });
     let spawnError = false;
     child.once('error', () => { spawnError = true; });

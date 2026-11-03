@@ -6,7 +6,7 @@ import {fileURLToPath,pathToFileURL} from 'node:url';
 import {setTimeout as sleep} from 'node:timers/promises';
 
 const emit=value=>process.stdout.write(`${JSON.stringify({test:'real-model',...value})}\n`);
-const required=['pool-home','worker-id','workspace-id','prompt-file','verify-commands-file','model-id','mode','session','busy-retry-limit','receipt-file'];
+const required=['pool-home','worker-id','workspace-id','prompt-file','verify-commands-file','model-id','mode','session','receipt-file'];
 const allowed=new Set([...required,'timeout-seconds']);
 class RunnerError extends Error {constructor(code,message,details={}){super(message);this.code=code;this.details=details;}}
 const sha256=value=>createHash('sha256').update(value).digest('hex');
@@ -23,7 +23,6 @@ function argumentsForRun(args){
  for(const name of ['pool-home','prompt-file','verify-commands-file','receipt-file'])if(!isAbsolute(flags[name]))fail('INVALID_ARGUMENT','Pool, input files and receipt must use absolute paths.');
  if(!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/.test(flags['worker-id'])||!isId(flags['workspace-id']))fail('INVALID_ARGUMENT','Supply valid explicit Worker and workspace identifiers.');
  if(!flags['model-id'].trim()||flags['model-id'].length>200||!['build','edit','plan','yolo','guarded'].includes(flags.mode)||!['continue','new'].includes(flags.session))fail('INVALID_ARGUMENT','Supply an explicit supported mode, session policy and model ID.');
- if(!/^(?:0|[1-9]|10)$/.test(flags['busy-retry-limit']))fail('INVALID_ARGUMENT','The explicit busy retry limit must be an integer from 0 to 10.');
  if(flags['timeout-seconds']!==undefined&&!/^[1-9]\d{0,3}$/.test(flags['timeout-seconds']))fail('INVALID_ARGUMENT','The observation timeout must be an integer from 1 to 3600 seconds.');
  const timeoutSeconds=Number(flags['timeout-seconds']??300);if(timeoutSeconds>3600)fail('INVALID_ARGUMENT','The observation timeout must be an integer from 1 to 3600 seconds.');
  return {...flags,timeoutSeconds};
@@ -50,11 +49,11 @@ async function runEnabled(flags){
  const prompt=await inputFile(flags['prompt-file'],400000);
  if(!prompt.trim()||prompt.length>100000)fail('INVALID_PROMPT','The prompt must contain 1–100000 UTF-16 units; it is never truncated or printed.');
  const verifyCommands=verificationPolicy(await inputFile(flags['verify-commands-file'],65536));
- const draft={workspaceId:flags['workspace-id'],workerId:flags['worker-id'],prompt,session:flags.session,mode:flags.mode,modelId:flags['model-id'],busyRetryLimit:Number(flags['busy-retry-limit']),verifyCommands,submitToken:randomUUID()};
+ const draft={workspaceId:flags['workspace-id'],workerId:flags['worker-id'],prompt,session:flags.session,mode:flags.mode,modelId:flags['model-id'],verifyCommands,submitToken:randomUUID()};
  if(Buffer.byteLength(JSON.stringify(draft))>500000)fail('INVALID_ARGUMENT','The complete request exceeds the workbench request budget.');
  let poolHome;try{poolHome=await realpath(flags['pool-home']);if(!(await lstat(poolHome)).isDirectory())throw new Error();}catch{fail('INVALID_POOL','The explicitly selected pool directory is unavailable. No default pool is used.');}
  let receiptFile;try{receiptFile=await open(flags['receipt-file'],'wx',0o600);}catch{fail('RECEIPT_UNAVAILABLE','Use a new receipt path in an existing directory. Existing receipts are never overwritten and their dispatch is never repeated.');}
- const receipt={schemaVersion:1,phase:'prepared',poolHome,workerId:draft.workerId,workspaceId:draft.workspaceId,modelId:draft.modelId,mode:draft.mode,session:draft.session,busyRetryLimit:draft.busyRetryLimit,verificationCommandCount:verifyCommands.length,payloadSha256:null,storeId:null,instanceId:null,requestId:null,taskId:null,updatedAtMs:Date.now()};
+ const receipt={schemaVersion:1,phase:'prepared',poolHome,workerId:draft.workerId,workspaceId:draft.workspaceId,modelId:draft.modelId,mode:draft.mode,session:draft.session,verificationCommandCount:verifyCommands.length,payloadSha256:null,storeId:null,instanceId:null,requestId:null,taskId:null,updatedAtMs:Date.now()};
  async function saveReceipt(){receipt.updatedAtMs=Date.now();const bytes=Buffer.from(JSON.stringify(receipt,null,2)+'\n');let offset=0;while(offset<bytes.length){const written=await receiptFile.write(bytes,offset,bytes.length-offset,offset);if(!written.bytesWritten)throw new Error('Receipt write failed');offset+=written.bytesWritten;}await receiptFile.truncate(bytes.length);await receiptFile.sync();}
  let service,temporary,timer,stopped=null;const observation=new AbortController();const storage=new Map();
  const stop=reason=>{stopped??=reason;observation.abort();service?.dispose();};

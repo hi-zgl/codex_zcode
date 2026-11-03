@@ -58,6 +58,43 @@ export interface TurnFailureClassification {
   errorAttribution: 'turn' | 'unattributed';
   busyRetryEligible: boolean;
   error?: Record<string, any>;
+  retryAfterMs?: number;
+}
+
+/** Structured provider wait instructions. Never reads prompts, tool output, or guesses timestamp units. */
+export function extractRetryAfterMs(value: unknown, nowMs = Date.now()): number | undefined {
+  const waits: number[] = [];
+  const visited = new Set<object>();
+  const add = (value: unknown, multiplier: number) => {
+    const n = typeof value === 'number' ? value : typeof value === 'string' && /^\d+(?:\.\d+)?$/.test(value.trim()) ? Number(value) : NaN;
+    if (Number.isFinite(n) && n >= 0 && Number.isFinite(n * multiplier)) waits.push(n * multiplier);
+  };
+  const standard = (value: unknown) => {
+    const before = waits.length;
+    add(value, 1000);
+    if (before === waits.length && typeof value === 'string' && /GMT$/i.test(value.trim())) {
+      const date = Date.parse(value);
+      if (Number.isFinite(date)) waits.push(Math.max(0, date - nowMs));
+    }
+  };
+  function read(entry: unknown, depth = 0): void {
+    if (depth > 8 || !entry || typeof entry !== 'object' || visited.has(entry)) return;
+    visited.add(entry);
+    const source = entry instanceof Error ? { ...record(entry), cause: entry.cause } : record(entry);
+    if (source.kind && !['error', 'turnHeader'].includes(source.kind) || source.source === 'tool' || source.toolCallId !== undefined || source.toolName !== undefined) return;
+    for (const key of ['retryAfterMs', 'retryDelayMs']) add(source[key], 1);
+    add(source.retryAfterSeconds, 1000);
+    for (const key of ['retryAfter', 'retry_after', 'retry-after']) standard(source[key]);
+    for (const key of ['headers', 'responseHeaders']) for (const [name, value] of Object.entries(record(source[key]))) if (name.toLowerCase() === 'retry-after') standard(value);
+    for (const key of ['error', 'cause', 'data', 'body', 'response', 'attribution', 'detail', 'details', 'underlyingErrorDetail']) {
+      const nested = source[key];
+      if (typeof nested === 'string' && nested.length < 32768 && nested.trim().startsWith('{')) {
+        try { read(JSON.parse(nested), depth + 1); } catch {}
+      } else read(nested, depth + 1);
+    }
+  }
+  read(value);
+  return waits.length ? Math.max(...waits) : undefined;
 }
 
 function timestamp(value: unknown): value is number { return typeof value === 'number' && Number.isFinite(value) && value > 0; }
@@ -100,7 +137,11 @@ export function classifyTurnFailure(snapshot: Record<string, any>, header: Recor
   if (!matched.length) return unknown;
   const categories = matched.map(candidate => classifyError(candidate.error));
   const category = (['risk_blocked', 'auth_invalid', 'rate_limited', 'server_error', 'unknown', 'model_busy'] as const).find(category => categories.includes(category))!;
-  return { category, errorAttribution: 'turn', busyRetryEligible: category === 'model_busy', error: matched[categories.indexOf(category)]!.error };
+  const retryAfterMs = matched.reduce<number | undefined>((maximum, candidate) => {
+    const delay = extractRetryAfterMs(candidate.error);
+    return delay === undefined ? maximum : Math.max(maximum ?? 0, delay);
+  }, undefined);
+  return { category, errorAttribution: 'turn', busyRetryEligible: category === 'model_busy', error: matched[categories.indexOf(category)]!.error, ...(retryAfterMs === undefined ? {} : { retryAfterMs }) };
 }
 
 /** A logical frame can span multiple RPC notifications. Reject incomplete or corrupt payloads. */
@@ -150,6 +191,12 @@ export class ConversationProjection {
   private terminalStates = new Map<number, string>();
   private lastError = '';
   private usage = '';
+  private apiRetry = '';
+  private nativeOccurrences = new Set<string>();
+  private nativePendingFailures = new Map<string, Record<string, any>>();
+  private liveNativeTurns = new Set<string>();
+  private incompleteNativeTurns = new Set<string>();
+  private nativeObservationStates = new Map<string, string>();
   private interactions = new Set<string>();
   private serial = 0;
   readonly history: RuntimeEvent[] = [];
@@ -164,9 +211,11 @@ export class ConversationProjection {
     this.emit(event);
   }
   fault(error: unknown): void {
+    for (const nativeTurn of this.liveNativeTurns) this.nativeObservation(nativeTurn, null, 'observation_lost');
+    this.liveNativeTurns.clear();
     this.event('error', { message: error instanceof Error ? error.message : String(error), category: classifyError(error), executionUncertain: true });
   }
-  apply(frame: Record<string, any>, subscriptionLogEpoch?: string): void {
+  apply(frame: Record<string, any>, subscriptionLogEpoch?: string, nativeEvents: unknown[] = [], nativeRead: boolean | { complete: boolean; reason?: string } = false): void {
     const payload = record(frame.payload);
     if (payload.kind === 'snapshot') {
       const snapshot = record(payload.snapshot);
@@ -174,6 +223,9 @@ export class ConversationProjection {
       this.snapshot = structuredClone(snapshot);
       this.event('session_snapshot', { phase: snapshot.control?.phase, revision: snapshot.revision, logEpoch: snapshot.logEpoch, seq: snapshot.seq, tailRows: snapshot.rows?.window?.length ?? 0 });
       for (const row of snapshot.rows?.window ?? []) if (row.kind === 'turnHeader' && row.sourceCommandId) this.rowCommands.set(row.turnId, row.sourceCommandId);
+      this.nativeFailures(nativeEvents);
+      for (const row of snapshot.rows?.window ?? []) if (row.kind === 'turnHeader') this.nativeObservation(row.turnId, null,
+        typeof nativeRead === 'object' && !nativeRead.complete ? nativeRead.reason ?? 'source_read_failed' : 'attached_history_unverified');
       for (const row of snapshot.rows?.window ?? []) this.row(record(row));
       this.state(snapshot);
       return;
@@ -190,6 +242,7 @@ export class ConversationProjection {
         if (index < 0) rows.push(next); else rows[index] = next;
         rows.sort((a, b) => a.rowId - b.rowId);
         const observed = structuredClone(next);
+        if (!this.rowStates.has(next.rowId) && next.kind === 'turnHeader' && next.state === 'running') this.liveNativeTurns.add(next.turnId);
         transitions.push(() => this.row(observed));
       } else if (delta.op === 'row.delta') {
         const row = rows.find((entry) => entry.rowId === delta.rowId);
@@ -216,11 +269,76 @@ export class ConversationProjection {
     this.snapshot.seq = frame.toSeq;
     // Revision changes are authoritative state patches when present; sequence is independent.
     if (typeof frame.revision === 'number') this.snapshot.revision = frame.revision;
+    for (const row of rows) if (row.kind === 'turnHeader' && row.sourceCommandId) this.rowCommands.set(row.turnId, row.sourceCommandId);
+    this.nativeFailures(nativeEvents);
+    if (nativeRead) for (const row of rows) if (row.kind === 'turnHeader' && this.liveNativeTurns.has(row.turnId)) {
+      const unattributed = this.incompleteNativeTurns.has(row.turnId);
+      const complete = (typeof nativeRead === 'object' ? nativeRead.complete : nativeRead) && !unattributed;
+      this.nativeObservation(row.turnId, complete ? true : null, complete ? 'live_turn_observed' : unattributed ? 'unattributed_native_error' : typeof nativeRead === 'object' ? nativeRead.reason ?? 'source_read_failed' : 'source_read_failed');
+    }
     // Official onTurnError emits the header before control.lastError in one batch.
     // Observe the checked complete batch before emitting any terminal transition.
     for (const transition of transitions) transition();
   }
   private turn(row: Record<string, any>): string | undefined { return row.sourceCommandId ?? this.rowCommands.get(row.turnId); }
+  private nativeObservation(nativeTurn: string, complete: true | null, reason: string): void {
+    const commandId = this.rowCommands.get(nativeTurn);
+    if (!commandId) return;
+    const signature = `${complete}:${reason}`;
+    if (this.nativeObservationStates.get(nativeTurn) === signature) return;
+    this.nativeObservationStates.set(nativeTurn, signature);
+    this.event('runtime_status', { kind: 'native_error_observation', complete, reason }, commandId);
+  }
+  /** Whitelist actual native failures, never token deltas, headers or request bodies. */
+  private nativeFailures(values: unknown[]): void {
+    const pending = this.nativePendingFailures;
+    const schedules = new Map<string, { delayMs: number; nextRetryAt: number }>();
+    for (const value of values) {
+      const event = record(value), payload = record(event.payload);
+      if (event.sessionId === this.sessionId && event.type === 'session.updated' && payload.type === 'model_retry_scheduled'
+        && typeof payload.requestId === 'string' && Number.isFinite(payload.delayMs) && payload.delayMs >= 0 && timestamp(event.timestamp)) {
+        schedules.set(`${event.turnId}\0${payload.requestId}\0${payload.attempt}`, { delayMs: payload.delayMs, nextRetryAt: event.timestamp + payload.delayMs });
+      }
+    }
+    for (const value of values) {
+      const event = record(value), payload = record(event.payload);
+      if (event.sessionId !== this.sessionId || typeof event.eventId !== 'string' || !event.eventId) continue;
+      const matching = turnHeaders(this.snapshot!).filter(header => typeof event.sourceCommandId === 'string' && header.sourceCommandId === event.sourceCommandId);
+      const nativeTurn = typeof event.turnId === 'string' ? event.turnId : matching.length === 1 ? matching[0]!.turnId : undefined;
+      if (payload.type === 'model_request_started' || payload.type === 'model_request_completed') {
+        if (nativeTurn) pending.delete(nativeTurn);
+      }
+      if (event.type === 'session.updated' && payload.type === 'model_request_failed') {
+        const occurrenceKey = `native-model:${event.eventId}`;
+        const category = classifyError(payload);
+        if (nativeTurn) pending.set(nativeTurn, { reason: payload.reason, statusCode: payload.statusCode, retryable: payload.retryable, occurrenceKey, category });
+        if (this.nativeOccurrences.has(occurrenceKey)) continue;
+        this.nativeOccurrences.add(occurrenceKey);
+        const commandId = nativeTurn && this.rowCommands.get(nativeTurn);
+        if (!commandId) for (const active of this.liveNativeTurns) this.incompleteNativeTurns.add(active);
+        const reasonCode = typeof payload.reason === 'string' && /^[a-z0-9_.-]{1,160}$/i.test(payload.reason) ? payload.reason : 'unknown';
+        const retryAfterMs = extractRetryAfterMs(payload);
+        const schedule = schedules.get(`${event.turnId}\0${payload.requestId}\0${payload.attempt}`);
+        this.event('error', { origin: 'native_model_request', occurrenceKey, category, reasonCode,
+          errorAttribution: commandId ? 'turn' : 'unattributed', busyRetryEligible: false,
+          ...(typeof payload.requestId === 'string' ? { nativeRequestId: payload.requestId } : {}),
+          ...(Number.isSafeInteger(payload.attempt) ? { attempt: payload.attempt } : {}),
+          ...(Number.isSafeInteger(payload.maxAttempts) ? { maxAttempts: payload.maxAttempts } : {}),
+          ...(Number.isSafeInteger(payload.statusCode) ? { statusCode: payload.statusCode } : {}),
+          ...(typeof payload.retryable === 'boolean' ? { nativeRetryable: payload.retryable } : {}),
+          ...(schedule ? { nativeRetryDelayMs: schedule.delayMs, nextRetryAt: schedule.nextRetryAt } : {}),
+          ...(retryAfterMs === undefined ? {} : { retryAfterMs }) }, commandId || undefined, event.timestamp);
+      }
+    }
+  }
+  private occurrence(header: Record<string, any> | undefined, category: ErrorCategory, error?: Record<string, any>): Record<string, string> {
+    const native = header && this.nativePendingFailures.get(header.turnId), attribution = record(error?.attribution);
+    // Merge only the same explicit final provider/network failure, never an
+    // unrelated tool/runtime error or a recovered intermediate request.
+    return native?.category === category && native.retryable === false && ['provider', 'network'].includes(attribution.source)
+      && typeof attribution.reason === 'string' && attribution.reason === native.reason && attribution.statusCode === native.statusCode
+      ? { occurrenceKey: native.occurrenceKey } : {};
+  }
   private row(row: Record<string, any>): void {
     if (typeof row.rowId !== 'number') throw new Error('Conversation row has no numeric ID');
     if (row.kind === 'turnHeader' && row.sourceCommandId) this.rowCommands.set(row.turnId, row.sourceCommandId);
@@ -235,8 +353,12 @@ export class ConversationProjection {
       if (row.state !== 'running' && this.terminalStates.get(row.rowId) !== row.state) {
         this.terminalStates.set(row.rowId, row.state);
         if (row.state === 'completedSuccess') this.event('turn_completed', data, turnId, row.endedAt);
-        if (row.state === 'failed') this.event('turn_failed', { ...data, ...classifyTurnFailure(this.snapshot!, row) }, turnId, row.endedAt);
+        if (row.state === 'failed') {
+          const failure = classifyTurnFailure(this.snapshot!, row);
+          this.event('turn_failed', { ...data, ...failure, ...this.occurrence(row, failure.category, failure.error) }, turnId, row.endedAt);
+        }
         if (row.state === 'completedInterrupted') this.event('turn_cancelled', data, turnId, row.endedAt);
+        this.liveNativeTurns.delete(row.turnId);
       }
     } else if (row.kind === 'assistantText') this.event('assistant_message', { ...data, delta: false }, turnId);
     else if (row.kind === 'toolCall') this.event(['success', 'error', 'cancelled'].includes(row.status) ? 'tool_result' : 'tool_call', data, turnId);
@@ -244,11 +366,18 @@ export class ConversationProjection {
       const headers = turnHeaders(this.snapshot!).filter(header => attributedToTurn({ ...row, ...record(row.error) }, header, this.snapshot!, row));
       const owner = headers.length === 1 ? headers[0] : undefined;
       const category = classifyError(row);
-      this.event('error', { ...data, category, errorAttribution: owner ? 'turn' : 'unattributed', busyRetryEligible: !!owner && category === 'model_busy' }, owner ? this.turn(owner) : undefined);
+      this.event('error', { ...data, category, ...this.occurrence(owner, category, { ...row, ...record(row.error) }), errorAttribution: owner ? 'turn' : 'unattributed', busyRetryEligible: !!owner && category === 'model_busy' }, owner ? this.turn(owner) : undefined);
     }
   }
   private state(state: Record<string, any>): void {
     if (state.runtimeInitialization) this.event('runtime_status', state.runtimeInitialization);
+    if (state.control && Object.hasOwn(state.control, 'apiRetry')) {
+      const retry = state.control.apiRetry, signature = JSON.stringify(retry);
+      const works = this.snapshot?.control?.activeWorks;
+      const commandId = Array.isArray(works) && works.length === 1 && typeof works[0].sourceCommandId === 'string' ? works[0].sourceCommandId : undefined;
+      if (retry && signature !== this.apiRetry) this.event('runtime_status', { kind: 'api_retry', attempt: retry.attempt, maxAttempts: retry.maxAttempts, nextRetryAt: retry.nextRetryAt, reasonCode: retry.reasonCode }, commandId);
+      this.apiRetry = signature;
+    }
     const lastError = state.control?.lastError;
     if (state.control && Object.hasOwn(state.control, 'lastError') && !lastError) this.lastError = '';
     if (lastError) {
@@ -258,7 +387,7 @@ export class ConversationProjection {
         const headers = turnHeaders(this.snapshot!).filter(header => header.state === 'failed' && attributedToTurn(record(lastError), header, this.snapshot!));
         const owner = headers.length === 1 ? headers[0] : undefined;
         const category = classifyError(lastError);
-        this.event('error', { ...lastError, category, errorAttribution: owner ? 'turn' : 'unattributed', busyRetryEligible: !!owner && category === 'model_busy' }, owner ? this.turn(owner) : undefined);
+        this.event('error', { ...lastError, category, ...this.occurrence(owner, category, lastError), errorAttribution: owner ? 'turn' : 'unattributed', busyRetryEligible: !!owner && category === 'model_busy' }, owner ? this.turn(owner) : undefined);
       }
     }
     if (state.usage) {

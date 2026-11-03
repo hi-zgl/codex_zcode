@@ -21,7 +21,7 @@ class FileRuntime implements RuntimeConnection {
  async syncHistory(session:SessionRef):Promise<SessionSnapshot>{
   const state=await this.state();
   const commandId=state.commandId??'request';
-  return {...session,phase:state.state,revision:state.version,cursor:String(state.version),summary:'Unrelated session summary must not be returned',pendingApprovals:state.pendingApprovals,raw:{sessionId:session.sessionId,control:{phase:state.state,activeWorks:state.state==='running'?[{sourceCommandId:commandId,turnId:'product-turn',foregroundExecutionId:'foreground'}]:[]},rows:{window:[{kind:'turnHeader',rowId:1,turnId:'product-turn',sourceCommandId:commandId,state:state.state},{kind:'assistantText',rowId:2,turnId:'product-turn',text:'Recovered fixture result'},{kind:'toolCall',rowId:3,turnId:'product-turn',toolName:'Edit'}]}}};
+  return {...session,phase:state.state,revision:state.version,cursor:String(state.version),summary:'Unrelated session summary must not be returned',pendingApprovals:state.pendingApprovals,raw:{queue:{items:[]},pendingCommands:[],backgroundWorks:[],sessionId:session.sessionId,control:{phase:state.state,activeWorks:state.state==='running'?[{sourceCommandId:commandId,turnId:'product-turn',foregroundExecutionId:'foreground'}]:[]},rows:{window:[{kind:'turnHeader',rowId:1,turnId:'product-turn',sourceCommandId:commandId,state:state.state},{kind:'assistantText',rowId:2,turnId:'product-turn',text:'Recovered fixture result'},{kind:'toolCall',rowId:3,turnId:'product-turn',toolName:'Edit'}]}}};
  }
  async *events(session:SessionRef,cursor='0'):AsyncIterable<RuntimeEvent>{
   let after=Number(cursor);

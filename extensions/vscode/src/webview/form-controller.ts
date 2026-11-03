@@ -64,10 +64,12 @@ export function updateInput(state: LocalState, event: Event, changed: boolean, c
   }
   const key = target.dataset.field;
   if (!key) return;
+  if (['policy.', 'commanderQuota:', 'partialAccounts:', 'errors.'].some(prefix => key.startsWith(prefix))) {
+    state.rawFields.set(key, target.value); delete state.validation[key]; callbacks.render(); return;
+  }
   if (key.startsWith('draft.') && state.draft) {
     const field = key.slice(6) as keyof TaskDraft;
-    if (field === 'busyRetryLimit') state.draft.busyRetryLimit = Number(target.value);
-    else if (field === 'workspaceId') state.draft.workspaceId = target.value;
+    if (field === 'workspaceId') state.draft.workspaceId = target.value;
     else if (field === 'workerId') state.draft.workerId = target.value;
     else if (field === 'prompt') state.draft.prompt = target.value;
     else if (field === 'session' && (target.value === 'continue' || target.value === 'new')) state.draft.session = target.value;
@@ -118,7 +120,7 @@ export function canFlushDraft(state: LocalState): TaskDraft | null {
   if (Object.keys(state.validation).some(key => key.endsWith('.args'))) return null;
   const draft = structuredClone(state.draft);
   // Incomplete executable fields remain in this Webview until valid, never silently truncated.
-  if (draft.verifyCommands.some(command => !command.command.trim()) || !draft.modelId.trim() || !Number.isInteger(draft.busyRetryLimit) || draft.busyRetryLimit < 0 || draft.busyRetryLimit > 10) {
+  if (draft.verifyCommands.some(command => !command.command.trim()) || !draft.modelId.trim()) {
     return null;
   }
   return draft;
@@ -127,7 +129,7 @@ export function canFlushDraft(state: LocalState): TaskDraft | null {
 export function buildListPayload(state: LocalState): RequestPayload<'tasks.list'> {
   const snapshot = state.snapshot;
   const filters = state.filters;
-  const repository = snapshot?.resources.workspaces.find(workspace => workspace.repositoryPath === filters.project);
+  const repository = snapshot?.projects.find(project => project.repositoryPath === filters.project);
   const statuses = (
     filters.status === 'active'
       ? ['queued', 'dispatching', 'running', 'waiting_approval', 'verifying']
@@ -139,7 +141,7 @@ export function buildListPayload(state: LocalState): RequestPayload<'tasks.list'
   ) as NonNullable<RequestPayload<'tasks.list'>['filter']>['statuses'];
   return {
     filter: {
-      ...(repository ? { repositoryId: repository.workspaceId } : {}),
+      ...(repository ? { repositoryId: repository.repositoryId } : {}),
       ...(filters.workspace ? { workspaceId: filters.workspace } : {}),
       ...(filters.worker ? { workerId: filters.worker } : {}),
       ...(statuses ? { statuses } : {}),

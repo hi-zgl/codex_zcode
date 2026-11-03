@@ -31,6 +31,7 @@ afterEach(async () => {
 
 function createSnapshot(): UiSnapshot {
   return {
+    projects:[],
     connection: {
       state: 'connected', mode: 'mock', generation: 1, host: 'SSH: isolated-host',
       poolHome: '/mock/pool', trusted: true, lastReceivedAtMs: Date.now(), stale: false,
@@ -82,7 +83,7 @@ function createSnapshot(): UiSnapshot {
       }
     },
     approvals: null, delivery: { manifest: null, files: [], nextCursor: null, reviewed: false },
-    draft: { workspaceId: 'ws-1', workerId: 'wrk-01', prompt: '', session: 'continue', mode: 'build', modelId: 'GLM', busyRetryLimit: 1, verifyCommands: [], submitToken: 'tok' },
+    draft: { workspaceId: 'ws-1', workerId: 'wrk-01', prompt: '', session: 'continue', mode: 'build', modelId: 'GLM', verifyCommands: [], submitToken: 'tok' },
     actions: [], overviewIntervalSeconds: 30, poolPolicy: null, notice: null
   };
 }

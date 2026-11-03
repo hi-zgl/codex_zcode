@@ -1,29 +1,40 @@
-import test from 'node:test';
+import test, {before, after} from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync } from 'node:fs';
-import { resolve } from 'node:path';
+import {mkdtemp,writeFile,rm} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import { resolve, join } from 'node:path';
 import { loadMockFixture, MockTransport } from '../../src/host/mock.js';
 
 const fixturePath = resolve(__dirname, '../fixtures/pool-demo.json');
-const realAccountsPath = process.env.ZCODE_POOL_REAL_ACCOUNTS_FILE ?? '/home/zgl/.local/share/zcode-pool/imports/zcode_accounts_2026-11-01.json';
-// These checks need a private 28-account export that only exists on the author's machine.
-// Point ZCODE_POOL_REAL_ACCOUNTS_FILE at a copy to run them elsewhere.
-const skipReal = existsSync(realAccountsPath) ? false : `real account export not found at ${realAccountsPath}`;
+let accountExportPath: string;
+let fixtureDirectory: string;
+before(async () => {
+  fixtureDirectory = await mkdtemp(join(tmpdir(), 'zcode-ui-import-'));
+  accountExportPath = join(fixtureDirectory, 'accounts.json');
+  const fixture = await loadMockFixture(fixturePath);
+  const accounts = Array.from({length:28}, (_,index) => ({
+    email:index === 0 ? 'imported-builder@example.invalid' : index === 1 ? 'imported-reviewer@example.invalid' : `imported-${index}@example.invalid`,
+    display_name:index === 0 ? 'Imported Builder' : index === 1 ? 'Imported Reviewer' : `Imported ${index}`,
+    provider:'zai',health:'available',quota:structuredClone(fixture.overview.accounts[0]!.quota)
+  }));
+  await writeFile(accountExportPath, JSON.stringify(accounts), {mode:0o600});
+});
+after(async () => {if(fixtureDirectory)await rm(fixtureDirectory,{recursive:true,force:true});});
 
-test('MockTransport imports real account files and parses real quota structures', { skip: skipReal }, async () => {
+test('MockTransport imports export-shaped account files and parses quota structures', async () => {
   const fixture = await loadMockFixture(fixturePath);
   const transport = new MockTransport(fixture);
 
   // 1. Initial overview should have the 3 default sample accounts
   const initialOverview = (await transport.request('overview', {})) as any;
   assert.equal(initialOverview.accounts.length, 3);
-  assert.equal(initialOverview.accounts[0].email, 'pjsc45sv1w@xenveroes.pro');
+  assert.equal(initialOverview.accounts[0].email, 'builder@example.invalid');
   assert.equal(initialOverview.accounts[0].plan, 'ZCODE WEEKEND BUILD');
   assert.equal(initialOverview.accounts[0].quota.total, 500_000_000);
 
-  // 2. Import the real 28-account JSON export file
+  // 2. Import 28 synthetic records without reading private account files
   const importResult = (await transport.request('import_accounts', {
-    files: [realAccountsPath],
+    files: [accountExportPath],
   })) as any;
 
   assert.equal(importResult.fileCount, 1);
@@ -33,16 +44,16 @@ test('MockTransport imports real account files and parses real quota structures'
 
   // Verify first summary
   const firstSummary = importResult.summaries[0];
-  assert.equal(firstSummary.email, 'pjsc45sv1w@xenveroes.pro');
-  assert.equal(firstSummary.name, 'pjsc45sv1w@xenveroes.pro');
+  assert.equal(firstSummary.email, 'imported-builder@example.invalid');
+  assert.equal(firstSummary.name, 'Imported Builder');
   assert.equal(firstSummary.provider, 'zai');
   assert.equal(firstSummary.health, 'available');
   assert.equal(firstSummary.plan, 'ZCODE WEEKEND BUILD');
 
   // Verify second summary
   const secondSummary = importResult.summaries[1];
-  assert.equal(secondSummary.email, 'iloveyou@globalsmv.com');
-  assert.equal(secondSummary.name, 'iloveyou');
+  assert.equal(secondSummary.email, 'imported-reviewer@example.invalid');
+  assert.equal(secondSummary.name, 'Imported Reviewer');
   assert.equal(secondSummary.provider, 'zai');
 
   // 3. Check updated overview accounts in transport fixture
@@ -52,7 +63,7 @@ test('MockTransport imports real account files and parses real quota structures'
 
   // Verify imported account details in overview
   const importedAcc = updatedOverview.accounts.find(
-    (a: any) => a.email === 'pjsc45sv1w@xenveroes.pro' && a.alias !== 'account-demo'
+    (a: any) => a.email === 'imported-builder@example.invalid' && a.alias !== 'account-demo'
   );
   assert.ok(importedAcc, 'Imported account should exist in overview');
   assert.equal(importedAcc.quota.total, 500_000_000);
@@ -63,16 +74,16 @@ test('MockTransport imports real account files and parses real quota structures'
   assert.equal(importedAcc.quota.quota_raw[0].show_name, 'GLM-5.3-Flash');
 });
 
-test('MockTransport deduplicates accounts on re-importing the same file', { skip: skipReal }, async () => {
+test('MockTransport deduplicates accounts on re-importing the same file', async () => {
   const fixture = await loadMockFixture(fixturePath);
   const transport = new MockTransport(fixture);
 
   // First import
-  await transport.request('import_accounts', { files: [realAccountsPath] });
+  await transport.request('import_accounts', { files: [accountExportPath] });
 
   // Second import with the same file
   const reimportResult = (await transport.request('import_accounts', {
-    files: [realAccountsPath],
+    files: [accountExportPath],
   })) as any;
 
   assert.equal(reimportResult.fileCount, 1);
@@ -87,8 +98,8 @@ test('MockTransport ui_get_quota and ui_probe_quota extract GLM-5.3-Flash token 
   const fixture = await loadMockFixture(fixturePath);
   const transport = new MockTransport(fixture);
 
-  // Import real accounts
-  const importResult = (await transport.request('import_accounts', { files: [realAccountsPath] })) as any;
+  // Import the synthetic export
+  const importResult = (await transport.request('import_accounts', { files: [accountExportPath] })) as any;
   const importedAlias = importResult.summaries[0].alias;
 
   // 1. ui_get_quota (offline / imported snapshot)

@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { z } from 'zod';
 import { uiMethods, uiErrorDataSchema, type UiMethodName, type UiRpcParams, type UiRpcResult } from '../../../../src/shared/ui-contract.js';
 import { methods, poolPolicySchema } from '../../../../src/shared/methods.js';
+import { commanderSchema, workViewSchema } from '../../../../src/shared/work-contract.js';
 
 /** JSON-RPC envelope; built once instead of per response frame. */
 const rpcResponseSchema = z.object({jsonrpc:z.literal('2.0'),id:z.string(),result:z.unknown().optional(),error:z.object({code:z.number(),message:z.string(),data:z.unknown().optional()}).optional()});
@@ -76,8 +77,8 @@ function fixedMessage(code: string): string {
   return messages[code] ?? `The operation was rejected (${code}). Refresh the target before another action.`;
 }
 const id = z.string().min(1).max(150);
-const task = z.object({taskId:id,workspaceId:id,workerId:id.nullable(),status:z.string(),revision:z.number().int().nonnegative(),leaseHeld:z.boolean(),sessionId:id.nullable().optional(),retry:z.object({used:z.number(),max:z.number(),reason:z.literal('model_busy')}).optional()});
-const account = z.object({alias:id,provider:z.string(),health:z.string(),plan:z.string().optional(),email:z.string().optional(),name:z.string().optional()});
+const task = z.object({taskId:id,workspaceId:id,workerId:id.nullable(),status:z.string(),revision:z.number().int().nonnegative(),leaseHeld:z.boolean(),sessionId:id.nullable().optional(),retry:z.object({used:z.number(),max:z.number().nullable(),reason:z.literal('model_busy')}).optional()});
+const account = z.object({alias:id,provider:z.string(),health:z.string(),plan:z.string().optional(),email:z.string().optional(),name:z.string().optional(),enabled:z.boolean().optional()});
 const workspace = z.object({workspaceId:id,repositoryPath:z.string(),worktreePath:z.string(),branch:z.string(),baseCommit:z.string(),state:z.string(),activeTaskId:id.nullable()});
 const worker = z.object({workerId:id,accountAlias:id,state:z.string(),processOwned:z.boolean(),runningTaskCount:z.number().optional(),version:z.string().optional()});
 const result = z.object({summary:z.string(),changedFiles:z.array(z.string()).optional(),verification:z.array(z.object({command:z.string(),exitCode:z.number().nullable(),summary:z.string().optional()})).optional(),blockers:z.array(z.string()).optional()}).nullable();
@@ -86,6 +87,7 @@ const legacy = {
   overview:z.object({tasks:z.array(task),accounts:z.array(account),workers:z.array(worker),workspaces:z.array(workspace),poolPolicy:poolPolicySchema.optional()}),
   shutdown_pool:z.object({stopping:z.literal(true),workersStopped:z.literal(true),stoppedWorkers:z.number().int().nonnegative()}),
   get_pool_policy:poolPolicySchema,set_pool_policy:poolPolicySchema,
+  set_commander_quota:commanderSchema,set_account_enabled:z.object({accountAlias:id,enabled:z.boolean()}),resolve_work_todo:workViewSchema,
   wait:z.object({tasks:z.array(task),changedTaskIds:z.array(id),timedOut:z.boolean(),revision:z.number().int().nonnegative()}),
   get_result:z.object({task,result}),
   get_diff:z.object({available:z.boolean(),text:z.string().optional(),nextOffset:z.number().int().nonnegative().nullable().optional(),totalCharacters:z.number().int().nonnegative().optional()}),

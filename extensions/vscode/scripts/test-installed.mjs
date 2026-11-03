@@ -114,19 +114,19 @@ exports.run=async()=>{
   const client = new Client({ name: 'unified-vsix-test', version: '1.0.0' });
   try {
     await client.connect(transport);
-    assert.ok((await client.listTools()).tools.some(tool => tool.name === 'zcode_overview'));
-    const overview = await client.callTool({ name: 'zcode_overview', arguments: {} });
+    assert.ok((await client.listTools()).tools.some(tool => tool.name === 'zcode_pool_control'));
+    const overview = await client.callTool({ name: 'zcode_pool_control', arguments: {action:'read'} });
     assert.ok(!overview.isError, 'Stable bundled MCP uses the selected connection after VS Code exits');
-    const finish=await client.callTool({name:'zcode_shutdown_pool',arguments:{}});
+    const finish=await client.callTool({name:'zcode_pool_control',arguments:{action:'shutdown'}});
     assert.ok(!finish.isError,'explicit finish-work accepted for an idle pool');
     for(let n=0;n<100&&await poolPresent(pools[1]);n++)await delay(50);
     assert.equal(await poolPresent(pools[1]),false,'shutdown removes socket and lock');
-    const stopped=await client.callTool({name:'zcode_overview',arguments:{}});
+    const stopped=await client.callTool({name:'zcode_pool_control',arguments:{action:'read'}});
     assert.equal(stopped.isError,true,'read after shutdown does not restart the pool');
     assert.equal(await poolPresent(pools[1]),false);
-    const restarted=await client.callTool({name:'zcode_daemon_start',arguments:{}});
+    const restarted=await client.callTool({name:'zcode_pool_control',arguments:{action:'start'}});
     assert.ok(!restarted.isError,'only explicit start restarts the selected pool');
-    assert.ok(!(await client.callTool({name:'zcode_overview',arguments:{}})).isError);
+    assert.ok(!(await client.callTool({name:'zcode_pool_control',arguments:{action:'read'}})).isError);
 
   } finally { await client.close(); }
   assert.ok(await cleanupPools(), 'Only the isolated test daemons stop during cleanup');

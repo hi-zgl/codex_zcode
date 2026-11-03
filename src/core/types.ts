@@ -9,6 +9,11 @@ export interface PoolPolicy {
   occupiedSlots: number;
   /** null for an unlimited policy; never negative when a limit is lowered. */
   availableSlots: number | null;
+  retryIntervalMs: number;
+  recoveryWaitMs: number;
+  silenceCheckMs: number;
+  lowQuotaThresholdPercent: number;
+  defaultCommanderQuota: number;
 }
 
 export type TaskStatus =
@@ -46,11 +51,12 @@ export interface DispatchInput {
   workerId?: string;
   session?: 'continue' | 'new';
   executionPolicy?: JsonValue;
+  workItem?: {workId:string;itemId:string};
 }
 
 /** This is an observation by the caller, never an inference from a timeout. */
 export interface StopProof {
-  kind: 'runtime_terminal' | 'process_exited' | 'history_stopped' | 'not_dispatched';
+  kind: 'runtime_terminal' | 'process_exited' | 'history_stopped' | 'not_dispatched' | 'admission_rejected';
   evidence: string;
   observedAt?: number;
 }

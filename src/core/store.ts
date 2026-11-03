@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { DatabaseSync, type StatementSync } from 'node:sqlite';
+import { WorkStore, type ExecutionSettings } from './work-store.js';
 import {
   CoreError,
   MAX_POOL_CONCURRENT_TASKS,
@@ -204,10 +205,11 @@ function validateArtifact(artifact: ArtifactMetadata): void {
 }
 
 /**
- * The durable boundary before any runtime side effect. Call beginDispatch once,
+ * The durable boundary before any model command. Call beginDispatch once,
  * commit it, and only then send to the runtime. An uncertain command is never replayed.
  */
 export class DurableTaskStore {
+  readonly work: WorkStore;
   private readonly db: DatabaseSync;
   private readonly now: () => number;
   private readonly pollIntervalMs: number;
@@ -229,6 +231,7 @@ export class DurableTaskStore {
     try {
       this.db.exec('PRAGMA busy_timeout = 5000; PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL;');
       this.initializeSchema();
+      this.work = new WorkStore(this.db, action=>this.write(action), this.now, this);
     } catch (error) {
       this.db.close();
       throw error;
@@ -445,17 +448,20 @@ export class DurableTaskStore {
       maxConcurrentTasks: row.max_concurrent_tasks,
       occupiedSlots: row.occupied_slots,
       availableSlots: row.max_concurrent_tasks === null ? null : Math.max(0, row.max_concurrent_tasks - row.occupied_slots),
+      ...this.work.settings(),
     };
   }
 
-  setPoolPolicy(input: { maxConcurrentTasks: number | null }): PoolPolicy {
+  setPoolPolicy(input: { maxConcurrentTasks?: number | null } & Partial<ExecutionSettings>): PoolPolicy {
     const limit = input?.maxConcurrentTasks;
-    if (limit !== null) {
+    if (limit !== undefined && limit !== null) {
       nonnegativeInteger(limit, 'maxConcurrentTasks');
       if (limit > MAX_POOL_CONCURRENT_TASKS) fail('INVALID_ARGUMENT', `maxConcurrentTasks must be at most ${MAX_POOL_CONCURRENT_TASKS}`);
     }
+    const {maxConcurrentTasks: _limit,...settings}=input;
+    if(Object.keys(settings).length)this.work.setSettings(settings);
     return this.write(() => {
-      this.sql('UPDATE pool_policy SET max_concurrent_tasks = ? WHERE singleton = 1').run(limit);
+      if(limit!==undefined)this.sql('UPDATE pool_policy SET max_concurrent_tasks = ? WHERE singleton = 1').run(limit);
       // Existing leases are unchanged, even when occupancy exceeds the new limit.
       return this.getPoolPolicy();
     });
@@ -475,6 +481,7 @@ export class DurableTaskStore {
     const payload = canonicalJson({
       workspaceId: input.workspaceId, prompt: input.prompt, workerId: input.workerId ?? null,
       session, executionPolicy: idempotencyPolicy,
+      ...(input.workItem?{workItem:input.workItem}:{}),
     });
     return this.write(() => {
       const duplicate = this.sql('SELECT * FROM tasks WHERE request_id = ?').get(input.requestId) as unknown as TaskRow | undefined;
@@ -496,6 +503,7 @@ export class DurableTaskStore {
         .run(taskId, input.requestId, input.workspaceId, payload, input.prompt, input.workerId ?? null,
           input.workerId ?? null, session, executionPolicy, input.requestId, at, at);
       this.event(taskId, 'task_created', 'queued', null, at);
+      if(input.workItem)this.work.linkTaskInTransaction(input.workItem.workId,input.workItem.itemId,taskId,input.workspaceId);
       return { task: this.getTask(taskId), created: true };
     });
   }
@@ -585,7 +593,7 @@ export class DurableTaskStore {
     return this.write(() => {
       const row = this.taskRow(taskId);
       if (row.current_command_id !== commandId || !this.getCurrentAttempt(taskId)) fail('RUNTIME_REFERENCE_CONFLICT','Failure evidence must identify the current native command');
-      const eligible = input.category === 'model_busy' && input.busyRetryEligible;
+      const eligible = ['model_busy','rate_limited','server_error'].includes(input.category) && input.busyRetryEligible;
       const current = this.getCurrentAttempt(taskId)!;
       // A disqualifying owned failure is never erased by a later busy diagnostic.
       const blocked = current.continuationBlocked || !eligible;
@@ -615,15 +623,12 @@ export class DurableTaskStore {
   }
 
   /** Commit a fresh continuation intent exactly once. A committed command is never sent again. */
-  beginBusyContinuation(taskId: string, expectedCommandId: string, maxContinuations: number): Task {
-    nonnegativeInteger(maxContinuations,'maxContinuations');
-    if (maxContinuations > 10) fail('INVALID_ARGUMENT','maxContinuations must not exceed 10');
+  beginBusyContinuation(taskId: string, expectedCommandId: string): Task {
     return this.write(() => {
       const row = this.taskRow(taskId);
       const attempt = this.getCurrentAttempt(taskId);
       if (row.current_command_id !== expectedCommandId || !attempt) fail('RUNTIME_REFERENCE_CONFLICT','Continuation must follow the current native command');
       if (row.cancel_requested_at !== null) fail('CANCEL_REQUESTED','Cancellation prevents any further continuation');
-      if (row.busy_retry_count >= maxContinuations) fail('BUSY_RETRY_LIMIT','Busy continuation limit reached');
       if (!row.session_id || row.lease_held !== 1 || row.execution_stopped !== 0
         || !['dispatching','running','waiting_approval','interrupted'].includes(row.status)
         || attempt.terminalState !== 'failed' || !attempt.busyRetryEligible || attempt.continuationBlocked
@@ -637,8 +642,8 @@ export class DurableTaskStore {
       this.sql('INSERT INTO task_attempts(task_id,attempt_index,command_id,session_id,intent_at) VALUES(?,?,?,?,?)')
         .run(taskId,index,commandId,row.session_id,at);
       this.sql("UPDATE tasks SET status = 'dispatching', current_command_id = ?, turn_id = NULL, busy_retry_count = ?, execution_stopped = 0, stop_proof = NULL, detail = ? WHERE task_id = ?")
-        .run(commandId,index,canonicalJson({reason:'model_busy',retry:{used:index,max:maxContinuations,reason:'model_busy'}}),taskId);
-      this.event(taskId,'busy_continue_intent','dispatching',{commandId,previousCommandId:expectedCommandId,retry:{used:index,max:maxContinuations,reason:'model_busy'}},at);
+        .run(commandId,index,canonicalJson({reason:'transient_fault',retry:{used:index,max:null,reason:attempt.failureCategory}}),taskId);
+      this.event(taskId,'busy_continue_intent','dispatching',{commandId,previousCommandId:expectedCommandId,retry:{used:index,max:null,reason:attempt.failureCategory}},at);
       return this.getTask(taskId);
     });
   }
@@ -714,7 +719,7 @@ export class DurableTaskStore {
   }
 
   private normalizeProof(row: TaskRow, proof: StopProof): StopProof {
-    if (!['runtime_terminal', 'process_exited', 'history_stopped', 'not_dispatched'].includes(proof?.kind)) fail('INVALID_ARGUMENT', 'Invalid execution stop proof kind');
+    if (!['runtime_terminal', 'process_exited', 'history_stopped', 'not_dispatched','admission_rejected'].includes(proof?.kind)) fail('INVALID_ARGUMENT', 'Invalid execution stop proof kind');
     requiredString(proof.evidence, 'stopProof.evidence');
     const observedAt = proof.observedAt ?? this.now();
     nonnegativeInteger(observedAt, 'stopProof.observedAt');
@@ -813,15 +818,20 @@ export class DurableTaskStore {
     });
   }
 
+  recordStoppedResult(taskId:string,result:TaskResult,proof:StopProof):Task{
+    const normalized=normalizeResult(result);return this.write(()=>{const row=this.taskRow(taskId);this.putResult(row,normalized);return this.transition(row,'interrupted',{executionStopped:proof,detail:{reason:'Native result saved by read-only observation; configured verification was not run'}},'result_reconciled');});
+  }
   completeTask(taskId: string, result: TaskResult, options: {
-    status: 'succeeded' | 'failed'; executionStopped?: StopProof; detail?: JsonValue;
+    status: 'succeeded' | 'failed' | 'cancelled'; executionStopped?: StopProof; detail?: JsonValue; requeueWork?:{workId:string;notBefore:number};
   }): Task {
-    if (options?.status !== 'succeeded' && options?.status !== 'failed') fail('INVALID_ARGUMENT', 'Completion status must be succeeded or failed');
+    if (!['succeeded','failed','cancelled'].includes(options?.status)) fail('INVALID_ARGUMENT', 'Completion requires a final status');
     const normalized = normalizeResult(result);
     return this.write(() => {
       const row = this.taskRow(taskId);
       this.putResult(row, normalized);
-      return this.transition(row, options.status, options, 'task_completed');
+      const task=this.transition(row, options.status, options, 'task_completed');
+      if(options.requeueWork)this.work.requeueTaskInTransaction(options.requeueWork.workId,taskId,options.requeueWork.notBefore);
+      return task;
     });
   }
 

@@ -25,7 +25,7 @@ export interface ServiceOptions {
 export interface Recovery { requestId: string; payloadHash: string; workspaceId: string; workerId: string; poolKey: string; taskId?: string }
 export interface ReviewEntry { review: UiApprovalReview; loadedComplete: boolean; text?: string }
 
-export const blankDraft = (): TaskDraft => ({ workspaceId: '', workerId: '', prompt: '', session: 'continue', mode: 'build', modelId: 'GLM-5.3-Flash', busyRetryLimit: 3, verifyCommands: [], submitToken: randomUUID() });
+export const blankDraft = (): TaskDraft => ({ workspaceId: '', workerId: '', prompt: '', session: 'continue', mode: 'build', modelId: 'GLM-5.3-Flash', verifyCommands: [], submitToken: randomUUID() });
 export const sha256 = (value: string | Buffer): string => createHash('sha256').update(value).digest('hex');
 
 export function createInitialSnapshot(options: ServiceOptions): UiSnapshot {
@@ -37,7 +37,7 @@ export function createInitialSnapshot(options: ServiceOptions): UiSnapshot {
       error: options.configurationError ? safeError(options.configurationError) : null,
       supported: options.supported ?? true, environmentReason: options.environmentReason ?? null
     },
-    poolPolicy: null, tasks: [], scope: 'recent_50_loaded', total: null, listNextCursor: null, selectedTaskId: null, detail: null,
+    projects:[],poolPolicy: null, workOverview: null, workOverviewScope:{repositoryPath:null,workId:null}, decisionTodos:[], errorStats: null, tasks: [], scope: 'recent_50_loaded', total: null, listNextCursor: null, selectedTaskId: null, detail: null,
     resources: { accounts: [], workers: [], workspaces: [], quotas: {} }, approvals: null,
     delivery: { manifest: null, files: [], nextCursor: null, reviewed: false }, draft: blankDraft(), actions: [],
     overviewIntervalSeconds: options.overviewIntervalSeconds ?? 30, notice: null
@@ -52,12 +52,12 @@ export function resetDisconnectedSnapshot(state: UiSnapshot, configurationError:
   };
   state.detail = null; state.selectedTaskId = null; state.legacyResult = null; state.approvals = null;
   state.delivery = { manifest: null, files: [], nextCursor: null, reviewed: false };
-  state.resources.quotas = {}; state.poolPolicy = null; state.tasks = []; state.total = null; state.listNextCursor = null;
+  state.resources.quotas = {}; state.poolPolicy = null; state.workOverview = null; state.workOverviewScope={repositoryPath:null,workId:null};state.decisionTodos=[];delete state.focusRequest;state.errorStats = null; state.tasks = []; state.total = null; state.listNextCursor = null;
 }
 
-export function buildTaskListWireFilter(filter: RequestPayload<'tasks.list'>['filter'], workspaces: UiWorkspace[]) {
-  const repository = filter?.repositoryId ? workspaces.find(w => w.workspaceId === filter.repositoryId) : undefined;
-  if (filter?.repositoryId && !repository) throw new HostError('NOT_FOUND', 'Choose a registered repository from the current resource list.');
+export function buildTaskListWireFilter(filter: RequestPayload<'tasks.list'>['filter'],projects:{repositoryId:string;repositoryPath:string}[]) {
+  const repository = filter?.repositoryId ? projects.find(project=>project.repositoryId===filter.repositoryId) : undefined;
+  if (filter?.repositoryId && !repository) throw new HostError('NOT_FOUND', 'Choose a project supplied by this Host or the current work overview.');
   return filter ? {
     ...(repository ? { repository_path: repository.repositoryPath } : {}),
     ...(filter.workspaceId ? { workspace_id: filter.workspaceId } : {}),
@@ -88,7 +88,7 @@ export function buildDispatchPayload(state: UiSnapshot, submitToken: string) {
   if (draft.submitToken !== submitToken) throw new HostError('ACTION_CONFLICT', 'This submission belongs to an earlier draft.');
   const payload = {
     workspace_id: draft.workspaceId, worker_id: draft.workerId, prompt: draft.prompt, session: draft.session,
-    mode: draft.mode, model_id: draft.modelId, busy_retry_limit: draft.busyRetryLimit,
+    mode: draft.mode, model_id: draft.modelId,
     verify_commands: draft.verifyCommands.map(c => ({ command: c.command, args: c.args, timeout_ms: c.timeoutMs }))
   };
   return { draft, payload, fingerprint: sha256(JSON.stringify(payload)) };

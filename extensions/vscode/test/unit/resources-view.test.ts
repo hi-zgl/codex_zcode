@@ -47,6 +47,7 @@ afterEach(async () => {
 
 function snapshot(): UiSnapshot {
   return {
+    projects:[],
     connection: {
       state: 'connected', mode: 'mock', generation: 1, host: 'SSH: isolated-host',
       poolHome: '/mock/pool', trusted: true, lastReceivedAtMs: Date.now(), stale: false,
@@ -62,7 +63,7 @@ function snapshot(): UiSnapshot {
       quotas: {}
     },
     approvals: null, delivery: { manifest: null, files: [], nextCursor: null, reviewed: false },
-    draft: { workspaceId: 'workspace-demo', workerId: 'worker-demo', prompt: '', session: 'continue', mode: 'build', modelId: 'GLM-5.3-Flash', busyRetryLimit: 3, verifyCommands: [], submitToken: 'draft-token' },
+    draft: { workspaceId: 'workspace-demo', workerId: 'worker-demo', prompt: '', session: 'continue', mode: 'build', modelId: 'GLM-5.3-Flash', verifyCommands: [], submitToken: 'draft-token' },
     actions: [], overviewIntervalSeconds: 30, poolPolicy: null, notice: null,
   };
 }
@@ -140,16 +141,18 @@ test('tier badges render expected class names for all subscription tiers', () =>
   }
   const unknownEl = renderTierBadge('unknown');
   assert.ok(unknownEl.classList.contains('other'));
-  assert.equal(unknownEl.textContent, 'FREE');
+  assert.equal(unknownEl.textContent, '等级未知');
 });
 
 test('formatResetTime formats human-friendly countdown with tabular figures', () => {
   const now = 1700000000000;
-  assert.equal(formatResetTime(now - 1000, now), '已重置');
+  assert.equal(formatResetTime(now - 1000, now), '重置时间已到，待刷新');
   assert.equal(formatResetTime(now + 120_000, now), '2分钟后重置');
   assert.equal(formatResetTime(now + 3_600_000 * 2 + 15 * 60_000, now), '2小时15分后重置');
   assert.equal(formatResetTime(now + 86_400_000 * 3, now), '3天后重置');
   assert.equal(formatResetTime(null, now), '—');
+  assert.equal(formatResetTime(now + 120_000, now, 'expires'), '2分钟后到期');
+  assert.equal(formatResetTime(now - 1000, now, 'expires'), '已到期');
   // Rounding boundaries: never "0小时59分" or "0天".
   assert.equal(formatResetTime(now + 59.5 * 60_000, now), '1小时后重置');
   assert.equal(formatResetTime(now + (24 * 60 - 0.5) * 60_000, now), '1天后重置');

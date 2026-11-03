@@ -1,11 +1,14 @@
 import { readFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
-import { uiCapabilitiesSchema,uiTaskDetailSchema,uiApprovalReviewSchema,uiArtifactManifestSchema,uiArtifactFileSchema,uiPermissionReviewSchema, type UiTaskDetail } from '../../../../src/shared/ui-contract.js';
+import { uiCapabilitiesSchema,uiTaskDetailSchema,uiApprovalReviewSchema,uiArtifactManifestSchema,uiArtifactFileSchema,uiPermissionReviewSchema,uiMethods, type UiTaskDetail } from '../../../../src/shared/ui-contract.js';
+import {errorRecordSchema} from '../../../../src/shared/work-contract.js';
 import { HostError, type Transport } from './client.js';
 const hash=(bytes:string|Buffer)=>createHash('sha256').update(bytes).digest('hex');
 const fixtureSchema=z.object({version:z.literal(1),clock:z.number().int(),capabilities:uiCapabilitiesSchema,
-  overview:z.object({accounts:z.array(z.object({alias:z.string(),provider:z.string(),health:z.string(),plan:z.string().optional(),quota:z.record(z.unknown()).optional(),email:z.string().optional(),name:z.string().optional()})),workers:z.array(z.object({workerId:z.string(),accountAlias:z.string(),state:z.string(),processOwned:z.boolean(),runningTaskCount:z.number(),version:z.string().optional()})),workspaces:z.array(z.object({workspaceId:z.string(),repositoryPath:z.string(),worktreePath:z.string(),branch:z.string(),baseCommit:z.string(),activeTaskId:z.string().nullable(),state:z.string()})),tasks:z.array(z.unknown())}),
+  workOverview:uiMethods.ui_get_work_overview.result.shape.data.optional(),errorRecords:z.array(errorRecordSchema).default([]),
+  nativeErrorCoverage:z.record(z.boolean().nullable()),
+  overview:z.object({accounts:z.array(z.object({alias:z.string(),provider:z.string(),health:z.string(),plan:z.string().optional(),quota:z.record(z.unknown()).optional(),email:z.string().optional(),name:z.string().optional(),enabled:z.boolean().optional()})),workers:z.array(z.object({workerId:z.string(),accountAlias:z.string(),state:z.string(),processOwned:z.boolean(),runningTaskCount:z.number(),version:z.string().optional()})),workspaces:z.array(z.object({workspaceId:z.string(),repositoryPath:z.string(),worktreePath:z.string(),branch:z.string(),baseCommit:z.string(),activeTaskId:z.string().nullable(),state:z.string()})),tasks:z.array(z.unknown())}),
   details:z.record(uiTaskDetailSchema),reviews:z.record(uiApprovalReviewSchema),approvalContents:z.record(z.string()),manifests:z.record(uiArtifactManifestSchema),files:z.record(z.array(uiArtifactFileSchema)),fileContents:z.record(z.string()),patches:z.record(z.string()),events:z.array(z.object({taskId:z.string(),revision:z.number(),type:z.string(),status:z.string(),createdAt:z.number()})),
 }).strict();
 export type MockFixture=z.infer<typeof fixtureSchema>;
@@ -16,7 +19,7 @@ interface MockRequestParams extends Record<string,unknown> {
   task_ids?:string[]; after_revision?:number|Record<string,number>; offset?:number; approval_id?:string; review_id?:string; offset_bytes?:number; limit_bytes?:number;
   expected_content_sha256?:string; expected_approval_revision?:string; expected_native_revision?:number; action_id?:string; decision?:'accept'|'decline'|'cancel';
   manifest_sha256?:string; file_id?:string; side?:'base'|'final'; account_id?:string; worker_id?:string; workspace_id?:string;
-  session?:'continue'|'new'; mode?:'build'|'edit'|'plan'|'yolo'|'guarded'; model_id?:string; verify_commands?:MockVerifyCommand[]; busy_retry_limit?:number;
+  session?:'continue'|'new'; mode?:'build'|'edit'|'plan'|'yolo'|'guarded'; model_id?:string; verify_commands?:MockVerifyCommand[];
   repository?:string; base_ref?:string; files?:string[];
 }
 export function validateMockFixture(value:unknown):MockFixture{
@@ -39,7 +42,16 @@ export class MockTransport implements Transport {
   private disposed=false;
   private revision=100;
   private maxConcurrentTasks:number|null=null;
-  private policy(){const occupiedSlots=Object.values(this.fixture.details).filter(t=>t.leaseHeld).length;return {maxConcurrentTasks:this.maxConcurrentTasks,occupiedSlots,availableSlots:this.maxConcurrentTasks===null?null:Math.max(0,this.maxConcurrentTasks-occupiedSlots)};}
+  private settings={retryIntervalMs:5000,recoveryWaitMs:120000,silenceCheckMs:900000,lowQuotaThresholdPercent:5,defaultCommanderQuota:2};
+  private policy(){const occupiedSlots=Object.values(this.fixture.details).filter(t=>t.leaseHeld).length;return {maxConcurrentTasks:this.maxConcurrentTasks,occupiedSlots,availableSlots:this.maxConcurrentTasks===null?null:Math.max(0,this.maxConcurrentTasks-occupiedSlots),...this.settings};}
+  private errors(p:Record<string,unknown>){
+    const events=this.fixture.errorRecords.filter(event=>(!p.account_alias||event.accountAlias===p.account_alias)&&(!p.task_id||event.taskId===p.task_id)&&(!p.work_id||event.workId===p.work_id)&&(typeof p.from_ms!=='number'||event.occurredAt>=p.from_ms)&&(typeof p.to_ms!=='number'||event.occurredAt<=p.to_ms));
+    const work=p.work_id?this.fixture.workOverview?.works.find(work=>work.workId===p.work_id):null;
+    const relevant=Object.values(this.fixture.details).filter(task=>(!p.account_alias||task.selection.binding?.accountAlias===p.account_alias)&&(!p.task_id||task.taskId===p.task_id)&&(!work||work.items.some(item=>item.taskId===task.taskId))&&(typeof p.from_ms!=='number'||task.updatedAtMs>=p.from_ms)&&(typeof p.to_ms!=='number'||task.createdAtMs<=p.to_ms));
+    const incompleteTaskCount=relevant.filter(task=>this.fixture.nativeErrorCoverage[task.taskId]!==true).length;
+    const categories:Record<string,number>={};for(const event of events)categories[event.category]=(categories[event.category]??0)+1;
+    return {total:events.length,categories,events:events.slice(-100).reverse(),complete:incompleteTaskCount?null:true,incompleteTaskCount};
+  }
   private readonly responseTicks=new Map<string,number>();
   private readonly probeCounts=new Map<string,number>();
   failNext?:string;
@@ -55,7 +67,16 @@ export class MockTransport implements Transport {
       case 'overview':return {...f.overview,poolPolicy:this.policy(),tasks:Object.values(f.details).map(d=>this.compact(d))};
       case 'shutdown_pool':{if(Object.values(f.details).some(d=>d.leaseHeld))throw new HostError('POOL_BUSY','仍有任务占用，无法收工。');const workers=f.overview.workers.filter(w=>w.state!=='stopped');for(const worker of workers){worker.state='stopped';worker.processOwned=false;}return {stopping:true,workersStopped:true,stoppedWorkers:workers.length};}
       case 'get_pool_policy':return this.policy();
-      case 'set_pool_policy':{if(p.max_concurrent_tasks!==null&&(typeof p.max_concurrent_tasks!=='number'||!Number.isInteger(p.max_concurrent_tasks)||p.max_concurrent_tasks<0||p.max_concurrent_tasks>64))throw new HostError('INVALID_ARGUMENT','Invalid concurrency limit');this.maxConcurrentTasks=p.max_concurrent_tasks;return this.policy();}
+      case 'set_pool_policy':{if(p.max_concurrent_tasks!==undefined){if(p.max_concurrent_tasks!==null&&(typeof p.max_concurrent_tasks!=='number'||!Number.isInteger(p.max_concurrent_tasks)||p.max_concurrent_tasks<0||p.max_concurrent_tasks>64))throw new HostError('INVALID_ARGUMENT','Invalid concurrency limit');this.maxConcurrentTasks=p.max_concurrent_tasks;}for(const [wire,key] of [['retry_interval_ms','retryIntervalMs'],['recovery_wait_ms','recoveryWaitMs'],['silence_check_ms','silenceCheckMs'],['low_quota_threshold_percent','lowQuotaThresholdPercent'],['default_commander_quota','defaultCommanderQuota']] as const)if(typeof p[wire]==='number')this.settings[key]=p[wire] as number;return this.policy();}
+      case 'ui_get_work_overview':{
+        const all=(f.workOverview?.works??[]).filter(work=>(!p.repository_path||work.repositoryPath===p.repository_path)&&(!p.work_id||work.workId===p.work_id)).sort((a,b)=>b.updatedAt-a.updatedAt);
+        const accountErrors=Object.fromEntries(f.overview.accounts.map(account=>{const {total,categories,complete,incompleteTaskCount}=this.errors({account_alias:account.alias});return [account.alias,{total,categories,complete,incompleteTaskCount}];}));
+        return this.envelope({works:all.slice(0,p.limit??20),commanders:f.workOverview?.commanders??[],poolPolicy:this.policy(),total:all.length,truncated:all.length>(p.limit??20),observedAtMs:Date.now(),accountErrors});
+      }
+      case 'ui_get_error_stats':return this.envelope(this.errors(p));
+      case 'set_commander_quota':{const commander=f.workOverview?.commanders.find(item=>item.commanderId===p.commander_id);if(!commander)throw new HostError('NOT_FOUND','Commander not found.');commander.defaultQuota=p.default_quota as number;return commander;}
+      case 'set_account_enabled':{const account=f.overview.accounts.find(item=>item.alias===p.account_id);if(!account)throw new HostError('NOT_FOUND','Account not found.');account.enabled=p.enabled===true;return {accountAlias:account.alias,enabled:account.enabled};}
+      case 'resolve_work_todo':{const work=f.workOverview?.works.find(item=>item.workId===p.work_id);if(!work)throw new HostError('NOT_FOUND','Work not found.');if(p.action==='approve_partial'){work.partialApproval=p.available_accounts as number;work.effectiveAccounts=p.available_accounts as number;}work.todos=work.todos.filter(todo=>todo.todoId!==p.todo_id);return work;}
       case 'ui_get_task_detail':{const detail=task??Object.values(f.details).find(d=>d.requestId===p.request_id);if(!detail)throw new HostError('NOT_FOUND','The original task was not found; no dispatch was resent.');this.advance(detail);return this.envelope(detail);}
       case 'ui_list_tasks':{
         const revision=this.listRevision();const filter=p.filter??{};const marker=JSON.stringify(filter);let offset=0;
@@ -90,8 +111,8 @@ export class MockTransport implements Transport {
       case 'ui_get_quota':case 'ui_probe_quota':{
         const alias=p.account_id??f.overview.workers.find(w=>w.workerId===p.worker_id)?.accountAlias;if(!alias)throw new HostError('NOT_FOUND','Mock account not found.');
         const targetAcc=f.overview.accounts.find(a=>a.alias===alias);
-        const live=method==='ui_probe_quota';const now=Date.now();
-        const probeCount=(this.probeCounts.get(alias)??0)+(live?1:0);if(live)this.probeCounts.set(alias,probeCount);
+        const requestedProbe=method==='ui_probe_quota';const now=Date.now();
+        const probeCount=(this.probeCounts.get(alias)??0)+(requestedProbe?1:0);if(requestedProbe)this.probeCounts.set(alias,probeCount);const live=probeCount>0;
         const rawBucket=Array.isArray(targetAcc?.quota?.quota_raw)?(targetAcc!.quota!.quota_raw[0] as Record<string,any>):undefined;
         const bucketName=rawBucket?.show_name||rawBucket?.name||'GLM-5.3-Flash';
         const tokenTotal=typeof rawBucket?.total_units==='number'?rawBucket.total_units:(typeof targetAcc?.quota?.total==='number'?targetAcc.quota.total:500000000);
@@ -110,7 +131,7 @@ export class MockTransport implements Transport {
             source:'imported_snapshot',accountAlias:alias,providerId:`account:${targetAcc?.provider??'zai'}-start-plan`,
             observedAtMs:null,storedAtMs:null,tier:'start',tierName:planName,
             windows:[{id:`win-${alias}-imported`,name:bucketName,windowType:'token_pool',total:tokenTotal,used:baseUsed,remaining:Math.max(0,tokenTotal-baseUsed),percentageUsed:Math.round((baseUsed/tokenTotal)*100),unit:'tokens',resetsAtMs,resetsLabel:'1天后重置'}],
-            generatedAt:{value:1793491000,unit:'unknown',atMs:null},serverTime:null,nextReset:null,unit:'tokens',total:tokenTotal,used:baseUsed,remaining:Math.max(0,tokenTotal-baseUsed),percentage:{value:Math.round((baseUsed/tokenTotal)*100),scale:'0_to_100'},authenticated:null,freshness:'unknown'
+            generatedAt:{value:1793491000,unit:'unknown',atMs:null},serverTime:null,nextReset:null,unit:'tokens',total:tokenTotal,used:baseUsed,remaining:Math.max(0,tokenTotal-baseUsed),percentage:{value:100-Math.round((baseUsed/tokenTotal)*100),scale:'0_to_100'},authenticated:null,freshness:'unknown'
           },
           live:live?{
             source:'live_probe',accountAlias:alias,providerId:`account:${targetAcc?.provider??'zai'}-start-plan`,
@@ -119,7 +140,7 @@ export class MockTransport implements Transport {
               {id:'win-5h',name:'5小时周期',windowType:'hourly_window',total:100,used,remaining,percentageUsed:used,unit:'次',resetsAtMs:now+18000000,resetsLabel:'5小时后重置'},
               {id:`win-${alias}-live`,name:bucketName,windowType:'token_pool',total:tokenTotal,used:tokenUsed,remaining:tokenRemaining,percentageUsed:tokenPct,unit:'tokens',resetsAtMs:now+86400000,resetsLabel:'1天后重置'}
             ],
-            generatedAt:null,serverTime:null,nextReset:null,unit:'requests',total:100,used,remaining,percentage:{value:used,scale:'0_to_100'},authenticated:true,freshness:'fresh'
+            generatedAt:null,serverTime:null,nextReset:null,unit:'requests',total:100,used,remaining,percentage:{value:remaining,scale:'0_to_100'},authenticated:true,freshness:'fresh'
           }:null,
           lastProbe:{state:live?'succeeded':'never',attemptedAtMs:live?now:null,errorCode:null},
           displayFreshnessWindowMs:120000
@@ -143,7 +164,7 @@ export class MockTransport implements Transport {
         const modelId=p.model_id??'';
         detail.selection={requestedWorkerId:worker.workerId,requestedSession:p.session??'continue',mode:p.mode??'build',requestedModelId:modelId,binding:{accountAlias:worker.accountAlias,providerId:`account:${f.overview.accounts.find(a=>a.alias===worker.accountAlias)?.provider??'zai'}-start-plan`,modelId}};
         const verifyCommands=p.verify_commands??[];
-        detail.verificationPolicy.commands=verifyCommands.map((c:MockVerifyCommand)=>({command:c.command,args:c.args,timeoutMs:c.timeout_ms}));detail.verificationPolicy.defaultDiffCheck=!verifyCommands.length;detail.retry={used:0,max:p.busy_retry_limit??0,reason:'model_busy'};
+        detail.verificationPolicy.commands=verifyCommands.map((c:MockVerifyCommand)=>({command:c.command,args:c.args,timeoutMs:c.timeout_ms}));detail.verificationPolicy.defaultDiffCheck=!verifyCommands.length;detail.retry={used:0,max:null,reason:'model_busy'};
         f.details[taskId]=detail;workspace.activeTaskId=taskId;this.responseTicks.set(taskId,0);return {task:this.compact(detail),created:true};
       }
       case 'cancel_task':if(!task)throw new HostError('NOT_FOUND','Task not found.');task.cancelRequestedAtMs=f.clock;task.revision=++this.revision;task.controls.cancel.available=false;return {task:this.compact(task),cancelRequested:true,terminationConfirmed:false};

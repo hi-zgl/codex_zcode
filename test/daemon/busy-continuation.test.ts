@@ -49,7 +49,7 @@ class BusyRuntime implements RuntimeConnection {
    Object.assign(header,{state:'completedSuccess',endedAt:now+1});this.activeWorks=[];this.emit('turn_completed',commandId);
   } else if(outcome!=='running') {
    const category=outcome==='busy'||outcome==='busy_error_only'?'model_busy':outcome;
-   this.lastError={sourceCommandId:commandId,turnId:header.turnId,at:now+1,message:category==='model_busy'?'model is busy':category==='rate_limited'?'429 rate limit':category==='auth_invalid'?'401 unauthorized':'unexpected failure'};
+   this.lastError={sourceCommandId:commandId,turnId:header.turnId,at:now+1,message:category==='model_busy'?'model is busy':category==='rate_limited'?'quota exhausted':category==='auth_invalid'?'401 unauthorized':'unexpected failure'};
    const data={...this.lastError,category,errorAttribution:'turn',busyRetryEligible:category==='model_busy'};
    this.emit('error',commandId,data);
    if(outcome!=='busy_error_only') {Object.assign(header,{state:'failed',endedAt:now+1});this.activeWorks=[];this.emit('turn_failed',commandId,data);}
@@ -61,9 +61,10 @@ class BusyRuntime implements RuntimeConnection {
  async syncHistory(session:SessionRef):Promise<SessionSnapshot> {
   await this.onSnapshot?.();
   const latest=this.headers.at(-1)!;
-  const snapshot:SessionSnapshot={...session,phase:latest?.state??'idle',revision:this.eventsLog.length,cursor:String(this.eventsLog.length),summary:'foreign summary',pendingApprovals:[],modelSelection:{providerId:'account:zai-start-plan',modelId:'GLM-5.3-Flash'},raw:{sessionId:session.sessionId,control:{activeWorks:structuredClone(this.activeWorks),...(this.lastError?{lastError:structuredClone(this.lastError)}:{})},rows:{window:this.headers.flatMap(header=>[structuredClone(header),{kind:'assistantText',rowId:header.rowId+1,turnId:header.turnId,text:`Result for ${header.sourceCommandId}`}])}}};
+  const snapshot:SessionSnapshot={...session,phase:latest?.state??'idle',revision:this.eventsLog.length,cursor:String(this.eventsLog.length),summary:'foreign summary',pendingApprovals:[],modelSelection:{providerId:'account:zai-start-plan',modelId:'GLM-5.3-Flash'},raw:{queue:{items:[]},pendingCommands:[],backgroundWorks:[],sessionId:session.sessionId,control:{activeWorks:structuredClone(this.activeWorks),...(this.lastError?{lastError:structuredClone(this.lastError)}:{})},rows:{window:this.headers.flatMap(header=>[structuredClone(header),...(header.state==='completedSuccess'?[{kind:'assistantText',rowId:header.rowId+1,turnId:header.turnId,text:`Result for ${header.sourceCommandId}`}]:[])])}}};
   this.snapshotPatch?.(snapshot);return snapshot;
  }
+ freshReadSession(session:SessionRef){return this.syncHistory(session);}
  async *events(_session:SessionRef,cursor?:string):AsyncIterable<RuntimeEvent> {
   this.cursors.push(cursor);let after=Number(cursor??0);
   while(!this.closed) {
@@ -84,6 +85,7 @@ async function until(predicate:()=>boolean):Promise<void> {
  const deadline=Date.now()+4000;while(!predicate()){if(Date.now()>deadline)throw new Error('Busy fixture did not settle');await delay(5);}
 }
 function connect(coordinator:Coordinator,runtime:BusyRuntime):void {
+ const policy=coordinator.store.getPoolPolicy.bind(coordinator.store);Object.defineProperty(coordinator.store,'getPoolPolicy',{value:()=>({...policy(),retryIntervalMs:5}),configurable:true});
  Object.defineProperty(coordinator.supervisor,'status',{value:async()=>({workerId:'worker',accountAlias:'account-fixture',state:'ready',endpoint:{baseUrl:'http://127.0.0.1:1'}})});
  Object.defineProperty(coordinator.vault,'load',{value:async()=>({alias:'account-fixture',provider:'zai',health:'available'}),configurable:true});
  Object.defineProperty(coordinator.vault,'setHealth',{value:async()=>{}});
@@ -108,17 +110,16 @@ async function settled(store:DurableTaskStore,coordinator:Coordinator,taskId:str
  await until(()=>['succeeded','failed','cancelled','interrupted','blocked'].includes(store.getTask(taskId).status)&&!coordinator.active.has(taskId));return store.getTask(taskId);
 }
 
-test('busy terminal immediately continues in the same session with the pinned provider and a unique durable command',async t=>{
- const f=await fixture(t);let yieldedAfterTerminal=false;
- f.runtime.onSnapshot=()=>{yieldedAfterTerminal=false;setImmediate(()=>{yieldedAfterTerminal=true;});};
+test('busy terminal waits and continues in the same session with the pinned provider and a unique durable command',async t=>{
+ const f=await fixture(t);
  f.runtime.onSend=async(input,index)=>{
   const task=f.store.listTasks()[0]!;const attempt=f.store.getCurrentAttempt(task.taskId)!;
   assert.equal(attempt.commandId,input.requestId);assert.equal(attempt.acknowledgedAt,null);assert.equal(task.status,'dispatching');assert.equal(task.leaseHeld,true);
-  if(index===1){assert.equal(f.store.hasEnteredVerification(task.taskId),false);assert.equal(yieldedAfterTerminal,false,'continue must be sent before yielding to a backoff timer');await writeFile(join(f.repo,'code.txt'),'after busy continuation\n');}
+  if(index===1){assert.equal(f.store.hasEnteredVerification(task.taskId),false);assert.ok(Date.now()>=f.store.work.execution(task.taskId).retryAt!,'retry waits for its persisted deadline');await writeFile(join(f.repo,'code.txt'),'after busy continuation\n');}
  };
  const {task:{taskId}}=await f.dispatch();const task=await settled(f.store,f.coordinator,taskId);
  assert.equal(task.status,'succeeded');assert.equal(task.requestId,'request');assert.equal(task.busyRetryCount,1);
- assert.equal(f.runtime.sent.length,2);assert.deepEqual(f.runtime.sent.map(value=>value.input.prompt),['Original prompt must only be sent once','继续']);
+ assert.equal(f.runtime.sent.length,2);assert.equal(f.runtime.sent[0]!.input.prompt,'Original prompt must only be sent once');assert.match(f.runtime.sent[1]!.input.prompt,/^继续/);
  assert.notEqual(f.runtime.sent[1]!.input.requestId,'request');assert.equal(task.currentCommandId,f.runtime.sent[1]!.input.requestId);
  assert.deepEqual(f.runtime.sent.map(value=>value.session.sessionId),['native-session','native-session']);
  assert.deepEqual(f.runtime.sent.map(value=>value.input.modelSelection),[{providerId:'account:zai-start-plan',modelId:'GLM-5.3-Flash'},{providerId:'account:zai-start-plan',modelId:'GLM-5.3-Flash'}]);
@@ -129,12 +130,10 @@ test('busy terminal immediately continues in the same session with the pinned pr
  assert.equal((await f.dispatch()).created,false);assert.equal(f.runtime.sent.length,2);
 });
 
-test('busy continuations have a finite configurable limit including zero',async t=>{
- for(const limit of [0,2,3])await t.test(`limit ${limit}`,async child=>{
-  const f=await fixture(child);f.runtime.outcomes=Array(6).fill('busy');const {task:{taskId}}=await f.dispatch({busy_retry_limit:limit});
-  const task=await settled(f.store,f.coordinator,taskId);assert.equal(task.status,'failed');assert.equal(task.busyRetryCount,limit);assert.equal(f.runtime.sent.length,limit+1);assert.equal(task.leaseHeld,false);
-  assert.equal(f.store.listEvents(taskId).filter(event=>event.type==='task_completed').length,1);assert.equal(f.store.getResult(taskId)!.blockers.some(value=>value.includes(`${limit} of ${limit}`)),true);
- });
+test('retry counts remain cumulative beyond the former cap and every actual error is marked recovered',async t=>{
+ const f=await fixture(t);f.runtime.outcomes=[...Array(12).fill('busy'),'success'];const {task:{taskId}}=await f.dispatch();const task=await settled(f.store,f.coordinator,taskId);
+ assert.equal(task.status,'succeeded');assert.equal(task.busyRetryCount,12);assert.equal(f.runtime.sent.length,13);assert.equal(task.leaseHeld,false);
+ const errors=f.store.work.errorStats({taskId});assert.equal(errors.total,12);assert.equal(errors.categories.model_busy,12);assert.ok(errors.events.every(e=>e.recoveredAt!==null));
 });
 
 test('active, uncertain, unattributed, quota and unsafe failures never start a continuation',async t=>{
@@ -189,7 +188,7 @@ test('a continuation intent persisted before any native acceptance is never sent
  const f=await fixture(t);const task=f.store.dispatch({requestId:'request',workspaceId:'workspace',workerId:'worker',prompt:'Original prompt',executionPolicy:{mode:'build',modelId:'GLM-5.3-Flash',busyRetryLimit:3,verifyCommands:[]}}).task;
  f.store.beginDispatch(task.taskId,{runtimeBinding:{accountAlias:'account-fixture',providerId:'account:zai-start-plan',modelId:'GLM-5.3-Flash'}});f.store.bindSession(task.taskId,'native-session');f.store.acknowledgeDispatch(task.taskId,{sessionId:'native-session',turnId:'request'});
  f.store.recordAttemptFailure(task.taskId,'request',{category:'model_busy',busyRetryEligible:true});f.store.recordAttemptTerminal(task.taskId,'request','failed',{kind:'history_stopped',evidence:'Exact busy turn failed and activeWorks empty'});
- const continued=f.store.beginBusyContinuation(task.taskId,'request',3);f.runtime.headers.push({kind:'turnHeader',rowId:1,turnId:'native-turn-0',sourceCommandId:'request',state:'failed'});f.runtime.lastError={sourceCommandId:'request',message:'model is busy'};
+ const continued=f.store.beginBusyContinuation(task.taskId,'request');f.runtime.headers.push({kind:'turnHeader',rowId:1,turnId:'native-turn-0',sourceCommandId:'request',state:'failed'});f.runtime.lastError={sourceCommandId:'request',message:'model is busy'};
  const next=await f.restart();const [recovery]=await next.coordinator.recoverTasks();assert.equal(recovery!.requiresInspection,true);assert.equal(next.store.getTask(task.taskId).currentCommandId,continued.currentCommandId);assert.equal(next.store.getTask(task.taskId).leaseHeld,true);assert.equal(f.runtime.sent.length,0);assert.equal(next.store.listAttempts(task.taskId).length,2);
  await assert.rejects(next.coordinator.call('dispatch_task',{workspace_id:'workspace',worker_id:'worker',request_id:'another',prompt:'replacement'}),error=>error instanceof CoreError&&error.code==='WORKSPACE_BUSY');
 });
@@ -200,5 +199,5 @@ test('recovery after the stopped busy attempt but before continuation intent cre
  f.store.recordAttemptFailure(task.taskId,'request',{category:'model_busy',busyRetryEligible:true});f.store.recordAttemptTerminal(task.taskId,'request','failed',{kind:'history_stopped',evidence:'Exact stopped busy turn'});
  f.runtime.headers.push({kind:'turnHeader',rowId:1,turnId:'old-native-turn',sourceCommandId:'request',state:'failed'});f.runtime.lastError={sourceCommandId:'request',message:'model is busy'};f.runtime.outcomes=['success'];
  const next=await f.restart();await Promise.all([next.coordinator.recoverTasks(),next.coordinator.call('resume_task',{task_id:task.taskId})]);
- const done=await settled(next.store,next.coordinator,task.taskId);assert.equal(done.status,'succeeded');assert.equal(f.runtime.sent.length,1);assert.equal(f.runtime.sent[0]!.input.prompt,'继续');assert.equal(done.busyRetryCount,1);assert.equal(next.store.listAttempts(task.taskId).length,2);
+ const done=await settled(next.store,next.coordinator,task.taskId);assert.equal(done.status,'succeeded');assert.equal(f.runtime.sent.length,1);assert.match(f.runtime.sent[0]!.input.prompt,/^继续/);assert.equal(done.busyRetryCount,1);assert.equal(next.store.listAttempts(task.taskId).length,2);
 });

@@ -8,7 +8,8 @@ const caps = Object.fromEntries(
   ['poolPolicy', 'poolLifecycle', 'taskDetail', 'taskLookupByRequest', 'taskList',
    'quotaSnapshots', 'quotaProbe', 'approvalRead', 'approvalRespondFingerprint',
    'artifactSnapshots', 'dispatchTask', 'createWorkspace', 'importAccounts',
-   'startWorker', 'stopWorker', 'reconcileTask', 'resumeTask', 'cancelTask'
+   'startWorker', 'stopWorker', 'reconcileTask', 'resumeTask', 'cancelTask',
+   'workOverview', 'errorStats', 'workTodos', 'commanderQuota', 'accountEnabled'
   ].map((k) => [k, { version: 1 }])
 );
 
@@ -73,8 +74,8 @@ const accounts = [
     provider: 'zai',
     health: 'available',
     plan: 'ZCODE WEEKEND BUILD',
-    email: 'pjsc45sv1w@xenveroes.pro',
-    name: 'pjsc45sv1w@xenveroes.pro',
+    email: 'builder@example.invalid',
+    name: 'builder@example.invalid',
     quota: {
       total: 500000000,
       used: 0,
@@ -89,15 +90,15 @@ const accounts = [
     provider: 'zai',
     health: 'available',
     plan: 'ZCode 1024 Dev Day',
-    email: 'iloveyou@globalsmv.com',
-    name: 'iloveyou',
+    email: 'reviewer@example.invalid',
+    name: 'Reviewer',
   },
   {
     alias: 'account-unknown',
     provider: 'bigmodel',
     health: 'unknown',
-    email: 'h40t15oyr4@globalsmv.com',
-    name: 'h40t15oyr4',
+    email: 'observer@example.invalid',
+    name: 'Observer',
   },
 ];
 
@@ -113,7 +114,7 @@ function detail(taskId, workspaceId, workerId, status, revision, leaseHeld = fal
     createdAtMs: time - revision * 1000, updatedAtMs: time,
     leaseHeld, executionStopped: !leaseHeld, cancelRequestedAtMs: null,
     approval: { pendingCount: status === 'waiting_approval' ? 1 : 0, responsePending: false, stateKnown: status !== 'interrupted' },
-    retry: { used: status === 'interrupted' ? 1 : 0, max: 3, reason: 'model_busy' },
+    retry: { used: status === 'interrupted' ? 1 : 0, max: null, reason: 'model_busy' },
     requestId: `request-${taskId}`,
     workspace: workspaces.find((w) => w.workspaceId === workspaceId),
     execution: {
@@ -203,9 +204,31 @@ const manifest = {
   patch: { available: true, sha256: hash(patch), sizeBytes: Buffer.byteLength(patch) }, unavailableReason: null,
 };
 
+const poolPolicy={maxConcurrentTasks:null,occupiedSlots:2,availableSlots:null,retryIntervalMs:5000,recoveryWaitMs:120000,silenceCheckMs:900000,lowQuotaThresholdPercent:5,defaultCommanderQuota:2};
+const stage=(stageId,title,dependsOn,status,accountAliases=[],confirmation=null)=>({stageId,title,dependsOn,status,accountAliases,confirmation,rework:false,blockedReason:null,criteria:[`${title}达到指挥确认的完成标准`]});
+const item=(itemId,stageId,title,taskId)=>{
+  const task=details.find(detail=>detail.taskId===taskId);
+  return {itemId,stageId,title,taskId,dependsOn:[],workspace:'isolated',verifyCommands:[],mode:'build',modelId:'GLM-5.3-Flash',kind:'implementation',targetDeliveryId:null,acceptanceId:null,workspaceId:task?.workspaceId??null,handoffTaskId:null,runIndex:0,queueAt:null,blockedReason:null,cancelled:false,createdAt:time,status:task?.status??'pending',accountAlias:task?.selection.binding.accountAlias??null,workerId:task?.workerId??null,execution:null};
+};
+const work={
+  workId:'work-demo',requestId:'work-request-demo',commanderId:'commander-demo',controlVersion:1,repositoryPath:'/demo/project',goal:'交付共享账号池工作台：任务流程与额度一眼可见',criteria:['真实依赖阶段图、实施与验收分离'],status:'active',quotaOverride:null,partialApproval:null,requestedAccounts:2,effectiveAccounts:2,
+  stages:[
+    stage('plan','确认目标与计划',[],'completed',[],{summary:'目标与可观察的验收条件已明确',deliveryIds:[],acceptanceIds:[],confirmedAt:time-600000}),
+    stage('api','实现调度接口',['plan'],'running',['account-review']),
+    stage('ui','实现工作台界面',['plan'],'running',['account-demo']),
+    stage('integrate','整合与最终验收',['api','ui'],'not_started')
+  ],
+  items:[item('item-api','api','实现共享池接口','task-approval'),item('item-ui','ui','实现任务与阶段展示','task-complete')],
+  deliveries:[{deliveryId:'delivery-ui',itemId:'item-ui',taskId:'task-complete',workspaceId:'workspace-demo',manifestSha256:manifestHash,summary:'工作台界面已实施，等待独立验收',changedFiles:['src/demo.ts','notes.txt'],createdAt:time}],
+  acceptances:[{acceptanceId:'acceptance-ui',deliveryId:'delivery-ui',executor:{kind:'external',name:'独立浏览器验收'},status:'running',itemId:null,workspaceId:'acceptance-ui-workspace',workspacePath:'/demo/pool/acceptance/work-demo/ui',summary:'正在检查固定交付版本的页面行为',evidence:[],startedAt:time,completedAt:null}],
+  todos:[],integratedDeliveryIds:[],integrationRevision:null,finalAcceptance:null,next:'接口与工作台并行推进；验收完成后由指挥确认阶段，再整合。',revision:100,createdAt:time-600000,updatedAt:time
+};
 const fixture = {
   version: 1,
   clock: time,
+  workOverview:{works:[work],commanders:[{commanderId:'commander-demo',label:'项目指挥',defaultQuota:2,lastGrantedAt:time}],poolPolicy,total:1,observedAtMs:time,truncated:false,accountErrors:{}},
+  errorRecords:Array.from({length:5},(_,index)=>({errorId:index+1,taskId:'task-complete',workId:'work-demo',accountAlias:'account-demo',category:'model_busy',commandId:`busy-command-${index}`,occurrenceKey:`mock-busy-${index}`,occurredAt:time-60000+index*5000,recoveredAt:time,summary:'模型繁忙；此回合已明确未执行，恢复后继续完成。'})),
+  nativeErrorCoverage:{'task-complete':true,'task-approval':true,'task-unknown':null},
   capabilities: {
     selectedApiVersion: { major: 1, minor: 0 }, daemonVersion: '0.1.0-mock', instanceId: 'mock-instance', storeId: 'mock-store', servedAtMs: time,
     capabilities: caps,

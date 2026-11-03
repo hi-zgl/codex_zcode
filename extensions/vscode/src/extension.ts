@@ -26,7 +26,7 @@ export async function activate(context:vscode.ExtensionContext):Promise<unknown>
   let useDebugPool=true;let startPromise:Promise<void>|undefined;let launchAbort:AbortController|undefined;let serviceRevision=0;
   const storagePath=context.globalStorageUri?.fsPath;
   const profilePath=storagePath?join(storagePath,'connection.json'):undefined;
-  let preferSettings=false;let profileRequired=false;let extensionDisposed=false;let profileWatcher:FSWatcher|undefined;let profileTimer:ReturnType<typeof setTimeout>|undefined;
+  let preferSettings=false;let profileRequired=false;let extensionDisposed=false;let profileWatcher:FSWatcher|undefined;let profileTimer:ReturnType<typeof setTimeout>|undefined;let decisionTimer:ReturnType<typeof setTimeout>|undefined;
   function observeProfile(){
     if(!profilePath||!storagePath||profileWatcher)return;
     try{profileWatcher=watch(storagePath,(_event,file)=>{if(file?.toString()!=='connection.json')return;clearTimeout(profileTimer);profileTimer=setTimeout(()=>{void reloadProfile();},100);});profileWatcher.unref();}catch{/* Created on first explicit setup/connection. */}
@@ -98,7 +98,7 @@ export async function activate(context:vscode.ExtensionContext):Promise<unknown>
       const action=await vscode.window.showInformationMessage('Review this limited diagnostic preview. It contains host/pool identities and control IDs, with no prompt or native logs.','Copy diagnostic preview');
       if(action)await vscode.env.clipboard.writeText(value);
     },
-    guidance:async(topic)=>{const messages:Record<string,string>={connection:'后台已随插件交付。选择连接目录后，生成 Codex MCP 配置即可由 Codex 调度；也可在面板启动后台并连接。执行侧需要 Node.js 24+ 和官方 ZCode runtime。',approval:'Only complete supported permission snapshots can be answered. Missing or legacy sources remain read-only. Inspect the executing native session locally when needed.',workspace:'Create a separate worktree from a clean source repository. Source and execution directories are distinct. No merge or cleanup operation is provided.',recovery:'Reconcile inspects the original execution and may update records/release proved occupancy. Resume attaches observation and may finish verification or qualified bounded busy continuation. Inspect uncertain local processes first.'};await vscode.window.showInformationMessage(messages[topic]??messages.connection!);},
+    guidance:async(topic)=>{const messages:Record<string,string>={connection:'后台已随插件交付。选择连接目录后，生成 Codex MCP 配置即可由 Codex 调度；也可在面板启动后台并连接。执行侧需要 Node.js 24+ 和官方 ZCode runtime。',approval:'Only complete supported permission snapshots can be answered. Missing or legacy sources remain read-only. Inspect the executing native session locally when needed.',workspace:'Create a separate worktree from a clean source repository. Source and execution directories are distinct. No merge or cleanup operation is provided.',recovery:'Reconcile inspects the original execution and may update records/release proved occupancy. Resume attaches observation and may finish verification or qualified channel recovery. Inspect uncertain local processes first.'};await vscode.window.showInformationMessage(messages[topic]??messages.connection!);},
   };
   async function startBackend():Promise<void>{
     const target=service;const revision=serviceRevision;const controller=new AbortController();launchAbort=controller;
@@ -123,8 +123,18 @@ export async function activate(context:vscode.ExtensionContext):Promise<unknown>
     }finally{if(launchAbort===controller)launchAbort=undefined;}
   }
   let lastGeneration=-1;let taskTreeKey='';let resourceTreeKey='';let contextKey='';
+  const notifiedDecisions=new Set<string>();
   const update=()=>{
     const state=service.snapshot();
+    if(mode==='real'&&state.connection.state==='connected'&&!state.connection.stale){
+      const visibleDecisions=state.workOverview?.works.flatMap(work=>work.todos.map(todo=>({workId:work.workId,goal:work.goal,todo})))??[];
+      const pending=[...new Map([...(state.decisionTodos??[]),...visibleDecisions].map(item=>[item.todo.todoId,item])).values()].filter(({todo})=>['resource_shortage','all_accounts_low','integration_conflict','decision'].includes(todo.kind));
+      const current=new Set(pending.map(({todo})=>`${state.connection.storeId}:${todo.todoId}`));
+      for(const key of notifiedDecisions)if(!current.has(key))notifiedDecisions.delete(key);
+      for(const {workId,goal,todo} of pending){const storeId=state.connection.storeId;const key=`${storeId}:${todo.todoId}`;if(notifiedDecisions.has(key))continue;notifiedDecisions.add(key);
+        void vscode.window.showWarningMessage(`ZCode 需要决定：${todo.summary}（${goal}）`,'查看待办').then(async action=>{if(action==='查看待办'&&service.snapshot().connection.storeId===storeId){try{await service.focusWork(workId);workbench.show();}catch(error){await vscode.window.showErrorMessage(safeError(error).message);}}});
+      }
+    }
     const nextTasks=JSON.stringify([state.connection.state,state.tasks]);
     const nextResources=JSON.stringify([state.resources.workers,state.resources.accounts,state.resources.workspaces]);
     if(nextTasks!==taskTreeKey){taskTreeKey=nextTasks;taskTree.refresh();}
@@ -135,7 +145,7 @@ export async function activate(context:vscode.ExtensionContext):Promise<unknown>
     const canMutate=connected&&state.connection.trusted&&!state.connection.stale&&state.connection.state!=='legacy-readonly';
     const nextContext=`${connected}|${canMutate}`;
     if(nextContext!==contextKey){contextKey=nextContext;void vscode.commands.executeCommand('setContext','zcodePool.connected',connected);void vscode.commands.executeCommand('setContext','zcodePool.canMutate',canMutate);}
-    const attention=state.tasks.filter(t=>t.status==='waiting_approval'||t.status==='interrupted'||t.leaseHeld&&['failed','cancelled'].includes(t.status)||t.deliveryReview==='pending').length;
+    const attention=state.tasks.filter(t=>t.status==='waiting_approval'||t.status==='interrupted'||t.leaseHeld&&['failed','cancelled'].includes(t.status)||t.deliveryReview==='pending').length+(state.workOverview?.works.reduce((count,work)=>count+work.todos.length,0)??0);
     const connectionLabels:Record<string,string>={connected:'已连接','legacy-readonly':'兼容只读',disconnected:'未连接',connecting:'连接中',error:'连接异常'};
     status.text=`$(server-process) ZCode ${connectionLabels[state.connection.state]??state.connection.state}${attention?` · ${attention} 项待处理`:''}${state.connection.stale?' · 待刷新':''}${mode==='mock'?' · 演示':''}`;
     status.tooltip=`${host}\n${state.connection.poolHome}\nLoaded scope: ${state.scope}. Opening does not execute work.`;
@@ -171,6 +181,7 @@ export async function activate(context:vscode.ExtensionContext):Promise<unknown>
   }
   service=await createService();
   workbench=new Workbench(context.extensionUri,()=>service,visible,()=>diff.clear());
+  const watchDecisions=()=>{if(mode!=='real'||extensionDisposed)return;decisionTimer=setTimeout(()=>{if(!tasks.visible&&!resources.visible&&!workbench.visible)void service.refreshDecisions();watchDecisions();},30000);decisionTimer.unref?.();};watchDecisions();
   const execute=async(type:RequestType,payload:unknown={})=>service.execute(parseRequest({v:1,id:randomUUID(),generation:service.generation(),type,payload}));
   const register=(name:string,handler:(arg?:unknown)=>unknown)=>context.subscriptions.push(vscode.commands.registerCommand(`zcodePool.${name}`,async(arg?:unknown)=>{try{return await handler(arg);}catch(error){const safe=safeError(error);await vscode.window.showErrorMessage(safe.message);return undefined;}}));
   const taskId=async(arg:unknown)=>{
@@ -209,7 +220,7 @@ export async function activate(context:vscode.ExtensionContext):Promise<unknown>
       if(event.affectsConfiguration('zcodePool.daemonNodePath')||event.affectsConfiguration('zcodePool.daemonCliPath'))launchAbort?.abort();
       if(event.affectsConfiguration('zcodePool.overviewIntervalSeconds'))service.setOverviewInterval(vscode.workspace.getConfiguration('zcodePool').get('overviewIntervalSeconds',30));
     }),{dispose:()=>{launchAbort?.abort();service.dispose();}});
-  activeDispose=()=>{extensionDisposed=true;serviceRevision++;profileWatcher?.close();clearTimeout(profileTimer);launchAbort?.abort();service.dispose();workbench.dispose();diff.dispose();};observeProfile();update();visible();
+  activeDispose=()=>{extensionDisposed=true;serviceRevision++;profileWatcher?.close();clearTimeout(profileTimer);clearTimeout(decisionTimer);launchAbort?.abort();service.dispose();workbench.dispose();diff.dispose();};observeProfile();update();visible();
   return {snapshot:()=>service.snapshot(),execute:async(request:WebviewRequest)=>service.execute(parseRequest(request)),show:()=>workbench.show()};
 }
 export function deactivate():void{activeDispose?.();activeDispose=undefined;}

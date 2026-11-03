@@ -50,6 +50,7 @@ function createMockQuota(alias: string, remaining: number): UiQuota {
 
 function createSortingSnapshot(): UiSnapshot {
   return {
+    projects:[],
     connection: {
       state: 'connected', mode: 'mock', generation: 1, host: 'test-host',
       poolHome: '/mock/pool', trusted: true, lastReceivedAtMs: Date.now(), stale: false,
@@ -72,7 +73,7 @@ function createSortingSnapshot(): UiSnapshot {
       }
     },
     approvals: null, delivery: { manifest: null, files: [], nextCursor: null, reviewed: false },
-    draft: { workspaceId: 'w1', workerId: '', prompt: '', session: 'continue', mode: 'build', modelId: 'GLM', busyRetryLimit: 1, verifyCommands: [], submitToken: 't' },
+    draft: { workspaceId: 'w1', workerId: '', prompt: '', session: 'continue', mode: 'build', modelId: 'GLM', verifyCommands: [], submitToken: 't' },
     actions: [], overviewIntervalSeconds: 30, poolPolicy: null, notice: null
   };
 }
